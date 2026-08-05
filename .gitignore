@@ -1,0 +1,30 @@
+# Generated outputs. Per docs/STANDARDS.md §1, no generated artifact is
+# committed -- with the two curated exceptions negated below.
+*.npy
+*.png
+*.pdf
+out/
+figures/out/
+
+# Exception 1 (STANDARDS.md §10.3): curated example figures, each regenerable
+# by a named script in figures/.
+!figures/examples/
+!figures/examples/*.png
+
+# Exception 2 (STANDARDS.md §3.2): assets the documentation site renders.
+!docs/src/assets/
+!docs/src/assets/*.png
+
+# Documenter build output
+docs/build/
+docs/Manifest.toml
+
+# julia
+*.cov
+LocalPreferences.toml
+.CondaPkg/
+
+# editors / OS
+.vscode/
+.DS_Store
+__pycache__/

@@ -1,0 +1,40 @@
+name = "BlackLightPlus"
+uuid = "42cdf02b-3d05-46ec-9a39-4b9bd129d0a7"
+version = "0.1.0"
+authors = ["Haiyang Wang <haiyang.wang@black-holes.org> and contributors"]
+
+[deps]
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+CUDA = "052768ef-5323-5732-b1bb-66c8b64840ba"
+Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+JacobiElliptic = "2a8b799e-c098-4961-872a-356c768d184c"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+
+[compat]
+Adapt = "4.7.0"
+CUDA = "6.2.0"
+Enzyme = "0.13.175"
+FFTW = "1.10.0"
+ForwardDiff = "1.4.1"
+HDF5 = "0.17.3"
+JacobiElliptic = "0.3.9"
+KernelAbstractions = "0.9.42"
+OrdinaryDiffEq = "7.1.1"
+SciMLBase = "3.31.0"
+SpecialFunctions = "2.8.0"
+StaticArrays = "1.9.18"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

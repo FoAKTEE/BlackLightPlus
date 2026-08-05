@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software in academic work, please cite it as below.
+  A method paper is in preparation and will supersede this entry.
+title: >-
+  BlackLightPlus: general-relativistic ray tracing and polarized
+  radiative transfer in arbitrary spacetimes
+abstract: >-
+  BlackLightPlus is a Julia package for GPU-accelerated general-relativistic
+  ray tracing and fully polarized radiative transfer in arbitrary spacetimes.
+  A single code path renders images from analytic metrics, superposed
+  Kerr-Schild binaries, and numerical-relativity spacetimes, on CPU and GPU,
+  with automatic differentiation through the entire pipeline. It images
+  AthenaK GRMHD snapshots or semi-analytic sources, transports the full IQUV
+  coherency tensor including Faraday rotation and conversion, and includes a
+  grmonty-scheme Monte Carlo module for Compton-scattering spectral synthesis.
+type: software
+authors:
+  - family-names: Wang
+    given-names: Haiyang
+    email: haiyang.wang@black-holes.org
+    # orcid: "https://orcid.org/0000-0000-0000-0000"  # TODO: add before release
+version: 0.1.0
+date-released: "2026-08-05"
+license: MIT
+repository-code: "https://github.com/FoAKTEE/BlackLightPlus"
+url: "https://foaktee.github.io/BlackLightPlus/"
+# doi: 10.5281/zenodo.XXXXXXX  # TODO: add Zenodo concept DOI at first release
+keywords:
+  - black holes
+  - general relativity
+  - ray tracing
+  - radiative transfer
+  - polarization
+  - Event Horizon Telescope
+  - numerical relativity
+  - GPU computing
+  - automatic differentiation
+  - Julia

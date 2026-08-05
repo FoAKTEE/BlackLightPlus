@@ -1,0 +1,47 @@
+name: Format
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  format:
+    name: JuliaFormatter check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1'
+
+      - uses: julia-actions/cache@v2
+
+      - name: Check formatting
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.add(PackageSpec(name = "JuliaFormatter", version = "1"))
+            using JuliaFormatter
+
+            # Config comes from .JuliaFormatter.toml; formatting is mechanical
+            # and never discussed in review (STANDARDS.md §9).
+            ok = format(["src", "test", "bench", "docs/make.jl"]; verbose = true)
+
+            if !ok
+                @error """
+                Formatting check failed. Run this locally and commit the result:
+
+                    julia -e '"'"'using JuliaFormatter; format(["src","test","bench","docs/make.jl"])'"'"'
+                """
+                write(stdout, read(`git diff`, String))
+                exit(1)
+            end'

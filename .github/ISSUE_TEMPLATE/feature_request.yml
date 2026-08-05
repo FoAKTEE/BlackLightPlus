@@ -1,0 +1,50 @@
+name: Feature request
+description: Propose new physics, a new backend, or a change to the API.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: >-
+        Describe the scientific or practical need, not the implementation. What
+        can you not currently do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: >-
+        If you have one in mind. For new physics, please cite the paper the
+        scheme comes from -- it will end up in `docs/references.bib`.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Geodesics and spacetimes
+        - Radiative transfer
+        - Monte Carlo spectra
+        - GPU backends
+        - Automatic differentiation
+        - Simulation input and output
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: hotpath
+    attributes:
+      label: Hot-path implications
+      description: >-
+        Anything reachable from a march loop must stay pure, allocation-free,
+        `isbits`, and StaticArrays-typed so that one code path serves CPU, GPU,
+        and AD.
+      options:
+        - label: This change would touch code reachable from a march loop

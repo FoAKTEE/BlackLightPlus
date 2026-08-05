@@ -1,0 +1,729 @@
+# gpu_amr.jl — fused single-pass GPU imager sampling the AMR meshblock hierarchy
+# DIRECTLY on device (no uniform resample; removes the resample fluid-representation
+# delta, which a Faraday-thick deck amplifies into a global EVPA rotation). Only the
+# fluid sample differs from gpu_image.jl / gpu_pol.jl; all other device helpers are
+# shared by include order. Locate: an O(1) dense finest-block index grid (every AthenaK
+# block face is an exact multiple of the finest block size, so each index cell lies in
+# exactly one leaf), cross-checked against an exact linear-scan port of `_find_meshblock`.
+# The in-block trilinear reproduces CPU `sample_primitives` bit-for-bit. CUDA optional:
+# NOT included from BlackLightPlus.jl; include AFTER gpu_image.jl and gpu_pol.jl.
+
+using StaticArrays
+using KernelAbstractions
+using CUDA
+using LinearAlgebra: dot
+using BlackLightPlus.Simulation: AthenaKSnapshot, SnapshotSeries, get_frame, leaf_table
+
+# ---------------------------------------------------------------- device AMR grid
+"""
+    DeviceAMRGrid
+
+Per-device pre-uploaded AMR fluid + geometry (built by `upload_amr`; each Dict is keyed
+by device id so repeated renders reuse one upload). Device layout: `dev_blk`
+(8,ni,nj,nk,nmb) Float32 primitives, feature-fastest for coalesced corner reads;
+`dev_xlft`/`dev_dxb` (3,nmb) per-block first cell centre / cell spacing; `dev_lo/hi`
+(3,nmb) face extents (scan oracle only); `dev_leaf` (N1,N2,N3) Int32 finest-block index
+grid (owning leaf mb, 0 = vacuum); `amrp` isbits NamedTuple of locate scalars.
+"""
+struct DeviceAMRGrid
+    dev_blk::Dict{Int,CuArray{Float32,5}}
+    dev_xlft::Dict{Int,CuArray{Float64,2}}
+    dev_dxb::Dict{Int,CuArray{Float64,2}}
+    dev_lo::Dict{Int,CuArray{Float64,2}}
+    dev_hi::Dict{Int,CuArray{Float64,2}}
+    dev_leaf::Dict{Int,CuArray{Int32,3}}
+    amrp::NamedTuple
+end
+
+# Device leaf table = the one host builder (athenak_reader.jl :: leaf_table) repackaged
+# as (leaf array, isbits amrp scalars) for upload. The host builder signals a degenerate
+# / oversized / non-finest-aligned mesh by returning `nothing` and falls back to its
+# linear scan — the device sampler has NO scan fallback, so that case must error loudly.
+function _build_leaf_table(snap::AthenaKSnapshot)
+    t = leaf_table(snap)
+    t === nothing &&
+        error("AMR mesh unsuitable for the device leaf table (degenerate, oversized, or not " *
+              "origin/finest-aligned dump); the device sampler has no scan fallback (use the CPU render)")
+    amrp = (ni = snap.ni, nj = snap.nj, nk = snap.nk, nmb = t.nmb,
+            x1min = t.x1min, x2min = t.x2min, x3min = t.x3min,
+            inv_fdx1 = t.inv_fdx1, inv_fdx2 = t.inv_fdx2, inv_fdx3 = t.inv_fdx3,
+            N1 = t.N1, N2 = t.N2, N3 = t.N3)
+    return t.leaf, amrp
+end
+
+"""
+    upload_amr(snap::AthenaKSnapshot, devices; upload_bounds=true) -> DeviceAMRGrid
+
+Permute the reader's `(ni,nj,nk,nmb,8)` primitives to the coalesced `(8,ni,nj,nk,nmb)`
+layout, build the finest-block index grid, and upload fluid + per-block geometry to
+each CUDA device (one copy per device; reusable across renders). The render kernels use
+only the leaf table + `amrp`; `dev_lo/dev_hi` feed the probe/scan-oracle path, so pass
+`upload_bounds=false` for a render-only grid.
+"""
+function upload_amr(snap::AthenaKSnapshot, devices; upload_bounds::Bool = true)
+    blk_host  = permutedims(snap.data, (5, 1, 2, 3, 4))   # (8, ni, nj, nk, nmb)
+    xlft_host = reduce(hcat, snap.x_left)                  # (3, nmb)
+    dxb_host  = reduce(hcat, snap.dx)
+    leaf_host, amrp = _build_leaf_table(snap)
+
+    dblk = Dict{Int,CuArray{Float32,5}}(); dxl = Dict{Int,CuArray{Float64,2}}()
+    ddx  = Dict{Int,CuArray{Float64,2}}(); dlo = Dict{Int,CuArray{Float64,2}}()
+    dhi  = Dict{Int,CuArray{Float64,2}}(); dlf = Dict{Int,CuArray{Int32,3}}()
+    lo_host = upload_bounds ? reduce(hcat, snap.ext_lo) : nothing
+    hi_host = upload_bounds ? reduce(hcat, snap.ext_hi) : nothing
+    for dev in devices
+        CUDA.device!(dev)
+        dblk[dev] = CuArray(blk_host); dxl[dev] = CuArray(xlft_host)
+        ddx[dev]  = CuArray(dxb_host); dlf[dev] = CuArray(leaf_host)
+        if upload_bounds
+            dlo[dev] = CuArray(lo_host); dhi[dev] = CuArray(hi_host)
+        end
+    end
+    return DeviceAMRGrid(dblk, dxl, ddx, dlo, dhi, dlf, amrp)
+end
+
+# ---------------------------------------------------------------- device: locate
+# (a) EXACT port of _find_meshblock: linear scan, lo < xyz <= hi, later block wins,
+#     0 outside every block. Bit-for-bit correctness oracle.
+@inline function _gamr_locate_scan(lo, hi, nmb, x, y, z)
+    mb = 0
+    @inbounds for m in 1:nmb
+        if lo[1, m] < x <= hi[1, m] && lo[2, m] < y <= hi[2, m] && lo[3, m] < z <= hi[3, m]
+            mb = m
+        end
+    end
+    return mb
+end
+
+# (b) O(1) dense finest-block index grid. f>=0 is guaranteed before the trunc, so
+#     unsafe_trunc == floor. Out of range -> 0 (vacuum), matching _find_meshblock==0.
+@inline function _gamr_locate_fast(leaf, amrp, x, y, z)
+    f1 = (x - amrp.x1min) * amrp.inv_fdx1
+    f2 = (y - amrp.x2min) * amrp.inv_fdx2
+    f3 = (z - amrp.x3min) * amrp.inv_fdx3
+    (f1 < 0.0 || f1 >= amrp.N1 || f2 < 0.0 || f2 >= amrp.N2 || f3 < 0.0 || f3 >= amrp.N3) &&
+        return Int32(0)
+    i1 = unsafe_trunc(Int, f1); i2 = unsafe_trunc(Int, f2); i3 = unsafe_trunc(Int, f3)
+    return @inbounds leaf[i1 + 1, i2 + 1, i3 + 1]
+end
+
+# ---------------------------------------------------------------- device: sample
+@inline _gamr_corner(blk, i, j, k, mb) =
+    SVector{8,Float64}(ntuple(f -> Float64(@inbounds blk[f, i, j, k, mb]), Val(8)))
+
+# In-block clamped trilinear of the 8 primitives at CKS (x,y,z) inside meshblock `mb`,
+# byte-for-byte the sample_primitives interior: DIVIDE by dx (not inv_dx multiply),
+# FLOOR (fi can be slightly negative in the outer low half-cell), and BOTH clamps.
+# Shared by the leaf-locate `_gamr_sample` (Kerr AMR kernels) and the scan-locate
+# `_gamr_sample_scan` (generic-spacetime kernels, gpu_spacetime.jl).
+@inline function _gamr_lerp(blk, xlft, dxb, ni, nj, nk, mb::Int, x, y, z)
+    gx = (x - @inbounds(xlft[1, mb])) / @inbounds(dxb[1, mb])
+    gy = (y - @inbounds(xlft[2, mb])) / @inbounds(dxb[2, mb])
+    gz = (z - @inbounds(xlft[3, mb])) / @inbounds(dxb[3, mb])
+    il = clamp(unsafe_trunc(Int, floor(gx)), 0, ni - 2); d1 = clamp(gx - il, 0.0, 1.0)
+    jl = clamp(unsafe_trunc(Int, floor(gy)), 0, nj - 2); d2 = clamp(gy - jl, 0.0, 1.0)
+    kl = clamp(unsafe_trunc(Int, floor(gz)), 0, nk - 2); d3 = clamp(gz - kl, 0.0, 1.0)
+    i1 = il + 1; j1 = jl + 1; k1 = kl + 1; i2 = i1 + 1; j2 = j1 + 1; k2 = k1 + 1
+    c000 = _gamr_corner(blk, i1, j1, k1, mb); c100 = _gamr_corner(blk, i2, j1, k1, mb)
+    c010 = _gamr_corner(blk, i1, j2, k1, mb); c110 = _gamr_corner(blk, i2, j2, k1, mb)
+    c001 = _gamr_corner(blk, i1, j1, k2, mb); c101 = _gamr_corner(blk, i2, j1, k2, mb)
+    c011 = _gamr_corner(blk, i1, j2, k2, mb); c111 = _gamr_corner(blk, i2, j2, k2, mb)
+    c00 = c000 + (c100 - c000) * d1                        # lerp along x1 (i)
+    c10 = c010 + (c110 - c010) * d1
+    c01 = c001 + (c101 - c001) * d1
+    c11 = c011 + (c111 - c011) * d1
+    c0  = c00 + (c10 - c00) * d2                           # lerp along x2 (j)
+    c1  = c01 + (c11 - c01) * d2
+    return c0 + (c1 - c0) * d3                             # lerp along x3 (k)
+end
+
+# Native AMR trilinear sample at CKS (x,y,z) -> SVector{8,Float64}
+# (dens,uu1,uu2,uu3,eint,bb1,bb2,bb3), byte-for-byte sample_primitives. Uses the fast
+# locate; vacuum (locate 0) returns zeros.
+@inline function _gamr_sample(blk, xlft, dxb, leaf, amrp, x, y, z)
+    mbi = _gamr_locate_fast(leaf, amrp, x, y, z)
+    mbi == Int32(0) && return zero(SVector{8,Float64})
+    return @inline _gamr_lerp(blk, xlft, dxb, amrp.ni, amrp.nj, amrp.nk, Int(mbi), x, y, z)
+end
+
+# ---------------------------------------------------------------- probe kernels (validation)
+# Device sample at arbitrary CKS points (bit-for-bit check vs CPU sample_primitives).
+@kernel function _amr_probe_kernel!(out, @Const(pts), @Const(blk), @Const(xlft),
+                                    @Const(dxb), @Const(leaf), amrp, npts)
+    i = @index(Global)
+    @inbounds if i <= npts
+        p = pts[i]
+        out[i] = _gamr_sample(blk, xlft, dxb, leaf, amrp, p[1], p[2], p[3])
+    end
+end
+
+# Device locate cross-check: fast (index grid) vs scan (oracle) at arbitrary points.
+@kernel function _amr_locate_probe_kernel!(outf, outs, @Const(pts), @Const(lo),
+                                           @Const(hi), @Const(leaf), amrp, npts)
+    i = @index(Global)
+    @inbounds if i <= npts
+        p = pts[i]
+        outf[i] = _gamr_locate_fast(leaf, amrp, p[1], p[2], p[3])
+        outs[i] = Int32(_gamr_locate_scan(lo, hi, amrp.nmb, p[1], p[2], p[3]))
+    end
+end
+
+"""
+    amr_sample_probe(dgrid::DeviceAMRGrid, pts::Vector{SVector{3,Float64}}; device=0)
+        -> Vector{SVector{8,Float64}}
+
+Run the device AMR sampler at `pts` (host CKS points) on `device`, for the bit-for-bit
+check against CPU `sample_primitives`.
+"""
+function amr_sample_probe(dgrid::DeviceAMRGrid, pts::Vector{SVector{3,Float64}}; device::Int = 0)
+    CUDA.device!(device)
+    backend = CUDABackend()
+    n = length(pts)
+    ptsd = CuArray(pts)
+    outd = CuArray{SVector{8,Float64}}(undef, n)
+    _amr_probe_kernel!(backend)(outd, ptsd, dgrid.dev_blk[device], dgrid.dev_xlft[device],
+                                dgrid.dev_dxb[device], dgrid.dev_leaf[device], dgrid.amrp, n;
+                                ndrange = n)
+    KernelAbstractions.synchronize(backend)
+    return Array(outd)
+end
+
+"""
+    amr_locate_probe(dgrid, pts; device=0) -> (fast::Vector{Int32}, scan::Vector{Int32})
+
+Device locate cross-check: fast index-grid vs linear-scan oracle at `pts`.
+"""
+function amr_locate_probe(dgrid::DeviceAMRGrid, pts::Vector{SVector{3,Float64}}; device::Int = 0)
+    CUDA.device!(device)
+    backend = CUDABackend()
+    n = length(pts)
+    ptsd = CuArray(pts)
+    fd = CuArray{Int32}(undef, n); sd = CuArray{Int32}(undef, n)
+    _amr_locate_probe_kernel!(backend)(fd, sd, ptsd, dgrid.dev_lo[device], dgrid.dev_hi[device],
+                                       dgrid.dev_leaf[device], dgrid.amrp, n; ndrange = n)
+    KernelAbstractions.synchronize(backend)
+    return Array(fd), Array(sd)
+end
+
+# ---------------------------------------------------------------- fused AMR kernel (Stokes I)
+# _gimg_march (gpu_image.jl) with the sampler swapped for the native-AMR _gamr_sample.
+# Two-type: the geodesic lane runs at eltype(eltype(y0s)) — the host passes the march
+# scalars at that type — while the sampler position is converted to Float64 (identity
+# for fp64 rays), so the locate/trilinear sample + RT stay Float64 in every mode.
+@kernel function _famr_kernel!(img, @Const(y0s), @Const(blk), @Const(xlft), @Const(dxb),
+                               @Const(leaf), amrp, gp, a, r_h, C, escape, R_em, nmax, nrays)
+    i = @index(Global)
+    @inbounds if i <= nrays
+        img[i] = _gimg_march(y0s[i],
+                             y -> _gamr_sample(blk, xlft, dxb, leaf, amrp, Float64(y[2]),
+                                               Float64(y[3]), Float64(y[4])),
+                             eltype(img), gp, a, r_h, C, escape, R_em, nmax)
+    end
+end
+
+# ---------------------------------------------------------------- fused AMR kernel (I,Q,U,V)
+# _gpol_march (gpu_pol.jl) with the same single sampler swap (same two-type contract).
+@kernel function _gpol_amr_kernel!(out, @Const(y0s), @Const(blk), @Const(xlft), @Const(dxb),
+                                   @Const(leaf), amrp, gp, a, r_h, C, escape, R_em, nmax, nrays)
+    i = @index(Global)
+    @inbounds if i <= nrays
+        out[i] = _gpol_march(y0s[i],
+                             y -> _gamr_sample(blk, xlft, dxb, leaf, amrp, Float64(y[2]),
+                                               Float64(y[3]), Float64(y[4])),
+                             gp, a, r_h, C, escape, R_em, nmax)
+    end
+end
+
+# ---------------------------------------------------------------- host drivers
+# Circumscribed radius of the covered AMR domain: beyond it every point is outside the
+# leaf index grid, so `_gamr_locate_fast` returns 0 (vacuum). An outbound ray past this
+# radius only samples vacuum, so gating on it leaves results bit-identical.
+function _gamr_domain_radius(p)
+    x1hi = p.x1min + p.N1 / p.inv_fdx1
+    x2hi = p.x2min + p.N2 / p.inv_fdx2
+    x3hi = p.x3min + p.N3 / p.inv_fdx3
+    return sqrt(max(p.x1min^2, x1hi^2) + max(p.x2min^2, x2hi^2) + max(p.x3min^2, x3hi^2))
+end
+
+function _famr_part!(img, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
+    backend = CUDABackend()
+    kern = _famr_kernel!(backend)
+    cnt = length(rng)
+    y0d = CuArray(rays[rng])
+    outd = CuArray{Float64}(undef, cnt)
+    _kern_launch!(kern, wg, cnt, outd, y0d, dg.dev_blk[dev], dg.dev_xlft[dev], dg.dev_dxb[dev],
+                  dg.dev_leaf[dev], dg.amrp, gp, a, r_h, C, escape, R_em, Int(nmax), cnt)
+    KernelAbstractions.synchronize(backend)
+    img[rng] .= Array(outd)
+    return nothing
+end
+
+function _gpol_amr_part!(out, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
+    backend = CUDABackend()
+    kern = _gpol_amr_kernel!(backend)
+    cnt = length(rng)
+    y0d = CuArray(rays[rng])
+    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    _kern_launch!(kern, wg, cnt, outd, y0d, dg.dev_blk[dev], dg.dev_xlft[dev], dg.dev_dxb[dev],
+                  dg.dev_leaf[dev], dg.amrp, gp, a, r_h, C, escape, R_em, Int(nmax), cnt)
+    KernelAbstractions.synchronize(backend)
+    out[rng] .= Array(outd)
+    return nothing
+end
+
+# Launch a fused AMR kernel over the ray-index `pool` (any index collection), pixels
+# INTERLEAVED across `devices` (the _fused_sweep!/_gpol_sweep! pattern — pool == 1:nrays
+# reproduces the pre-mixed-precision device split exactly). The geodesic(/frame)-lane
+# type is eltype(eltype(rays)); the caller passes the march scalars at that type.
+function _famr_sweep!(img, rays, pool, devices, dg, gp, a, r_h, C, escape, R_em, nmax, wg)
+    nd = length(devices)
+    @sync for di in 1:nd
+        idx = pool[di:nd:end]; dev = devices[di]
+        isempty(idx) && continue
+        @async begin
+            CUDA.device!(dev)
+            _famr_part!(img, rays, idx, dg, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
+        end
+    end
+    return nothing
+end
+
+function _gpol_amr_sweep!(out, rays, pool, devices, dg, gp, a, r_h, C, escape, R_em, nmax, wg)
+    nd = length(devices)
+    @sync for di in 1:nd
+        idx = pool[di:nd:end]; dev = devices[di]
+        isempty(idx) && continue
+        @async begin
+            CUDA.device!(dev)
+            _gpol_amr_part!(out, rays, idx, dg, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
+        end
+    end
+    return nothing
+end
+
+"""
+    march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64}};
+                       polarized=false, devices=select_devices(), nmax=cfg.max_steps,
+                       C=80, order=nothing, wg=<pol _GPOL_WG / unpol nothing>)
+        -> Matrix{Float64}(4, length(rays))
+
+Fused single-pass GPU march of an arbitrary camera-ray list against the native-AMR
+meshblock hierarchy, returning a dense `4 × length(rays)` Stokes matrix (row 1 = I;
+rows 2-4 = Q,U,V, zero when `polarized=false`); column `j` corresponds to input ray `j`
+(`order` is applied and undone internally). This is the shared `:f64` core behind the
+full-frame `render_gpu_amr[_polarized]` entry points. `snap_or_amrgrid`:
+`AthenaKSnapshot` (uploaded internally) or pre-uploaded `DeviceAMRGrid`. `:f64`-only by
+design — the critical-curve rescue behind `:mixed`/`:f32_raw` is pixel-grid-coupled and
+lives only at the full-frame wrapper level.
+"""
+function march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64}};
+                            polarized::Bool = false, devices = select_devices(),
+                            nmax::Int = cfg.max_steps, C::Real = 80,
+                            order = nothing, wg = :default, precision::Symbol = :f64)
+    precision === :f64 ||
+        error("march_rays_gpu_amr is :f64-only by design: the critical-curve rescue " *
+              "(`_rescue_pixels` in gpu_image.jl) is pixel-GRID-coupled and lives only " *
+              "at the full-frame wrapper level; got precision=:$precision. Use " *
+              "render_gpu_amr[_polarized] for :mixed / :f32_raw.")
+    wg === :default && (wg = polarized ? _GPOL_WG : nothing)
+    dg = snap_or_amrgrid isa DeviceAMRGrid ? snap_or_amrgrid :
+         upload_amr(snap_or_amrgrid, devices; upload_bounds = false)   # render never reads lo/hi
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    Cf = Float64(C)
+    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
+    nrays = length(rays)
+    rr = _apply_order(rays, order)            # march in trip-count order (bit-exact per ray)
+    M = zeros(Float64, 4, nrays)
+    if polarized
+        gp = _gpol_params(cfg)
+        out = Vector{SVector{4,Float64}}(undef, nrays)
+        _gpol_amr_sweep!(out, rr, 1:nrays, devices, dg, gp, a, r_h, Cf, escape, R_em, nmax, wg)
+        out = _undo_order(out, order)
+        @inbounds for j in 1:nrays
+            o = out[j]
+            M[1, j] = o[1]; M[2, j] = o[2]; M[3, j] = o[3]; M[4, j] = o[4]
+        end
+    else
+        gp = _gimg_params(cfg)
+        img = Vector{Float64}(undef, nrays)
+        _famr_sweep!(img, rr, 1:nrays, devices, dg, gp, a, r_h, Cf, escape, R_em, nmax, wg)
+        img = _undo_order(img, order)
+        @inbounds for j in 1:nrays
+            M[1, j] = img[j]
+        end
+    end
+    return M
+end
+
+"""
+    render_gpu_amr(cfg, snap_or_amrgrid; devices=select_devices(), nmax=cfg.max_steps,
+                   C=80, precision=:f64, rescue_px=2) -> Matrix{Float64}
+
+Fused single-pass GPU render of the unpolarized (Stokes I) npix×npix image, sampling
+the AMR meshblock hierarchy directly on device (nothing is resampled — no `box_half`/
+`n`). `snap_or_amrgrid`: `AthenaKSnapshot` (uploaded internally) or pre-uploaded
+`DeviceAMRGrid`. Layout as `render(...;polarized=false).I`; `order` marches rays in
+trip-count order (bit-exact per pixel); `wg` overrides the block size. `precision`:
+`:f64` (default, bitwise unchanged) · `:mixed` (fp32 march + fp64 RT + critical-curve
+rescue splice within `rescue_px` px; `rescued_frac::Ref{Float64}` receives the
+fraction) · `:f32_raw` (no rescue — DIAGNOSTIC only). See `render_gpu_fused`.
+"""
+function render_gpu_amr(cfg, snap_or_amrgrid; devices = select_devices(),
+                        nmax::Int = cfg.max_steps, C::Real = 80,
+                        order = nothing, wg = nothing,
+                        precision::Symbol = :f64, rescue_px::Int = 2,
+                        rescued_frac = nothing)
+    precision in (:f64, :mixed, :f32_raw) ||
+        error("render_gpu_amr: precision must be :f64, :mixed or :f32_raw, got :$precision")
+    st = KerrSchildCartesian(cfg.bh_a)
+    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
+                              cfg.camera.fov, cfg.camera.resolution)
+    # :f64 full frame == the shared ray-list core on the camera pixel grid (bit-identical).
+    if precision === :f64
+        M = march_rays_gpu_amr(cfg, snap_or_amrgrid, camera_rays(st, cam);
+                               polarized = false, devices = devices, nmax = nmax,
+                               C = C, order = order, wg = wg)
+        rescued_frac === nothing || (rescued_frac[] = 0.0)
+        return reshape(M[1, :], cam.npix, cam.npix)
+    end
+    # :mixed / :f32_raw: fp32 geodesic lane + critical-curve rescue splice — the rescue is
+    # pixel-GRID-coupled (`_rescue_pixels`), so it lives ONLY here, at the full-frame level.
+    rays = _apply_order(camera_rays(st, cam), order)
+    dg = snap_or_amrgrid isa DeviceAMRGrid ? snap_or_amrgrid :
+         upload_amr(snap_or_amrgrid, devices; upload_bounds = false)   # render never reads lo/hi
+    gp = _gimg_params(cfg)
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    Cf = Float64(C)
+    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
+    nrays = length(rays)
+    img = Vector{Float64}(undef, nrays)
+    frac = 0.0
+    # fp32 geodesic lane (matched fp32 march scalars; gp stays Float64)
+    rays32 = [SVector{8,Float32}(r) for r in rays]
+    _famr_sweep!(img, rays32, 1:nrays, devices, dg, gp, Float32(a), Float32(r_h),
+                 Float32(Cf), Float32(escape), Float32(R_em), nmax, wg)
+    if precision === :mixed
+        pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
+                             rescue_px = rescue_px)
+        pos = order === nothing ? pix : invperm(order)[pix]
+        isempty(pos) ||
+            _famr_sweep!(img, rays, pos, devices, dg, gp, a, r_h, Cf, escape, R_em,
+                         nmax, wg)
+        frac = length(pos) / nrays
+    end
+    rescued_frac === nothing || (rescued_frac[] = frac)
+    return reshape(_undo_order(img, order), cam.npix, cam.npix)
+end
+
+"""
+    render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices=select_devices(),
+                             nmax=cfg.max_steps, C=80, precision=:f64, rescue_px=2)
+        -> NamedTuple(I,Q,U,V)
+
+Full-Stokes fused GPU render sampling the AMR fluid directly on device (closes the
+uniform-resample EVPA caveat). Mirrors `render_gpu_polarized` but with the AMR sampler.
+`order` marches rays in trip-count order (bit-exact per pixel); `wg` overrides the
+register-heavy kernel's block size (defaults to `_GPOL_WG`). `precision`: `:f64`
+(default, bitwise unchanged) · `:mixed` (fp32 geodesic + frame transport, fp64
+Stokes/coefficients from converted state, critical-curve rescue splice within
+`rescue_px` px; `rescued_frac::Ref{Float64}` receives the fraction) · `:f32_raw`
+(no rescue — DIAGNOSTIC only). See `render_gpu_polarized` for the full contract.
+"""
+function render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices = select_devices(),
+                                  nmax::Int = cfg.max_steps, C::Real = 80,
+                                  order = nothing, wg = _GPOL_WG,
+                                  precision::Symbol = :f64, rescue_px::Int = 2,
+                                  rescued_frac = nothing)
+    precision in (:f64, :mixed, :f32_raw) ||
+        error("render_gpu_amr_polarized: precision must be :f64, :mixed or :f32_raw, got :$precision")
+    st = KerrSchildCartesian(cfg.bh_a)
+    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
+                              cfg.camera.fov, cfg.camera.resolution)
+    npx = cam.npix
+    # :f64 full frame == the shared ray-list core on the camera pixel grid (bit-identical).
+    if precision === :f64
+        M = march_rays_gpu_amr(cfg, snap_or_amrgrid, camera_rays(st, cam);
+                               polarized = true, devices = devices, nmax = nmax,
+                               C = C, order = order, wg = wg)
+        rescued_frac === nothing || (rescued_frac[] = 0.0)
+        return (I = reshape(M[1, :], npx, npx), Q = reshape(M[2, :], npx, npx),
+                U = reshape(M[3, :], npx, npx), V = reshape(M[4, :], npx, npx))
+    end
+    # :mixed / :f32_raw: fp32 geodesic/frame lane + critical-curve rescue splice — the
+    # rescue is pixel-GRID-coupled (`_rescue_pixels`), so it lives ONLY here, full-frame.
+    rays = _apply_order(camera_rays(st, cam), order)
+    dg = snap_or_amrgrid isa DeviceAMRGrid ? snap_or_amrgrid :
+         upload_amr(snap_or_amrgrid, devices; upload_bounds = false)   # render never reads lo/hi
+    gp = _gpol_params(cfg)
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    Cf = Float64(C)
+    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
+    nrays = length(rays)
+    out = Vector{SVector{4,Float64}}(undef, nrays)
+    frac = 0.0
+    # fp32 geodesic/frame lane (matched fp32 march scalars; gp stays Float64)
+    rays32 = [SVector{8,Float32}(r) for r in rays]
+    _gpol_amr_sweep!(out, rays32, 1:nrays, devices, dg, gp, Float32(a), Float32(r_h),
+                     Float32(Cf), Float32(escape), Float32(R_em), nmax, wg)
+    if precision === :mixed
+        pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
+                             rescue_px = rescue_px)
+        pos = order === nothing ? pix : invperm(order)[pix]
+        isempty(pos) ||
+            _gpol_amr_sweep!(out, rays, pos, devices, dg, gp, a, r_h, Cf, escape,
+                             R_em, nmax, wg)
+        frac = length(pos) / nrays
+    end
+    rescued_frac === nothing || (rescued_frac[] = frac)
+    out = _undo_order(out, order)
+    I = reshape([o[1] for o in out], npx, npx)
+    Q = reshape([o[2] for o in out], npx, npx)
+    U = reshape([o[3] for o in out], npx, npx)
+    V = reshape([o[4] for o in out], npx, npx)
+    return (I = I, Q = Q, U = U, V = V)
+end
+
+# ================================================================ SLOW LIGHT (opt-in, direct AMR)
+# Native-AMR slow light: two DeviceAMRGrid frames blended on the physical dump-time
+# axis (emission time t_emit = t_obs - X⁰; see the gpu_image.jl SLOW LIGHT header).
+# The fast kernels are untouched; the slow kernels below swap only the sample line for
+# the time-blended _gamr_sample_t. The two frames must SHARE the AMR mesh (same
+# amrp/xlft/dxb/leaf — true for a static-mesh run); the kernel uses frame A's geometry
+# for both blk arrays. w = clamp((t0 - X⁰) * inv_dt, 0, 1) with t0 = t_obs - t_a;
+# inv_dt=0 (fast-light limit) makes _gamr_sample_t return frame A bit-for-bit.
+
+"""
+    DeviceAMRWindow
+
+Bracketing pair of pre-uploaded `DeviceAMRGrid` frames (`a` at `t_a`, `b` at `t_b`)
+plus `inv_dt = 1/(t_b - t_a)` for the in-kernel time blend (0.0 == fast-light
+limit). The two frames must share the AMR mesh (enforced: same `amrp.nmb`).
+"""
+struct DeviceAMRWindow
+    a::DeviceAMRGrid
+    b::DeviceAMRGrid
+    t_a::Float64
+    inv_dt::Float64
+end
+
+"""
+    upload_amr_window(series::SnapshotSeries, ia, devices; upload_bounds=false)
+        -> DeviceAMRWindow
+
+Upload the bracketing dump pair `(ia, ia+1)` of `series` as two `DeviceAMRGrid`
+frames. Object-shared/identical frames reuse one upload; a single-frame series yields
+inv_dt = 0 (fast light). The frames must share the AMR mesh.
+"""
+function upload_amr_window(series::SnapshotSeries, ia::Integer, devices; upload_bounds::Bool = false)
+    N = length(series)
+    ia = Int(ia); ib = min(ia + 1, N)
+    A = get_frame(series, ia); B = get_frame(series, ib)
+    t_a = series.times[ia]; t_b = ib > ia ? series.times[ib] : Inf
+    dgA = upload_amr(A, devices; upload_bounds = upload_bounds)
+    dgB = (A === B) ? dgA : upload_amr(B, devices; upload_bounds = upload_bounds)
+    # The slow-light kernels locate BOTH frames with frame A's geometry (amrp/xlft/dxb/leaf),
+    # so nmb-equality is not enough — a differing locate grid silently misplaces frame B.
+    # Require the full leaf/index geometry (amrp) to match (identical for a static mesh).
+    dgA.amrp == dgB.amrp ||
+        error("slow-light AMR frames must share the mesh geometry (amrp mismatch: $(dgA.amrp) vs $(dgB.amrp))")
+    return DeviceAMRWindow(dgA, dgB, Float64(t_a), _win_inv_dt(Float64(t_a), Float64(t_b)))
+end
+
+"""
+    advance_amr_window(win::DeviceAMRWindow, series, ia, devices; upload_bounds=false)
+        -> DeviceAMRWindow
+
+Native-AMR twin of `advance_series_window`: slide the window to the bracket `(ia, ia+1)`
+reusing `win.b` (the already-uploaded upper frame) as the new lower frame, so only the
+new upper frame `ia+1` is uploaded; the reused frame is the same device buffer, so the
+rendered frame is bit-identical to a fresh upload. Advance monotonically (`win`'s upper
+frame IS dump `ia`); frames must share the AMR mesh (amrp checked). At the series end
+the window degenerates to inv_dt = 0 (fast light).
+"""
+function advance_amr_window(win::DeviceAMRWindow, series::SnapshotSeries, ia::Integer,
+                            devices; upload_bounds::Bool = false)
+    N = length(series); ia = Int(ia); ib = min(ia + 1, N)
+    newA = win.b                              # promote the uploaded upper frame — no re-upload
+    if ib > ia
+        newB = upload_amr(get_frame(series, ib), devices; upload_bounds = upload_bounds)
+        newB.amrp == newA.amrp ||
+            error("advance_amr_window: new frame $(ib) mesh geometry (amrp) must match the " *
+                  "promoted frame ($(newB.amrp) vs $(newA.amrp))")
+    else
+        newB = newA
+    end
+    t_a = series.times[ia]; t_b = ib > ia ? series.times[ib] : Inf
+    return DeviceAMRWindow(newA, newB, Float64(t_a), _win_inv_dt(Float64(t_a), Float64(t_b)))
+end
+
+# Time-blended native-AMR sample (shared geometry, two blk arrays). The clamped
+# window ends short-circuit to a single frame's locate + corner reads: w == 0
+# returns frame A EXACTLY (fast-light limit) and w == 1 frame B — both weights are
+# attained exactly by the kernels' clamp, so the branches are bit-identical to the
+# blend while halving the global-memory traffic on clamped segments.
+@inline function _gamr_sample_t(blkA, blkB, xlft, dxb, leaf, amrp, w, x, y, z)
+    w == 1.0 && return _gamr_sample(blkB, xlft, dxb, leaf, amrp, x, y, z)
+    sA = _gamr_sample(blkA, xlft, dxb, leaf, amrp, x, y, z)
+    w == 0.0 && return sA
+    sB = _gamr_sample(blkB, xlft, dxb, leaf, amrp, x, y, z)
+    return (1.0 - w) .* sA .+ w .* sB
+end
+
+# SLOW-LIGHT Stokes-I AMR kernel: _gimg_march with the time-blended _gamr_sample_t.
+@kernel function _famr_kernel_sl!(img, @Const(y0s), @Const(blkA), @Const(blkB), @Const(xlft),
+                                  @Const(dxb), @Const(leaf), amrp, t0, inv_dt,
+                                  gp, a, r_h, C, escape, R_em, nmax, nrays)
+    i = @index(Global)
+    @inbounds if i <= nrays
+        img[i] = _gimg_march(y0s[i],
+                             y -> begin
+                                 # w on frame B at emission time t_obs - X⁰ (Float64
+                                 # RT lane; the conversion is identity for fp64 rays)
+                                 w = clamp((t0 - Float64(y[1])) * inv_dt, 0.0, 1.0)
+                                 _gamr_sample_t(blkA, blkB, xlft, dxb, leaf, amrp, w,
+                                                Float64(y[2]), Float64(y[3]),
+                                                Float64(y[4]))
+                             end,
+                             eltype(img), gp, a, r_h, C, escape, R_em, nmax)
+    end
+end
+
+# SLOW-LIGHT full-Stokes AMR kernel: _gpol_march with the time-blended _gamr_sample_t.
+@kernel function _gpol_amr_kernel_sl!(out, @Const(y0s), @Const(blkA), @Const(blkB), @Const(xlft),
+                                      @Const(dxb), @Const(leaf), amrp, t0, inv_dt,
+                                      gp, a, r_h, C, escape, R_em, nmax, nrays)
+    i = @index(Global)
+    @inbounds if i <= nrays
+        out[i] = _gpol_march(y0s[i],
+                             y -> begin
+                                 # w on frame B at emission time t_obs - X⁰ (Float64
+                                 # RT lane; the conversion is identity for fp64 rays)
+                                 w = clamp((t0 - Float64(y[1])) * inv_dt, 0.0, 1.0)
+                                 _gamr_sample_t(blkA, blkB, xlft, dxb, leaf, amrp, w,
+                                                Float64(y[2]), Float64(y[3]),
+                                                Float64(y[4]))
+                             end,
+                             gp, a, r_h, C, escape, R_em, nmax)
+    end
+end
+
+function _famr_part_sl!(img, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
+    backend = CUDABackend()
+    kern = _famr_kernel_sl!(backend)
+    cnt = length(rng)
+    y0d = CuArray(rays[rng])
+    outd = CuArray{Float64}(undef, cnt)
+    ga = win.a; gb = win.b
+    _kern_launch!(kern, wg, cnt, outd, y0d, ga.dev_blk[dev], gb.dev_blk[dev], ga.dev_xlft[dev],
+                  ga.dev_dxb[dev], ga.dev_leaf[dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C,
+                  escape, R_em, Int(nmax), cnt)
+    KernelAbstractions.synchronize(backend)
+    img[rng] .= Array(outd)
+    return nothing
+end
+
+function _gpol_amr_part_sl!(out, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
+    backend = CUDABackend()
+    kern = _gpol_amr_kernel_sl!(backend)
+    cnt = length(rng)
+    y0d = CuArray(rays[rng])
+    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    ga = win.a; gb = win.b
+    _kern_launch!(kern, wg, cnt, outd, y0d, ga.dev_blk[dev], gb.dev_blk[dev], ga.dev_xlft[dev],
+                  ga.dev_dxb[dev], ga.dev_leaf[dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C,
+                  escape, R_em, Int(nmax), cnt)
+    KernelAbstractions.synchronize(backend)
+    out[rng] .= Array(outd)
+    return nothing
+end
+
+"""
+    render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices=select_devices(),
+                        nmax=cfg.max_steps, C=80, t_obs=_win_t_obs(win),
+                        time_offset=0.0) -> Matrix{Float64}
+
+Fused single-pass SLOW-LIGHT Stokes-I render sampling the AMR hierarchy DIRECTLY on
+device, blending the two `DeviceAMRWindow` frames at the EMISSION time
+t_emit = t_obs - X⁰ (physical dump-time axis; `t_obs` defaults to the window's
+upper end, `time_offset` advances it — movie frame time). `win.inv_dt == 0`
+reproduces `render_gpu_amr(cfg, win.a)` bit-for-bit. Accepts `order`/`wg` as `render_gpu_amr`.
+"""
+function render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices = select_devices(),
+                             nmax::Int = cfg.max_steps, C::Real = 80,
+                             t_obs::Real = _win_t_obs(win), time_offset::Real = 0.0,
+                             order = nothing, wg = nothing)
+    st = KerrSchildCartesian(cfg.bh_a)
+    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
+                              cfg.camera.fov, cfg.camera.resolution)
+    rays = _apply_order(camera_rays(st, cam), order)
+    gp = _gimg_params(cfg)
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    Cf = Float64(C)
+    R_em = _gamr_domain_radius(win.a.amrp)
+    t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
+    nrays = length(rays)
+    img = Vector{Float64}(undef, nrays)
+    nd = length(devices)
+    @sync for di in 1:nd
+        idx = di:nd:nrays; dev = devices[di]
+        isempty(idx) && continue
+        @async begin
+            CUDA.device!(dev)
+            _famr_part_sl!(img, rays, idx, win, dev, t0, gp, a, r_h, Cf, escape, R_em, nmax, wg)
+        end
+    end
+    return reshape(_undo_order(img, order), cam.npix, cam.npix)
+end
+
+"""
+    render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices=select_devices(),
+                                  nmax=cfg.max_steps, C=80, t_obs=_win_t_obs(win),
+                                  time_offset=0.0) -> NamedTuple(I,Q,U,V)
+
+Full-Stokes SLOW-LIGHT render sampling the AMR fluid directly on device (frames
+blended at the emission time t_obs - X⁰, as `render_gpu_amr_slow`).
+`win.inv_dt == 0` reproduces `render_gpu_amr_polarized(cfg, win.a)`.
+Accepts `order`/`wg` as `render_gpu_amr_polarized`.
+"""
+function render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices = select_devices(),
+                                       nmax::Int = cfg.max_steps, C::Real = 80,
+                                       t_obs::Real = _win_t_obs(win), time_offset::Real = 0.0,
+                                       order = nothing, wg = _GPOL_WG)
+    st = KerrSchildCartesian(cfg.bh_a)
+    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
+                              cfg.camera.fov, cfg.camera.resolution)
+    rays = _apply_order(camera_rays(st, cam), order)
+    gp = _gpol_params(cfg)
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    Cf = Float64(C)
+    R_em = _gamr_domain_radius(win.a.amrp)
+    t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
+    nrays = length(rays)
+    out = Vector{SVector{4,Float64}}(undef, nrays)
+    nd = length(devices)
+    @sync for di in 1:nd
+        idx = di:nd:nrays; dev = devices[di]
+        isempty(idx) && continue
+        @async begin
+            CUDA.device!(dev)
+            _gpol_amr_part_sl!(out, rays, idx, win, dev, t0, gp, a, r_h, Cf, escape, R_em, nmax, wg)
+        end
+    end
+    out = _undo_order(out, order)
+    npx = cam.npix
+    I = reshape([o[1] for o in out], npx, npx)
+    Q = reshape([o[2] for o in out], npx, npx)
+    U = reshape([o[3] for o in out], npx, npx)
+    V = reshape([o[4] for o in out], npx, npx)
+    return (I = I, Q = Q, U = U, V = V)
+end
