@@ -1,0 +1,32 @@
+/* Citation and bibliography styling for the DocumenterCitations author-year
+   style. Keeps inline citations visually distinct from ordinary links and
+   makes the bibliography readable as a reference list. */
+
+a.citation {
+    font-variant-numeric: tabular-nums;
+    text-decoration: none;
+    border-bottom: 1px dotted currentColor;
+}
+
+a.citation:hover {
+    border-bottom-style: solid;
+}
+
+/* Hanging indent, the conventional bibliography layout. */
+.citation dl dd {
+    margin-left: 2em;
+    text-indent: -2em;
+    margin-bottom: 0.6em;
+    line-height: 1.5;
+}
+
+.citation dl dt {
+    float: left;
+    margin-right: 0.5em;
+    font-weight: 600;
+}
+
+/* DOIs and arXiv links run long; let them wrap rather than overflow. */
+.citation dd a {
+    word-break: break-word;
+}
