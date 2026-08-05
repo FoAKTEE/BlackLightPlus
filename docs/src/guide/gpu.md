@@ -100,4 +100,4 @@ maximum(abs, cpu.I .- gpu.I)
 ## Where to go next
 
 - [Benchmarks](@ref) — measured throughput and scaling.
-- [Method](@ref) — the reverse affine/Mueller accumulation the kernel uses.
+- [Method](@ref "Method") — the reverse affine/Mueller accumulation the kernel uses.

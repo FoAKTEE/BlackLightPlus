@@ -70,9 +70,8 @@ failing doctest fails the build, and a documentation failure is a CI failure.
 ### The hot-path rule
 
 Anything reachable from a march loop must be pure, allocation-free, `isbits`,
-and `StaticArrays`-typed. This is what lets one implementation serve CPU
-threads, KernelAbstractions GPU kernels, and ForwardDiff/Enzyme
-differentiation. A change that breaks this property must say so explicitly in
+and `StaticArrays`-typed, so one implementation serves CPU threads,
+KernelAbstractions GPU kernels, and ForwardDiff/Enzyme differentiation. A change that breaks this property must say so explicitly in
 the pull request and in the changelog.
 
 ## Documentation expectations
@@ -84,8 +83,15 @@ so CI verifies them; if an example needs external data, mark it as a plain
 `julia` block and name the test file that exercises it.
 
 Citations use the shared bibliography. Add the entry to `docs/references.bib`
-with a verified DOI — never a guessed one — and cite it inline as
-`[Key](@citet)` or `[Key](@citep)`.
+with a verified DOI, then cite it inline — narrative form for "Author (Year)
+showed…", parenthetical otherwise:
+
+````markdown
+the scheme of [White2022](@citet)        renders as   White (2022)
+the adaptive scheme [White2022](@citep)  renders as   (White, 2022)
+````
+
+Keep such examples fenced; as bare text they are parsed as real citations.
 
 The full contract is in
 [`docs/STANDARDS.md`](https://github.com/FoAKTEE/BlackLightPlus/blob/main/docs/STANDARDS.md).

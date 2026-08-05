@@ -7,6 +7,10 @@ All sources implement the `source_plasma_at` seam, which is the single point
 both the imaging pipeline and the Monte Carlo module call to obtain plasma
 state at a position.
 
+```@docs
+BlackLightPlus.Sources
+```
+
 ## Interface
 
 ```@docs

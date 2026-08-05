@@ -116,4 +116,4 @@ grid  = adm_grid_from_metric(exact, 20.0, 128)
 ## Where to go next
 
 - [Imaging GRMHD data](@ref) — adding a fluid to these backgrounds.
-- [Method](@ref) — the 3+1 decomposition and interpolation requirements.
+- [Method](@ref "Method") — the 3+1 decomposition and interpolation requirements.

@@ -1,5 +1,3 @@
-# Formatting is mechanical and never discussed in review (STANDARDS.md §9).
-# 92 columns matches the margin the existing source was written to.
 style = "default"
 margin = 92
 indent = 4

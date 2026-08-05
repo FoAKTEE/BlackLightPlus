@@ -1,15 +1,8 @@
 % BlackLightPlus bibliography.
 %
-% Standard: docs/STANDARDS.md §6.2.
-%   - Citation keys are human-readable AuthorYear; the ADS bibcode is kept in
-%     the `bibcode` field.
-%   - Every `doi` and `eprint` below was checked against Crossref, the arXiv
-%     API, or the publisher's page. Nothing here is from memory.
-%   - Author names keep their diacritics (Mościbrodzka, Cárdenas-Avendaño).
-%     Crossref metadata misspells "Mościbrodzka" as "Mościbrodska" on several
-%     records; the spelling here follows ADS and the published papers.
-%
-% Verified 2026-08-05.
+% Citation keys are AuthorYear; the ADS bibcode is kept in the `bibcode` field.
+% Note that Crossref metadata misspells "Mościbrodzka" as "Mościbrodska" on
+% several records; the spelling here follows ADS and the published papers.
 
 % ---------------------------------------------------------------------------
 % Reference ray-tracing and radiative-transfer codes
@@ -271,9 +264,8 @@
   adsurl  = {https://ui.adsabs.harvard.edu/abs/1987ApJ...323..565C}
 }
 
-% No DOI exists for this 1950 Nucleonics article; per STANDARDS.md §6.2 the
-% field is omitted rather than guessed. Published in two parts: 6(5), 27--33
-% and 6(6), 60--65. The exponential-transform biasing used here is from part I.
+% No DOI exists for this article. Published in two parts: 6(5), 27--33 and
+% 6(6), 60--65; the exponential-transform biasing used here is from part I.
 @article{Kahn1950,
   author  = {Kahn, Herman},
   title   = {{Random sampling (Monte Carlo) techniques in neutron attenuation
@@ -340,11 +332,10 @@
 }
 
 % ---------------------------------------------------------------------------
-% Software records (cited alongside their method papers)
-%
-% These use @misc rather than @software: the latter is a BibLaTeX entry type
-% that the classic-BibTeX parser behind DocumenterCitations does not recognize,
-% and it fails the docs build.
+% Software records. These use the "misc" entry type; the BibLaTeX-only
+% "software" type is rejected by the parser behind DocumenterCitations.
+% Do not write an at-sign followed by an entry-type name in these comments --
+% the parser scans for at-signs even inside % comments.
 % ---------------------------------------------------------------------------
 
 @misc{AARTCode,

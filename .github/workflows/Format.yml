@@ -32,8 +32,6 @@ jobs:
             Pkg.add(PackageSpec(name = "JuliaFormatter", version = "1"))
             using JuliaFormatter
 
-            # Config comes from .JuliaFormatter.toml; formatting is mechanical
-            # and never discussed in review (STANDARDS.md §9).
             ok = format(["src", "test", "bench", "docs/make.jl"]; verbose = true)
 
             if !ok

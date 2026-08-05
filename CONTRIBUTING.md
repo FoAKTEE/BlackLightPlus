@@ -59,8 +59,7 @@ failing doctest fails the build, and a documentation failure is a CI failure.
 julia -e 'using JuliaFormatter; format(["src","test","bench","docs/make.jl"])'
 ```
 
-Configuration is in `.JuliaFormatter.toml` (92-column margin). CI checks this;
-formatting is mechanical and never discussed in review.
+Configuration is in `.JuliaFormatter.toml` (92-column margin). CI checks this.
 
 ## Code conventions
 
@@ -71,9 +70,9 @@ formatting is mechanical and never discussed in review.
   in the pipeline and its counterpart in the reference codes.
 
 **The hot-path rule.** Anything reachable from a march loop must be pure,
-allocation-free, `isbits`, and `StaticArrays`-typed. This is what lets one
-implementation serve CPU threads, KernelAbstractions GPU kernels, and
-ForwardDiff/Enzyme differentiation. A change that breaks this must say so
+allocation-free, `isbits`, and `StaticArrays`-typed, so one implementation
+serves CPU threads, KernelAbstractions GPU kernels, and ForwardDiff/Enzyme
+differentiation. A change that breaks this must say so
 explicitly in the pull request and the changelog.
 
 ## Documentation and citations
@@ -84,9 +83,8 @@ physical quantity crosses the boundary. Prefer `jldoctest` examples so CI
 verifies them.
 
 To cite a paper, add it to [`docs/references.bib`](docs/references.bib) with a
-DOI **verified** against Crossref, the arXiv API, or the publisher — never a
-DOI from memory, and omit the field rather than guess. Cite inline as
-`[Key](@citet)` or `[Key](@citep)`.
+verified DOI, omitting the field rather than guessing if none exists, and cite
+it inline with `@citet` (narrative) or `@citep` (parenthetical).
 
 ## Pull requests
 

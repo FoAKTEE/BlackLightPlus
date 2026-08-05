@@ -7,6 +7,10 @@ metric closure $x \mapsto g_{\mu\nu}(x)$; inverse metrics and Christoffel
 symbols come from automatic differentiation, so a new metric never needs
 hand-coded derivatives.
 
+```@docs
+BlackLightPlus.Geodesics
+```
+
 ## Spacetimes
 
 ```@docs
@@ -29,6 +33,21 @@ ks_radius
 horizon_radius
 ks_radius_hole
 horizon_radius_hole
+```
+
+### Derived geometric quantities
+
+Exported by `Geodesics` but not re-exported at the top level; reach them as
+`BlackLightPlus.Geodesics.<name>`. Christoffel symbols are never materialized
+on the hot path — the integrator uses `inverse_metric_gradient` directly — so
+these exist for diagnostics and tests.
+
+```@docs
+BlackLightPlus.Geodesics.christoffel
+BlackLightPlus.Geodesics.metric_gradient
+BlackLightPlus.Geodesics.kerr_horizon
+BlackLightPlus.Geodesics.kerr_delta
+BlackLightPlus.Geodesics.kerr_radial_potential
 ```
 
 ## Geodesic integration

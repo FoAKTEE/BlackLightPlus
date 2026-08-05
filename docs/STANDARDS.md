@@ -5,10 +5,7 @@
 repository — citable, reproducible, and reviewable by an astrophysicist who has
 never seen the code.
 
-This document is the contract. It defines what "professional" means here, so
-that "improve the docs" is a checkable claim rather than a matter of taste.
 Every rule below is stated so that a reviewer can mark it pass or fail.
-§12 audits the repository against the rules and is the work plan.
 
 The three governing principles:
 
@@ -56,8 +53,8 @@ BlackLightPlus/
 - Files that require an optional dependency (CUDA) live at `src/` top level as
   standalone drivers (`gpu_*.jl`), are **not** `include`d by the package, and
   are documented as explicit-include drivers in the GPU guide. This keeps the
-  package installable on CUDA-free machines and is a deliberate design choice,
-  not an accident — it must be stated in `README.md` and in the GPU page.
+  package installable on CUDA-free machines, and must be stated in `README.md`
+  and in the GPU page so it does not read as an oversight.
 - No file exceeds ~1000 lines. Above that, split by physical concern.
 - No generated artifact is committed: no `.npy`, `.png`, `.pdf`, no `out/`.
   Figures in `figures/examples/` are the sole exception (§10.3) and each must
@@ -403,56 +400,3 @@ matching header comment:
 
 A new dependency on, or derivation from, third-party work updates `NOTICE` in
 the same commit.
-
-## 12. Compliance audit — current state
-
-Assessed 2026-08-05 against the rules above.
-
-### Meets the standard
-
-- `src/` layout, submodule discipline, and file-head role comments (§1, §9).
-- Docstring density — ~500 block docstrings, 387 already using the indented
-  signature form (§4).
-- `docs/method.md` is a genuine explanation document: correct mode, no
-  installation or API contamination (§3).
-- `NOTICE` already uses the three-tier structure (§11).
-- `Project.toml` has complete `[compat]` including `julia` (§7.1).
-- Benchmarks state machine, stack, and protocol (§10.2).
-
-### Gaps, in dependency order
-
-| # | Gap | Rule | Severity |
-|---|---|---|---|
-| 1 | **Not a git repository** — no history, no remote, no tags | §1, §7.3 | blocker |
-| 2 | No `docs/references.bib`; citations are inline prose only, no DOIs, no ADS keys | §6.2 | blocker for "reference is standard" |
-| 3 | `method.md` ends in a run-on `·`-separated reference list; not a bibliography | §6.3 | high |
-| 4 | No Documenter site — no `docs/Project.toml`, `make.jl`, or `docs/src/` | §3.2 | high |
-| 5 | No generated API reference; 182 exported symbols have no reference page | §5 | high |
-| 6 | README `git clone <repository-url>` placeholder; unrunnable as written | §3.1 | high |
-| 7 | No CI at all — no `.github/`, no test/docs/format workflows | §8 | high |
-| 8 | No `CHANGELOG.md` | §7.2 | medium |
-| 9 | No `CONTRIBUTING.md` or `CODE_OF_CONDUCT.md` | §2 | medium |
-| 10 | README has no badges and no hero figure, despite four rendered figures existing | §3.1 | medium |
-| 11 | No tutorial page — README jumps from install to a two-call quickstart, then to a dense how-to | §3 | medium |
-| 12 | `CITATION.cff` missing `abstract`, `repository-code`, `url`, ORCID | §6.4 | medium |
-| 13 | No `.JuliaFormatter.toml`; style is consistent by hand, unenforced | §9 | low |
-| 14 | No doctests; docstring examples are unverified | §4, §8 | low |
-| 15 | 69 one-line docstrings on exported symbols lack the signature line | §4 | low |
-| 16 | Diacritics inconsistent — `NOTICE` has "Moscibrodzka", "Cardenas-Avendano" | §6.1 | low |
-| 17 | No issue templates | §1 | low |
-
-### Sequencing
-
-Gap 1 gates 7 and 10 (badges need a remote). Gap 2 gates 3 and the citation
-sections of every document. Gap 4 gates 5, 11, and 14. Order of work:
-
-1. `git init`, first commit, remote — unblocks everything that references a URL.
-2. `docs/references.bib` from ADS, with verified DOIs → rewrite every citation
-   site (`README.md`, `method.md`, `NOTICE`, `CITATION.cff`) to §6.1 form.
-3. Documenter scaffold; existing `method.md`, `usage.md`, `benchmarks.md`
-   become site pages; `usage.md` splits into a tutorial plus task-titled guides.
-4. API reference pages with `checkdocs = :exports`; fix the docstrings that
-   fail the gate.
-5. README rewrite to the §3.1 contract.
-6. CI workflows, `CHANGELOG.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`,
-   formatter config, issue templates.

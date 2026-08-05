@@ -20,8 +20,8 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - '1.10'   # LTS lower bound declared in Project.toml [compat]
-          - '1'      # latest stable
+          - '1.10'   # lower bound in Project.toml [compat]
+          - '1'
         os: [ubuntu-latest]
         arch: [x64]
 
@@ -37,8 +37,7 @@ jobs:
 
       - uses: julia-actions/julia-buildpkg@v1
 
-      # CI has no GPU and no external simulation data. Test blocks that need
-      # either skip themselves and report the skip (STANDARDS.md §8).
+      # No GPU and no simulation data on CI; those blocks skip themselves.
       - uses: julia-actions/julia-runtest@v1
         env:
           BLP_SKIP_GPU: '1'

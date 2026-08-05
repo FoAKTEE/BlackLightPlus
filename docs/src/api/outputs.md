@@ -2,6 +2,10 @@
 
 The `Outputs` module writes images and computes interferometric observables.
 
+```@docs
+BlackLightPlus.Outputs
+```
+
 ## Image output
 
 ```@docs

@@ -95,5 +95,5 @@ scattering generation with atomic child append — rather than recursive.
 
 ## Where to go next
 
-- [Method](@ref) — the sampling, biasing, and normalization scheme.
+- [Method](@ref "Method") — the sampling, biasing, and normalization scheme.
 - [Benchmarks](@ref) — measured throughput.

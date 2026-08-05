@@ -1,4 +1,4 @@
-# BlackLightPlus: methods
+# Method
 
 BlackLightPlus is a Julia package for general-relativistic ray tracing and fully
 polarized radiative transfer in arbitrary spacetimes, on CPUs and GPUs, with
@@ -97,7 +97,8 @@ needs no per-pixel factor.
 
 For equatorial sources in Kerr, an exact closed-form tracer (no ODE) inverts
 the geodesic with Legendre/Jacobi elliptic integrals in the formulation of
-[GrallaLupsasca2020NullGeodesics](@citet), following the conventions of Krang.jl
+[GrallaLupsasca2020NullGeodesics](@citet) and its lensing companion
+[GrallaLupsasca2020Lensing](@citep), following the conventions of Krang.jl
 [Chang2024](@citep) and the finite-observer photon-ring machinery of AART
 [CardenasAvendano2023](@citep):
 conserved quantities $(\lambda,\eta)$ from Bardeen screen coordinates, quartic
@@ -198,7 +199,7 @@ fused GPU kernels plug in through a flat ray-list interface, so CPU and GPU
 backends make identical refinement decisions. Refinement typically saves
 $\sim4\times$ in rays on top of kernel throughput.
 
-## Monte Carlo spectra
+## Monte Carlo spectral synthesis
 
 The Monte Carlo module implements the grmonty scheme [Dolence2009](@citep):
 superphoton packets sample the synchrotron emissivity zone-by-zone with
@@ -236,7 +237,11 @@ Three deliberate, oracle-verified departures from Blacklight
 3. **Degenerate-coupling fallback** is the total-absorption solution
    (admissibility-clamped), not the removed defective branch.
 
-## References
+The polarized-transfer stiffness diagnostic re-derives the transfer-matrix
+eigenvalue analysis used by RAPTOR [Bronzwaer2018](@citep); that derivation is
+independent, and no RAPTOR source was consulted.
 
-Works cited above are listed with full bibliographic details, DOIs, and arXiv
-identifiers on the [References](@ref) page.
+## Works cited
+
+Full bibliographic details, DOIs, and arXiv identifiers for everything cited
+above are on the [References](@ref "References") page.

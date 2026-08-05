@@ -44,7 +44,7 @@ automatic differentiation through the entire pipeline.
 | Use a binary or numerical-relativity spacetime | [Numerical-relativity and binary spacetimes](@ref) |
 | Run on GPUs | [GPU rendering](@ref) |
 | Compute Compton spectra | [Monte Carlo spectra](@ref) |
-| Understand the physics and numerics | [Method](@ref) |
+| Understand the physics and numerics | [Method](@ref "Method") |
 | See measured performance | [Benchmarks](@ref) |
 | Look up a function | [API Overview](@ref) |
 

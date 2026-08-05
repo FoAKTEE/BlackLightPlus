@@ -1,23 +1,20 @@
 Third-party notices for BlackLightPlus (MIT licensed; see LICENSE)
 
-This file records provenance in three tiers, per docs/STANDARDS.md §11.
 
-
-1. PORTED CODE (MIT-licensed sources; original notices preserved in file headers)
+PORTED CODE (MIT-licensed sources; original notices preserved in file headers)
 
 - src/geodesics/lensing_bands.jl and src/outputs/interferometry.jl are ported
   from AART (https://github.com/iAART/aart), used under the MIT License.
-  The upstream copyright notice is reproduced verbatim:
+  The upstream copyright notice reads:
 
       Copyright 2024 Alejandro Cardenas-Avendano, Hengrui Zhu & Alex Lupsasca
 
-  (Reproduced exactly as written in the upstream License.txt. The
-  corresponding method paper is cited as Cárdenas-Avendaño, Lupsasca & Zhu
-  2023, PRD 107, 043030 — note that the paper's author order and accented
-  spellings differ from the copyright line above.)
+  The corresponding method paper is Cárdenas-Avendaño, Lupsasca & Zhu 2023,
+  PRD 107, 043030; its author order and accented spellings differ from the
+  copyright line above, which is reproduced verbatim.
 
 
-2. ALGORITHM-LEVEL REIMPLEMENTATIONS (no source code copied)
+ALGORITHM-LEVEL REIMPLEMENTATIONS (no source code copied)
 
 - The Monte Carlo module follows the grmonty scheme (Dolence et al. 2009,
   ApJS 184, 387). Samplers in src/montecarlo/ are clean-room reimplementations
@@ -30,7 +27,7 @@ This file records provenance in three tiers, per docs/STANDARDS.md §11.
   or consulted.
 
 
-3. CONVENTIONS AND VALIDATION TARGETS (no code relationship)
+CONVENTIONS AND VALIDATION TARGETS (no code relationship)
 
 Conventions are followed, and outputs compared against, the published codes
 below. No code from any of them is reused.

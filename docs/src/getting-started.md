@@ -73,7 +73,7 @@ Doppler-boosted on the approaching side, wrapped around the black-hole shadow.
 integrating an ODE, so the image came back in well under a second. Every ray
 was traced backwards from the camera to the equatorial plane using Legendre and
 Jacobi elliptic integrals, and the disk emission was evaluated at the landing
-point. The [Method](@ref) page explains the formulation.
+point. The [Method](@ref "Method") page explains the formulation.
 
 ## Next steps
 

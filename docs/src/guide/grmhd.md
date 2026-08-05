@@ -100,4 +100,4 @@ amplitudes from an image — see [Outputs](@ref "Outputs API").
 
 - [GPU rendering](@ref) — the same images, roughly 100× faster.
 - [Numerical-relativity and binary spacetimes](@ref) — non-Kerr backgrounds.
-- [Method](@ref) — the transfer scheme and coefficient fits.
+- [Method](@ref "Method") — the transfer scheme and coefficient fits.

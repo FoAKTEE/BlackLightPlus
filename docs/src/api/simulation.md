@@ -5,11 +5,29 @@ snapshots [Stone2026](@citep) in `.athdf` and `.bin` form, Z4c
 numerical-relativity dumps [Zhu2025](@citep), and time series of snapshots for
 slow-light rendering.
 
+```@docs
+BlackLightPlus.Simulation
+```
+
 ## AthenaK GRMHD input
 
 ```@docs
+BlackLightPlus.Simulation.AthenaKSnapshot
 athenak_bin_snapshot
 read_athenak_bin
+```
+
+## Sampling and unit conversion
+
+These are exported by `Simulation` but not re-exported at the top level; reach
+them as `BlackLightPlus.Simulation.<name>`.
+
+```@docs
+BlackLightPlus.Simulation.sample_primitives
+BlackLightPlus.Simulation.sample_var
+BlackLightPlus.Simulation.primitive_four_vectors
+BlackLightPlus.Simulation.pgas_from_eint
+BlackLightPlus.Simulation.units
 ```
 
 ## AMR meshblock indexing

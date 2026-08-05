@@ -103,8 +103,19 @@ thermal distribution (no flux / Klein-Nishina weighting); its mean is
     return gamma_e, beta_e, rng
 end
 
-# Collision cosine from the (1 - beta_e mu) flux distribution via inverse CDF; the
-# discriminant is (1-beta)^2 <= det <= (1+beta)^2 >= 0, `abs` is pure safety.
+"""
+    sample_mu(beta_e, r) -> Float64
+
+Sample the cosine ``\\mu`` of the angle between the photon and electron momenta
+from the ``(1 - \\beta_e \\mu)`` collision-flux distribution.
+
+`beta_e` is the electron speed in units of ``c`` and `r` is a uniform variate on
+``[0,1)``; the result is drawn by inverse CDF and clamped to ``[-1, 1]``. The
+discriminant satisfies ``(1-\\beta_e)^2 \\le \\mathrm{det} \\le (1+\\beta_e)^2``,
+so the `abs` guarding the square root is defensive only.
+
+See also [`sample_electron`](@ref), [`compton_scatter`](@ref).
+"""
 @inline function sample_mu(beta_e, r)
     det = 1.0 + 2.0 * beta_e + beta_e * beta_e - 4.0 * beta_e * r
     mu = (1.0 - sqrt(abs(det))) / beta_e

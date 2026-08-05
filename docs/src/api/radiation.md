@@ -6,12 +6,17 @@ plasma-decode chain converts code-unit $(\rho, p_\mathrm{gas}, b^2)$ into cgs
 $(n_e, \Theta_e, B, \sigma, \beta^{-1})$, and the same chain feeds both imaging
 and Monte Carlo.
 
+```@docs
+BlackLightPlus.Radiation
+```
+
 ## Plasma decode and electron temperature
 
 ```@docs
 SimCoeffConfig
 electron_theta
 plasma_cut_omits
+BlackLightPlus.Radiation.plasma_decode
 ```
 
 ## Tetrads
@@ -66,6 +71,18 @@ eigenstructure.
 ```@docs
 stokes_couple
 couple_unpolarized
+```
+
+## Marching along a ray
+
+The per-segment drivers that consume the coefficients above. Exported by
+`Radiation` but not re-exported at the top level; the `render` drivers call
+them for you.
+
+```@docs
+BlackLightPlus.Radiation.eight_coefficients
+BlackLightPlus.Radiation.unpolarized_march
+BlackLightPlus.Radiation.polarized_march
 ```
 
 ## Equatorial disk source

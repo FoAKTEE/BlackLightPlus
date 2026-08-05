@@ -66,7 +66,31 @@ end
 # Single Kerr (M = 1) from the shared primitive.
 @inline _rfl(x::SVector{4,T}, a) where {T} = _ks_term(x[2], x[3], x[4], one(T), a)
 
+"""
+    ks_radius(st::KerrSchildCartesian, x::SVector{4}) -> Float64
+
+Kerr–Schild radius ``r`` at the Cartesian Kerr–Schild position `x`.
+
+``r`` is the spheroidal radial coordinate defined implicitly by
+``\\frac{x^2 + y^2}{r^2 + a^2} + \\frac{z^2}{r^2} = 1``, not the Euclidean
+distance ``\\sqrt{x^2+y^2+z^2}``; the two coincide only as ``r \\to \\infty``
+or for ``a = 0``. Geometrized units, ``M = 1``.
+
+See also [`horizon_radius`](@ref), [`ks_radius_hole`](@ref).
+"""
 @inline ks_radius(st::KerrSchildCartesian, x::SVector{4}) = _rfl(x, st.a)[1]
+
+"""
+    horizon_radius(st::KerrSchildCartesian) -> Float64
+
+Outer event-horizon radius ``r_+ = 1 + \\sqrt{1 - a^2}`` in geometrized units
+(``M = 1``), as a Kerr–Schild radius.
+
+Rays are terminated just outside this radius during integration. Compare
+against [`ks_radius`](@ref), which is the coordinate this is expressed in.
+
+See also [`horizon_radius_hole`](@ref) for the binary case.
+"""
 @inline horizon_radius(st::KerrSchildCartesian) = 1 + sqrt(1 - st.a * st.a)
 
 @inline function metric(st::KerrSchildCartesian, x::SVector{4})

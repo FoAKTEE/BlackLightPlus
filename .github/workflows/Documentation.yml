@@ -37,10 +37,6 @@ jobs:
             Pkg.develop(PackageSpec(path = pwd()))
             Pkg.instantiate()'
 
-      # The gates live in docs/make.jl: warnonly=false, checkdocs=:exports,
-      # doctest=true. A broken @ref, an undocumented export, or a failing
-      # doctest fails this job -- a docs failure is a CI failure
-      # (STANDARDS.md §8).
       - name: Build and deploy
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

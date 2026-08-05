@@ -5,6 +5,10 @@ Compton-scattering spectral synthesis. Superphoton packets sample the
 synchrotron emissivity zone by zone, carry covariant momentum along geodesics,
 decay by Kirchhoff absorption, and scatter off a relativistic Maxwellian.
 
+```@docs
+BlackLightPlus.MonteCarlo
+```
+
 ## Random numbers
 
 The counter-based Philox4x32-10 generator [Salmon2011](@citep). It is

@@ -1,5 +1,9 @@
 # API Overview
 
+```@docs
+BlackLightPlus.BlackLightPlus
+```
+
 ## What is public
 
 **The public API is exactly what `BlackLightPlus` exports.** Every exported
@@ -45,3 +49,12 @@ These hold throughout the API and are not repeated in every docstring:
 - Physics arithmetic is `Float64`. Plasma quantities are in cgs.
 
 Where a function departs from any of these, its docstring says so.
+
+## Physical constants
+
+`Constants` is module-private: its values are used throughout the package but
+are not part of the public API and are not re-exported.
+
+```@docs
+BlackLightPlus.Constants
+```
