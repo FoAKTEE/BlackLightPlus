@@ -13,17 +13,26 @@ concurrency:
 
 jobs:
   test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
+    name: Julia ${{ matrix.version }} (${{ matrix.env }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
-        version:
-          - '1.10'   # lower bound in Project.toml [compat]
-          - '1'
-        os: [ubuntu-latest]
-        arch: [x64]
+        include:
+          # The committed Manifest.toml pins the reproducible environment and
+          # was resolved on 1.12; instantiating it on an older Julia pins
+          # versions that cannot precompile there. So test the lower bound by
+          # resolving fresh against the compat bounds, and test the pinned
+          # environment on the version it was resolved for.
+          - version: '1.10'
+            env: compat bounds
+            use_manifest: false
+            os: ubuntu-latest
+          - version: '1.12'
+            env: pinned manifest
+            use_manifest: true
+            os: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -31,9 +40,13 @@ jobs:
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
-          arch: ${{ matrix.arch }}
+          arch: x64
 
       - uses: julia-actions/cache@v2
+
+      - name: Resolve fresh against compat bounds
+        if: ${{ !matrix.use_manifest }}
+        run: rm -f Manifest.toml
 
       - uses: julia-actions/julia-buildpkg@v1
 
@@ -43,8 +56,10 @@ jobs:
           BLP_SKIP_GPU: '1'
 
       - uses: julia-actions/julia-processcoverage@v1
+        if: ${{ matrix.use_manifest }}
 
       - uses: codecov/codecov-action@v4
+        if: ${{ matrix.use_manifest }}
         with:
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}

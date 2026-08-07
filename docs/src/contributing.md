@@ -58,9 +58,10 @@ failing doctest fails the build, and a documentation failure is a CI failure.
 
 ## Code style
 
-- Formatting is mechanical: `JuliaFormatter` with the committed
-  `.JuliaFormatter.toml`, 92-column margin. Run it before opening a pull
-  request; CI checks it.
+- 92-column margin, four-space indent, matching the file you are editing.
+  Parts of the source are hand-aligned where alignment carries meaning (metric
+  components, coefficient tables, kernel argument lists), so no automatic
+  formatter is applied.
 - Types are `CamelCase`, functions are `snake_case`, mutating functions end in
   `!`. Unicode is used for physical symbols where it matches the literature
   (`ν`, `α`, `Θ_e`) and avoided elsewhere.

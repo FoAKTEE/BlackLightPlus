@@ -30,7 +30,6 @@ BlackLightPlus/
 ├── Project.toml            name, uuid, version, deps, compat; §7.1
 ├── Manifest.toml           committed — this is an application, not a library
 ├── .gitignore
-├── .JuliaFormatter.toml    style config; §9
 ├── .github/
 │   ├── workflows/          CI: test, docs, format; §8
 │   └── ISSUE_TEMPLATE/     bug report, feature request
@@ -321,9 +320,13 @@ Three workflows, all required to pass on `main` and on every PR:
 
 | Workflow | Runs | Gate |
 |---|---|---|
-| `CI.yml` | `Pkg.test()` on Julia 1.10 (LTS lower bound) and 1.12, on Linux | all non-skipped tests pass |
+| `CI.yml` | `Pkg.test()` on Julia 1.10 resolved fresh against the compat bounds, and on 1.12 with the committed `Manifest.toml` | all non-skipped tests pass |
 | `Documentation.yml` | `docs/make.jl` with `warnonly = false`, `checkdocs = :exports`, doctests on | build clean, no missing docstrings, doctests pass |
-| `Format.yml` | `JuliaFormatter` in check mode | no diff |
+
+The two CI entries test different things and both matter. The compat-bounds run
+proves the declared lower bound is real; the pinned run proves the committed
+environment still works. A `Manifest.toml` resolved on one Julia version cannot
+be instantiated on an older one, so the lower-bound job removes it first.
 
 **Rules**
 
@@ -340,9 +343,11 @@ Three workflows, all required to pass on `main` and on every PR:
 
 ## 9. Code style
 
-- `JuliaFormatter` with a committed `.JuliaFormatter.toml`; 92-column margin
-  to match the existing source. Formatting is mechanical and never discussed
-  in review.
+- 92-column margin, four-space indent, matching the surrounding source. This is
+  a convention, not a tool gate: the source is hand-aligned in places where
+  alignment carries meaning (metric components, coefficient tables, kernel
+  argument lists), and running `JuliaFormatter` over it rewrites ~9,500 lines
+  and destroys that alignment. Match the file you are editing.
 - Naming follows Julia convention: `TypesInCamelCase`, `functions_in_snake_case`,
   `mutating!` functions marked, no Hungarian prefixes. Unicode is permitted for
   physical symbols where it matches the literature (`ν`, `α`, `Θ_e`, `γ`) and

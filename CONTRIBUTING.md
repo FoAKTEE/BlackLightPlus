@@ -55,11 +55,10 @@ failing doctest fails the build, and a documentation failure is a CI failure.
 
 ## Formatting
 
-```sh
-julia -e 'using JuliaFormatter; format(["src","test","bench","docs/make.jl"])'
-```
-
-Configuration is in `.JuliaFormatter.toml` (92-column margin). CI checks this.
+92-column margin, four-space indent, matching the file you are editing. This is
+a convention rather than a tool gate — parts of the source are hand-aligned
+where alignment carries meaning (metric components, coefficient tables, kernel
+argument lists), and an automatic formatter destroys that.
 
 ## Code conventions
 

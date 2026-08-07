@@ -385,6 +385,14 @@ using BlackLightPlus: SimCoeffConfig
         KernelAbstractions.synchronize(backend)
         img
     end
+    # `_fused_kernel_sl!` and `_fused_kernel!` are distinct kernels that agree to
+    # the last bit only when they vectorize the same way. Forcing bounds checks
+    # on (--check-bounds=yes, which `Pkg.test` does by default) blocks that
+    # vectorization and shifts the reduction order, so the short-circuit
+    # guarantee below is asserted exactly on a normal build and to round-off on
+    # a bounds-checked one. Differences seen there are ~1 ulp.
+    bitsame(x, y) = Base.JLOptions().check_bounds == 1 ?
+                    isapprox(x, y; rtol = 1e-12) : x == y
     # realistic ascending dump times (as slab f): t_a = 12000, t_b = 13000
     t_a, t_b = 12000.0, 13000.0
     inv_dt = 1.0 / (t_b - t_a)
@@ -393,9 +401,9 @@ using BlackLightPlus: SimCoeffConfig
     # test needs is two clearly distinguishable frames
     @test sum(fastA) > 0.0 && sum(fastB) > 0.0 && sum(fastA) != sum(fastB)
     # t_obs = t_a: every emission time t_a - X⁰ <= t_a  =>  w == 0  =>  frame A, BIT-identical
-    @test runslow(t_a - t_a, inv_dt) == fastA
+    @test bitsame(runslow(t_a - t_a, inv_dt), fastA)
     # t_obs far past t_b: w == 1 everywhere  =>  frame B, BIT-identical (w==1 short-circuit)
-    @test runslow(t_b + 2000.0 - t_a, inv_dt) == fastB
+    @test bitsame(runslow(t_b + 2000.0 - t_a, inv_dt), fastB)
     # t_obs = t_b (the SnapshotSeries default): the emitting X⁰ range (~500) maps to
     # t_emit = 13000 - X⁰ strictly INSIDE the window -> a genuine blend. The old
     # convention returned frame A exactly here (X⁰ ~ 500 << t_a  =>  w = 0): regression.
