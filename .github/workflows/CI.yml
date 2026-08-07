@@ -51,9 +51,23 @@ jobs:
       - uses: julia-actions/julia-buildpkg@v1
 
       # No GPU and no simulation data on CI; those blocks skip themselves.
-      - uses: julia-actions/julia-runtest@v1
+      # Run Pkg.test directly rather than via julia-actions/julia-runtest so a
+      # failure can be surfaced as a job annotation: annotations are readable
+      # without a token, full job logs are not.
+      - name: Run tests
         env:
           BLP_SKIP_GPU: '1'
+        run: |
+          set -o pipefail +e
+          julia --project=. --color=yes -e 'using Pkg; Pkg.test(coverage=true)' 2>&1 | tee test.log
+          code=$?
+          if [ $code -ne 0 ]; then
+            digest=$(grep -aE "Test Failed|Error During Test|Got exception|Expression:|Evaluated:|Stacktrace|did not pass|^ERROR|Killed|out of memory|No space left" test.log \
+                     | cut -c1-220 | head -40)
+            enc=$(printf '%s' "$digest" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Test failure digest (${{ matrix.version }})::$enc"
+          fi
+          exit $code
 
       - uses: julia-actions/julia-processcoverage@v1
         if: ${{ matrix.use_manifest }}
