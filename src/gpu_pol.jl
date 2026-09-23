@@ -582,8 +582,6 @@ end
 # readout screen's timelike leg.
 using BlackLightPlus.Radiation: _normal_observer
 const _gpol_normal_observer = _normal_observer
-# Relative drift of the transported invariant -k·eUu that ends a polarized march.
-const _GPOL_FRAME_TOL = 1.0e-2
 
 # ---------------------------------------------------------------- fused polarized march
 # The entire polarized fused march for one ray, camera->source. Per-thread state:
@@ -612,13 +610,12 @@ const _GPOL_FRAME_TOL = 1.0e-2
     Ecam = _gpol_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
     eU  = SVector{4,Tg}(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])   # camera e_(2) (up)
     eUu = SVector{4,Tg}(e0c)     # camera 4-velocity — parallel-transported alongside eU
-    wcam = -dot(kcov0, e0c)      # -k·u_cam: conserved by exact parallel transport
 
     S = _gpz4; G = _gpI4
     r_prev = Tg(Inf)
     for _ in 1:nmax
-        r = _gimg_rks(y, a)
-        _gimg_stop(r, r_prev, r_h, escape, R_em) && break
+        stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
+        stop && break
         r_prev = r
         h = (r - r_h) / C
         # callsite @inline: the inliner otherwise leaves the sampler closure as a call
@@ -638,12 +635,10 @@ const _GPOL_FRAME_TOL = 1.0e-2
                 # which drifts and rotates EVPA per ray). _gpol_tetrad uses only
                 # parallel-transport-invariant operations, so E == PT(Ecam) and S
                 # ends up in the camera frame with no final rotation (cf. ipole/Krang).
+                # The march ends at the shared redshift cut (march_stop), before the
+                # transported frame's KS components (∝ 1/(r - r_h)) degrade the
+                # invariant -k·eUu (drift < 1e-2 in fp64 and fp32 up to the cut).
                 eU64 = SVector{4,Float64}(eU); eUu64 = SVector{4,Float64}(eUu)
-                # The backward ray approaches the future horizon asymptotically, where
-                # the transported frame's KS components grow like 1/(r - r_h) and the
-                # RK4 transport loses the invariant -k·eUu. Stop once it drifts by 1%:
-                # there ν/ν_obs = -k·u ≳ 10² and the emission is negligible.
-                abs(-dot(kcov, eUu64) - wcam) > _GPOL_FRAME_TOL * wcam && break
                 E = _gpol_tetrad(eUu64, gcov * eUu64, kcon, kcov, eU64, gcov, gcon)
                 ds = Float64(h) * gp.L_unit / gp.nu_obs
                 M, b = _gpol_segMB(j, al, ro, ds)
@@ -917,8 +912,8 @@ end
         n_valid = 0.0; n_stiff = 0.0; max_m = 0.0; sum_m = 0.0
         r_prev = Inf
         for _ in 1:nmax
-            r = _gimg_rks(y, a)
-            _gimg_stop(r, r_prev, r_h, escape, R_em) && break
+            stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
+            stop && break
             r_prev = r
             h = (r - r_h) / C
             x = SVector(y[1], y[2], y[3], y[4])

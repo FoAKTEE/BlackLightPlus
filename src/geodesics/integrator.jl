@@ -8,14 +8,85 @@
 # fixed-step AD/GPU mode.
 
 # ---- shared geodesic termination conventions ------------------------------------------
-# Named constants so the several trace_geodesic/trace_rays* drivers — kept separate
-# because their termination physics legitimately differs (KS-radius vs coordinate-radius
-# escape, adaptive vs fixed-step horizon guards) — cannot drift to inconsistent values.
 const ESCAPE_RADIUS = 1.1e3       # default escape sphere; ADMGridSpacetime overrides it with
                                   # the smaller grid-bounded ADM_ESCAPE_RADIUS (numerical_spacetime.jl)
 const HORIZON_EPS = 1e-4          # adaptive Kerr horizon offset: terminate at ks_radius = r_h + this
-const HORIZON_EPS_SAMPLED = 1e-3  # fixed-control sampler + binary capture — looser than HORIZON_EPS for
-                                  # the coarse steps; gpu_tracer.jl hard-codes the same 1e-3, keep in sync
+const HORIZON_EPS_SAMPLED = 1e-3  # fixed-control march horizon backstop (every CPU and device march)
+
+# ---- the one fixed-control march termination rule ---------------------------------------
+# A backward-traced ray (p = -k, x^t decreasing) that falls toward a hole approaches the
+# future horizon asymptotically: x^t -> -inf while its energy in the local normal frame,
+# E_n = -k·n = alpha |dx^t/dλ| (camera E = 1), grows without bound and r - r_h -> 0. Every
+# fixed-control march (CPU sampled tracers, device tracer, every fused kernel) stops
+# through `march_stop`, so CPU and device integrate the same sample set.
+#
+# Redshift cut. Past E_n = CAPTURE_REDSHIFT = E_c the fluid-frame frequency is
+# ν = (-k·u) ν_obs ≥ E_n ν_obs / (γ (1 + v)) ≥ E_c ν_obs / (2γ), γ = -u·n. Near the
+# horizon dr/dλ is finite while E_n ∝ 1/(r - r_h), so the affine length left beyond the
+# cut is Δλ_rest ≈ α_h / (κ E_c) (κ the surface gravity, α_h ≤ 1/√2 the KS lapse on the
+# horizon; 0.045 M at a = 0.9). With transmission ≤ 1 the omitted observed intensity obeys
+#   ΔI_ν ≤ ν_obs³ (L_unit / ν_obs) Δλ_rest max_beyond j_ν/ν²,
+# with j_ν/ν² evaluated at ν ≥ E_c ν_obs / (2γ) (test/test_march_termination.jl checks the
+# bound ray by ray and Δλ_rest against α_h / (κ E_c)). The cut also bounds the frame
+# transport of the polarized marches: up to E_c the parallel-transported camera frame
+# keeps the invariant -k·e_u within 1% of its camera value (max 5.2e-3 fp64, 6.0e-3
+# fp32 on the near-horizon test deck), and in the superposed binary the cut ends rays on
+# the displaced null surface where r_A - r_h,A stalls above the backstop.
+const CAPTURE_REDSHIFT = 1.0e2
+
+"""
+    march_captured(d, E_n, eps=HORIZON_EPS_SAMPLED) -> Bool
+
+Capture half of the march termination rule: `d` is the distance above the horizon
+proxy (`r - r_h` for Kerr, `min_A(r_A - r_h,A)` for the binary, `alpha - alpha_min` with
+`eps = 0` for an ADM grid), `E_n` the normal-frame photon energy. Captured when
+`d < eps`, `d` is non-finite, or `E_n` exceeds `CAPTURE_REDSHIFT` (NaN captures).
+Type-pure in `T` (the constants are converted, so the fp32 march lane stays fp32).
+"""
+@inline march_captured(d::T, En::T, eps::Real = HORIZON_EPS_SAMPLED) where {T<:Real} =
+    d < T(eps) || !isfinite(d) || !(En <= T(CAPTURE_REDSHIFT))
+
+"""
+    march_escaped(R, R_prev, escape, R_em) -> Bool
+
+Escape half of the march termination rule: beyond `escape` or the emission radius
+`R_em`, and OUTBOUND (`R > R_prev`) — a ray started beyond `escape` is not killed on its
+way in; `R_em = Inf` disables the emission early-out.
+"""
+@inline march_escaped(R::T, R_prev::T, escape::T, R_em::T) where {T<:Real} =
+    (R > escape || R > R_em) && R > R_prev
+
+"""
+    march_stop(d, E_n, R, R_prev, escape, R_em) -> Bool
+
+The fixed-control march termination rule shared by every CPU and device march:
+`march_captured(d, E_n) || march_escaped(R, R_prev, escape, R_em)`. Matched scalar
+types: a Float64 scalar in an fp32 march is a MethodError, never a silent promotion.
+"""
+@inline march_stop(d::T, En::T, R::T, R_prev::T, escape::T, R_em::T) where {T<:Real} =
+    march_captured(d, En) || march_escaped(R, R_prev, escape, R_em)
+
+"Photon energy in the local normal (Eulerian) frame, |k·n| = |g^{tμ} p_μ| / sqrt(-g^{tt}), in units of the camera energy."
+@inline function normal_frame_energy(gi::SMatrix{4,4}, y::SVector{8})
+    tdot = gi[1, 1] * y[5] + gi[1, 2] * y[6] + gi[1, 3] * y[7] + gi[1, 4] * y[8]
+    return abs(tdot) / sqrt(-gi[1, 1])
+end
+@inline normal_frame_energy(st, y::SVector{8}) =
+    normal_frame_energy(inverse_metric(st, SVector(y[1], y[2], y[3], y[4])), y)
+
+"""
+    ks_radius_energy(y, a) -> (r, E_n)
+
+Kerr-Schild radius and normal-frame photon energy of the state `y` for spin `a` (M = 1)
+from one closed-form evaluation (`_ks_term`): with g^{ab} = η^{ab} - f l^a l^b and
+l^a = (-1, l_i), g^{tt} = -(1 + f) and g^{ti} = f l_i. The Kerr march control of the CPU
+sampled tracer and of every Kerr kernel (in the state's own precision).
+"""
+@inline function ks_radius_energy(y::SVector{8,T}, a) where {T}
+    r, f, l = _ks_term(y[2], y[3], y[4], one(T), a)
+    tdot = f * (l[2] * y[6] + l[3] * y[7] + l[4] * y[8]) - (1 + f) * y[5]
+    return r, abs(tdot) / sqrt(1 + f)
+end
 
 "Null constraint g^{μν} p_μ p_ν (≡ 0 on exact null geodesics; error diagnostic)."
 @inline function null_error(st, y::SVector{8})
@@ -194,8 +265,9 @@ end
 Fixed-control RK4 tracer with step h = (r - r_h)/C (the blacklight/arXiv:2304.03804
 step rule). Unlike the error-adaptive `trace_rays`, the sample spacing here is also
 the RADIATION sampling grid — dense where the fluid varies (near the hole), which
-the error-adaptive tracer under-samples in smooth-geodesic regions. Output contract
-identical to `trace_rays` (source→camera order). `R_em` (default `Inf`, disabled)
+the error-adaptive tracer under-samples in smooth-geodesic regions. Termination is the
+shared `march_stop` rule (horizon backstop, redshift cut, outbound escape). Output
+contract identical to `trace_rays` (source→camera order). `R_em` (default `Inf`, disabled)
 adds a far-field early-out — once a ray is outbound past `R_em` it stops sampling
 the vacuum return leg; only pass it when the emission is confined within `R_em`.
 
@@ -231,11 +303,8 @@ function trace_rays_sampled(st::KerrSchildCartesian, rays::Vector{SVector{8,Floa
         r_prev = Inf
         for _ in 1:nmax
             x = SVector(y[1], y[2], y[3], y[4])
-            r = ks_radius(st, x)
-            (r < r_h + HORIZON_EPS_SAMPLED || !isfinite(r)) && break
-            # escape/emission stop only when OUTBOUND (r > r_prev) — a ray started
-            # beyond `escape` is not killed at step 0 on its way in (R_em=Inf disables).
-            ((r > escape || r > R_em) && r > r_prev) && break
+            r, En = ks_radius_energy(y, st.a)
+            march_stop(r - r_h, En, r, r_prev, escape, R_em) && break
             r_prev = r
             h = (r - r_h) / C
             # OPT-IN cap: never step over an AMR cell (disabled defaults keep h bit-identical).

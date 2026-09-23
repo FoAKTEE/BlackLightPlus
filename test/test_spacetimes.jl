@@ -122,7 +122,8 @@ end
 # the allocation strategy, so states/steps must be BIT-IDENTICAL. This pins that against a
 # verbatim no-hint reference march (same
 # pattern as test_transfer.jl's mutable-loop references), which also locks the sampling
-# contract (h=(r-r_h)/C, r_h+1e-3 capture, source→camera reversal, dl[k]=step-behind).
+# contract (h=(r-r_h)/C, the shared march_stop rule, source→camera reversal,
+# dl[k]=step-behind).
 @testset "trace_rays_sampled sizehint! preallocation is bit-identical" begin
     # verbatim pre-sizehint loop (defaults C=40, escape=ESCAPE_RADIUS=1.1e3, nmax=6000).
     # Kept under Threads.@threads exactly like the real function: @threads lowers the body
@@ -135,10 +136,8 @@ end
         Threads.@threads for i in eachindex(rays)
             ys = SVector{8,Float64}[rays[i]]; hs = Float64[]; y = rays[i]; r_prev = Inf
             for _ in 1:nmax
-                x = SVector(y[1], y[2], y[3], y[4])
-                r = ks_radius(st, x)
-                (r < r_h + 1e-3 || !isfinite(r)) && break
-                ((r > escape) && r > r_prev) && break
+                r, En = BlackLightPlus.Geodesics.ks_radius_energy(y, st.a)
+                BlackLightPlus.Geodesics.march_stop(r - r_h, En, r, r_prev, escape, Inf) && break
                 r_prev = r
                 h = (r - r_h) / C
                 h = min(h, Inf)         # mirrors the max_step=Inf cap: a value barrier that

@@ -1,9 +1,9 @@
 # Geodesics — gpu_tracer.jl  (OPTIONAL heavy dep: CUDA + KernelAbstractions)
 # Multi-GPU batch geodesic tracer, output contract identical to
 # `trace_rays_sampled` (integrator.jl): one ray per thread, fixed-control RK4 of
-# the Hamiltonian covariant-momentum RHS, step h = (r - r_h)/C, capture at
-# r < r_h + 1e-3 (hard-coded = HORIZON_EPS_SAMPLED in integrator.jl, keep in
-# sync) or !isfinite(r); escape/R_em stops fire only OUTBOUND. ∂_c g^{ab} is
+# the Hamiltonian covariant-momentum RHS, step h = (r - r_h)/C, termination by the
+# shared `march_stop` rule (`_gimg_stop`, gpu_metric.jl: horizon backstop, redshift
+# cut, outbound-only escape/R_em) — the CPU tracer's own predicate. ∂_c g^{ab} is
 # ForwardDiff.Dual seeded in-kernel — same closed form as the CPU RHS, agreeing to
 # fp roundoff (~1 ulp/RHS, ~1e-8 max pixel rel), not bit-for-bit. NOT included from
 # geodesics.jl (CUDA optional). Step-density accuracy: NOTE on `trace_rays_sampled`.
@@ -68,8 +68,8 @@ const _r_ks = _gimg_rks
 # trip count) — matching the CPU `break`, hence the sample counts too.
 # Everything runs at T = eltype(eltype(y0s)): the host passes every scalar
 # (a, C, escape, R_em, r_h) as T (the `a::T` guards make a stray Float64 a
-# MethodError), and oftype/eltype keep the two in-kernel literals type-pure
-# (identity when T == Float64).
+# MethodError), and eltype keeps the in-kernel Inf literal type-pure (identity when
+# T == Float64); `march_stop` converts its constants to T.
 @kernel function _trace_kernel!(traj, hlog, cnt, @Const(y0s), a, C, escape, R_em, nmax, r_h, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
@@ -78,12 +78,8 @@ const _r_ks = _gimg_rks
         n = 0
         r_prev = eltype(y)(Inf)
         for _ in 1:nmax
-            r = _r_ks(y, a)
-            (r < r_h + oftype(r_h, 1e-3) || !isfinite(r)) && break
-            # escape/emission stop only when OUTBOUND (r > r_prev) — a ray started
-            # beyond `escape` is not killed at step 0 on its way in (R_em=Inf disables);
-            # mirrors trace_rays_sampled.
-            ((r > escape || r > R_em) && r > r_prev) && break
+            stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
+            stop && break
             r_prev = r
             h = (r - r_h) / C
             # low-storage streaming RK4 (bit-identical ops to k1+2k2+2k3+k4)

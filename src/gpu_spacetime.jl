@@ -17,7 +17,7 @@ using LinearAlgebra: dot
 using BlackLightPlus: SuperposedKerrSchild, PlaneParallelCamera, camera_rays
 using BlackLightPlus.Geodesics: metric, inverse_metric, geodesic_rhs, rk4_step_fixed,
       ks_radius_hole, horizon_radius_hole, HORIZON_EPS_SAMPLED, ADMGridSpacetime,
-      superposed_control,
+      superposed_control, march_captured, march_escaped, normal_frame_energy,
       StationarySpacetime, _adm_gcov
 using BlackLightPlus.Simulation: AthenaKSnapshot
 
@@ -72,7 +72,8 @@ function upload_adm(st::ADMGridSpacetime, devices; alpha_min::Real = st.alpha_mi
 end
 
 # ---------------------------------------------------------------- march control
-# Per-spacetime fixed-control march control: (captured, step h, escape-test radius).
+# Per-spacetime fixed-control march control: (captured, step h, escape-test radius);
+# capture is the shared `march_captured` rule on the spacetime's horizon proxy.
 # SuperposedKerrSchild calls the CPU tracer's own `superposed_control` (spacetimes.jl):
 # step by the distance to the NEAREST horizon h = min_A(r_A − r_h_A)/C, capture (either
 # hole) at horizon + HORIZON_EPS_SAMPLED or above CAPTURE_REDSHIFT in the normal frame,
@@ -80,16 +81,20 @@ end
 @inline _gsp_ctl(st::SuperposedKerrSchild{N,Float64}, y::SVector{8,Float64},
                   C::Float64) where {N} = superposed_control(st, y, C)
 
-# ADM grid mirrors the z4c shadow tracer: capture when the local lapse
-# α = 1/√(−g^{tt}) drops below alpha_min (off-grid the metric is Minkowski ⇒ α = 1,
-# never captures), coordinate-radius step h = max(r,1)/C, escape on the coordinate
-# radius. A non-finite state (puncture blow-up) is a capture.
+# ADM grid mirrors the z4c shadow tracer: the horizon proxy is the local lapse
+# α = 1/√(−g^{tt}) against alpha_min (off-grid the metric is Minkowski ⇒ α = 1, never
+# captures), with the shared redshift cut on top; coordinate-radius step
+# h = max(r,1)/C, escape on the coordinate radius. A non-finite state (puncture
+# blow-up) is a capture.
 @inline function _gsp_ctl(sp::DevADMParams, y::SVector{8,Float64}, C::Float64)
     x = SVector(y[1], y[2], y[3], y[4])
     r = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
-    gtt = inverse_metric(sp, x)[1, 1]
+    gi = inverse_metric(sp, x)
+    gtt = gi[1, 1]
     alpha = gtt < 0.0 ? 1.0 / sqrt(-gtt) : 1.0
-    return (alpha < sp.alpha_min) | !isfinite(r), max(r, 1.0) / C, r
+    En = gtt < 0.0 ? normal_frame_energy(gi, y) : 0.0
+    d = isfinite(r) ? alpha - sp.alpha_min : r
+    return march_captured(d, En, 0.0), max(r, 1.0) / C, r
 end
 
 # ---------------------------------------------------------------- generic coeffs
@@ -149,8 +154,7 @@ end
     r_prev = Inf
     for _ in 1:nmax
         cap, h, re = _gsp_ctl(sp, y, C)
-        cap && break
-        ((re > escape || re > R_em) && re > r_prev) && break   # outbound-only, as CPU
+        (cap || march_escaped(re, r_prev, escape, R_em)) && break   # shared rule, as CPU
         r_prev = re
         prim = @inline sample(y)
         if prim[1] > 0.0
@@ -251,13 +255,11 @@ end
     Ecam = _gsp_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
     eU  = SVector(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])   # camera e_(2) (up)
     eUu = e0c                    # camera 4-velocity, parallel-transported alongside eU
-    wcam = -dot(kcov0, e0c)      # -k·u_cam: conserved by exact parallel transport
     S = _gpz4; G = _gpI4
     r_prev = Inf
     for _ in 1:nmax
         cap, h, re = _gsp_ctl(sp, y, C)
-        cap && break
-        ((re > escape || re > R_em) && re > r_prev) && break   # outbound-only, as CPU
+        (cap || march_escaped(re, r_prev, escape, R_em)) && break   # shared rule, as CPU
         r_prev = re
         prim = @inline sample(y)
         if prim[1] > 0.0
@@ -267,8 +269,6 @@ end
             j, al, ro, tet_fl, valid = _gpol_coeffs(prim, x, kcov, gcov, gcon, gp,
                                                     _gsp_tetrad)
             if valid
-                # frame-fidelity stop near the horizon (see _gpol_march)
-                abs(-dot(kcov, eUu) - wcam) > _GPOL_FRAME_TOL * wcam && break
                 E = _gsp_tetrad(eUu, gcov * eUu, kcon, kcov, eU, gcov, gcon)
                 ds = h * gp.L_unit / gp.nu_obs
                 M, b = _gpol_segMB(j, al, ro, ds)

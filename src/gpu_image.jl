@@ -335,12 +335,8 @@ end
 end
 
 # ---------------------------------------------------------------- shared march body
-# Shared termination rule (trace_rays_sampled mirror): capture/NaN stop always; the
-# escape/fluid-box stop fires only when OUTBOUND (r > r_prev) — an inbound ray beyond
-# `escape` is not killed. Type-pure in T (T(1e-3) === 1e-3 for Float64, so the fp64
-# path is bit-identical); matched-type scalars guard against silent promotion.
-@inline _gimg_stop(r::T, r_prev::T, r_h::T, escape::T, R_em::T) where {T} =
-    (r < r_h + T(1e-3) || !isfinite(r)) || ((r > escape || r > R_em) && r > r_prev)
+# Termination: `_gimg_stop` (gpu_metric.jl), the shared `march_stop` rule of the CPU
+# sampled tracer — horizon backstop, redshift cut, outbound-only escape.
 
 # One fixed-control geodesic step: low-storage streaming RK4 — same ops/associativity
 # as (k1+2k2+2k3+k4)/6 but the four stage derivatives are not all held live -> fewer
@@ -372,8 +368,8 @@ end
     trans = one(T)
     r_prev = Tg(Inf)
     for _ in 1:nmax
-        r = _gimg_rks(y, a)
-        _gimg_stop(r, r_prev, r_h, escape, R_em) && break
+        stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
+        stop && break
         r_prev = r
         h = (r - r_h) / C
         prim = @inline sample(y)   # force-inline the sampler (see the _gpol_march note)
@@ -709,8 +705,8 @@ end
     r_prev = Tg(Inf)
     nu_obs = gps[1].nu_obs; L_unit = gps[1].L_unit    # mass_scale-independent (shared lane)
     for _ in 1:nmax
-        r = _gimg_rks(y, a)
-        _gimg_stop(r, r_prev, r_h, escape, R_em) && break
+        stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
+        stop && break
         r_prev = r
         h = (r - r_h) / C
         prim = @inline sample(y)

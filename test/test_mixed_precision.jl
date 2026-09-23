@@ -78,7 +78,7 @@ end
     @test_throws MethodError _gimg_rhs(y32, a64)
     @test_throws MethodError _gimg_rks(y32, a64)
     @test_throws MethodError _gimg_rk4_step(y32, 0.01, a32)
-    @test_throws MethodError _gimg_stop(1.0f0, Inf32, Float32(1.35), 550.0, 52.0f0)
+    @test_throws MethodError _gimg_stop(y32, Inf32, Float32(1.35), 550.0, 52.0f0, a32)
     @test_throws MethodError _rhs_gpu(y32, a64)
     @test_throws MethodError _r_ks(y32, a64)
     # G4: the march accumulator comes from the OUTPUT type, never Tgeo — an fp32
@@ -174,8 +174,8 @@ end
     KernelAbstractions.synchronize(CPU())
     cap = falses(res, res)
     for i in 1:nr
-        r = _r_ks(traj[i, Int(cnt[i]) + 1], a)
-        cap[i] = !isfinite(r) || r < r_h + 2e-3 || Int(cnt[i]) == nmax
+        r, En = BlackLightPlus.Geodesics.ks_radius_energy(traj[i, Int(cnt[i]) + 1], a)
+        cap[i] = BlackLightPlus.Geodesics.march_captured(r - r_h, En) || Int(cnt[i]) == nmax
     end
     @test 0 < count(cap) < nr                            # shadow in-frame, not everything
     mask1 = falses(res, res)

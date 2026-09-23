@@ -10,6 +10,7 @@
 
 using StaticArrays
 using ForwardDiff: Dual, partials
+using BlackLightPlus.Geodesics: ks_radius_energy, march_stop
 
 # ---------------------------------------------------------------- Kerr closed form
 # GPU-safe Kerr-Schild inverse metric on Duals (the closed form CPU `inverse_metric`
@@ -70,4 +71,16 @@ end
     lu = SVector(-one(T), l1, l2, l3)        # l^a  (contravariant)
     eta = SMatrix{4,4,T}(-1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)
     return eta + f * (ld * ld'), eta - f * (lu * lu')
+end
+
+# ---------------------------------------------------------------- march termination
+# The Kerr march control of every fused kernel and the device tracer: the shared
+# `march_stop` rule (Geodesics, integrator.jl) on the KS radius and normal-frame energy
+# from `ks_radius_energy` — the same functions the CPU sampled tracer calls, so CPU and
+# device stop on the same sample. Returns (stop, r); r feeds the step h = (r - r_h)/C.
+# Runs in T = eltype(y); the matched ::T scalars make a stray Float64 a MethodError.
+@inline function _gimg_stop(y::SVector{8,T}, r_prev::T, r_h::T, escape::T, R_em::T,
+                            a::T) where {T}
+    r, En = ks_radius_energy(y, a)
+    return march_stop(r - r_h, En, r, r_prev, escape, R_em), r
 end

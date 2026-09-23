@@ -68,25 +68,13 @@ end
 end
 
 # ---------------------------------------------------------------- binary capture
-# A backward-traced ray (p = -k, x^t decreasing) that falls toward a hole approaches
-# the future horizon asymptotically: x^t -> -inf while its energy in the local
-# normal frame, E_n = -k·n = alpha |dx^t/dλ| (camera E = 1), grows without bound. For
-# an isolated hole that horizon is r_A = r_h,A and the per-hole test r_A - r_h,A < eps
-# ends the ray. In the superposition the companion's potential (f_B ≈ 2 m_B / d_AB)
-# moves the null surface outward — to r_A ≈ 1.04 for m = 0.5 at d = 25 — so r_A
-# stalls above r_h,A + eps while p grows exponentially under a step frozen at
-# (r_A - r_h,A)/C, until RK4 diverges and throws the state across the grid. The
-# redshift test catches every such approach: past E_n = CAPTURE_REDSHIFT the fluid
-# frequency is ≳ 10² ν_obs, where the emission is negligible, and the fixed-control
-# step is still accurate (h |p| |∂g| ≲ 0.05).
-const CAPTURE_REDSHIFT = 1.0e2
-
-"Photon energy in the local normal (Eulerian) frame, |k·n| = alpha |g^{tμ} p_μ|, in units of the camera energy."
-@inline function normal_frame_energy(st, y::SVector{8})
-    gi = inverse_metric(st, SVector(y[1], y[2], y[3], y[4]))
-    tdot = gi[1, 1] * y[5] + gi[1, 2] * y[6] + gi[1, 3] * y[7] + gi[1, 4] * y[8]
-    return abs(tdot) / sqrt(-gi[1, 1])
-end
+# A backward ray falling toward hole A approaches the future horizon asymptotically.
+# For an isolated hole that horizon is r_A = r_h,A; in the superposition the companion's
+# potential (f_B ≈ 2 m_B / d_AB) moves the null surface outward — to r_A ≈ 1.04 for
+# m = 0.5 at d = 25 — so r_A stalls above r_h,A + eps while p grows exponentially under a
+# step frozen at (r_A - r_h,A)/C. The redshift half of `march_captured` (E_n above
+# CAPTURE_REDSHIFT, integrator.jl) ends every such approach while the fixed-control step
+# is still accurate (h |p| |∂g| ≲ 0.05).
 
 """
     superposed_control(st::SuperposedKerrSchild, y, C) -> (captured, h, R)
@@ -107,7 +95,7 @@ for the escape test.
         dmin = min(dmin, dA)
     end
     R = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
-    cap = dmin < HORIZON_EPS_SAMPLED || !(normal_frame_energy(st, y) <= CAPTURE_REDSHIFT)
+    cap = march_captured(dmin, normal_frame_energy(st, y))
     return cap, dmin / C, R
 end
 
@@ -171,8 +159,7 @@ function trace_rays_sampled(st::SuperposedKerrSchild{N}, rays::Vector{SVector{8,
         for _ in 1:nmax
             x = SVector(y[1], y[2], y[3], y[4])
             cap, h, R = superposed_control(st, y, C)
-            cap && break
-            ((R > escape || R > R_em) && R > r_prev) && break   # outbound escape only
+            (cap || march_escaped(R, r_prev, escape, R_em)) && break
             r_prev = R
             h = min(h, max_step)
             if cell_size_fn !== nothing
