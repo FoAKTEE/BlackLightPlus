@@ -12,7 +12,7 @@ each leg running sequentially and exclusively. Imaging throughput is rays/s
 | path | measurement |
 |---|---|
 | Fused GPU imager (unpolarized, 384²) | 7.3×10⁵ rays/s = **129×** an 8-thread CPU render; flux match 1.04%, pixel correlation 0.999 |
-| Fused GPU polarized (IQUV, 256²) | **23.8×** the 16-thread CPU march; bit-for-bit vs the CPU coherency march on identical trajectories (corr I,Q,U,V = 1.0000) |
+| Fused GPU polarized (IQUV, 256²) | **23.8×** the 16-thread CPU march; on identical trajectories corr(I,Q,U,V) = 1.0000 vs the CPU coherency march (different scheme: transported readout frame, no Strang split) |
 | GPU native AMR sampling (256²) | 3.5×10⁵ rays/s = **64.4×** the CPU AMR path, 1.03× the uniform-resample GPU kernel; device sampler bit-exact vs CPU (49200/49200 probes) |
 | In-kernel autodiff (parameter gradients) | **1.13×** overhead; dF/d(mass scale) and dF/dR_high match finite differences to 7×10⁻¹⁹ and 6×10⁻⁹ |
 | Analytic exact-Kerr kernel (1024²) | 9.1×10⁶ rays/s on one A100 (CPU: 6.7×10⁴ at 1 thread, 1.7×10⁶ at 64) |
@@ -61,8 +61,8 @@ threads at high resolution. Single-GPU fused throughput at the same deck:
   correlation > 0.999. With native device AMR sampling, polarized agreement is
   corr(I,Q,U,V) = (1.0, 0.99999, 0.99998, 0.99999).
 - GPU vs CPU parity is bit-for-bit wherever the same algorithm runs on both
-  sides: the device AMR fluid sampler, the polarized kernel on identical
-  trajectories, and the Monte Carlo replay of matched RNG streams
+  sides: the device AMR fluid sampler and the Monte Carlo replay of
+  matched RNG streams
   (spectrum ratio 1.000000, worst bin 1.1×10⁻¹⁵).
 - The analytic GPU kernel matches the CPU elliptic tracer per pixel to
   round-off (median relative difference ≤ 2.5×10⁻¹⁶).
