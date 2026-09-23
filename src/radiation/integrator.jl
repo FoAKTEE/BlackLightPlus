@@ -26,7 +26,7 @@ Q/U frame) is unit.
                                     ν_obs, renorm_e1::Bool = false)
     (rho <= 0.0 || pgas <= 0.0) && return _ZERO4S, _ZERO4S, _ZERO4S, _ZERO4x4, false
     b_sq = fv.b_sq
-    b_sq == 0.0 && return _ZERO4S, _ZERO4S, _ZERO4S, _ZERO4x4, false
+    b_sq <= 0.0 && return _ZERO4S, _ZERO4S, _ZERO4S, _ZERO4x4, false   # b² < 0 is round-off
 
     pd = plasma_decode(cfg, rho, pgas, b_sq)
     pd.omit && return _ZERO4S, _ZERO4S, _ZERO4S, _ZERO4x4, false
