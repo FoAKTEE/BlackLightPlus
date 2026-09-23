@@ -17,6 +17,7 @@ using LinearAlgebra: dot
 using BlackLightPlus: SuperposedKerrSchild, PlaneParallelCamera, camera_rays
 using BlackLightPlus.Geodesics: metric, inverse_metric, geodesic_rhs, rk4_step_fixed,
       ks_radius_hole, horizon_radius_hole, HORIZON_EPS_SAMPLED, ADMGridSpacetime,
+      superposed_control,
       StationarySpacetime, _adm_gcov
 using BlackLightPlus.Simulation: AthenaKSnapshot
 
@@ -72,22 +73,12 @@ end
 
 # ---------------------------------------------------------------- march control
 # Per-spacetime fixed-control march control: (captured, step h, escape-test radius).
-# SuperposedKerrSchild mirrors the CPU tracer (spacetimes.jl): step by the distance to
-# the NEAREST horizon h = min_A(r_A − r_h_A)/C, capture (either hole) at horizon +
-# HORIZON_EPS_SAMPLED, escape on the global coordinate radius. Non-finite r_A ⇒
-# dmin = −Inf ⇒ capture, as the CPU loop.
-@inline function _gsp_ctl(st::SuperposedKerrSchild{N,Float64}, y::SVector{8,Float64},
-                          C::Float64) where {N}
-    x = SVector(y[1], y[2], y[3], y[4])
-    dmin = Inf
-    @inbounds for A in 1:N
-        dA = ks_radius_hole(st, x, A) - horizon_radius_hole(st, A)
-        isfinite(dA) || (dmin = -Inf; break)
-        dmin = min(dmin, dA)
-    end
-    R = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
-    return dmin < HORIZON_EPS_SAMPLED, dmin / C, R
-end
+# SuperposedKerrSchild calls the CPU tracer's own `superposed_control` (spacetimes.jl):
+# step by the distance to the NEAREST horizon h = min_A(r_A − r_h_A)/C, capture (either
+# hole) at horizon + HORIZON_EPS_SAMPLED or above CAPTURE_REDSHIFT in the normal frame,
+# escape on the global coordinate radius. Non-finite r_A ⇒ capture.
+@inline _gsp_ctl(st::SuperposedKerrSchild{N,Float64}, y::SVector{8,Float64},
+                  C::Float64) where {N} = superposed_control(st, y, C)
 
 # ADM grid mirrors the z4c shadow tracer: capture when the local lapse
 # α = 1/√(−g^{tt}) drops below alpha_min (off-grid the metric is Minkowski ⇒ α = 1,
