@@ -2,21 +2,31 @@
 """Assert that a source file still carries the exact text an evidence claim cites.
 
 Usage: check_claim.py <file> <spec> [<spec> ...]
+  file  a working-tree path, or <rev>:<path> (e.g. HEAD:test/x.jl) read with `git show`
   spec  "N=text"  line N (1-based) contains `text` verbatim
         "*=text"  some line of the file contains `text` verbatim
         "!=text"  no line of the file contains `text` (absence of evidence)
 Exit 0 iff every spec holds. Run from the repository root.
 """
+import subprocess
 import sys
 from pathlib import Path
+
+
+def read_source(spec):
+    """Working-tree file, or committed content when spec is <rev>:<path>."""
+    if ":" in spec and not Path(spec).exists():
+        return subprocess.run(["git", "show", spec], check=True, capture_output=True,
+                              text=True, encoding="utf-8").stdout
+    return Path(spec).read_text(encoding="utf-8")
 
 
 def main(argv):
     if len(argv) < 3:
         print(__doc__)
         return 2
-    path = Path(argv[1])
-    lines = path.read_text(encoding="utf-8").splitlines()
+    path = argv[1]
+    lines = read_source(path).splitlines()
     bad = []
     for spec in argv[2:]:
         key, sep, text = spec.partition("=")
