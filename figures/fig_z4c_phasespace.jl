@@ -2,7 +2,7 @@
 # one camera angle ι: (a) dense capture/escape map, (b) light-ring boundary
 # (adaptive CPU anchors + bisection-refined polylines), (c) multiangle ray deck
 # (launch fates, bend angles, momentum-subspace projections, 3D trajectories).
-# GPU (CUDA) map/ring bisection when a device is usable, threaded CPU otherwise.
+# GPU (CUDA) map/ring bisection when a device is usable, threaded CPU (Vern7) otherwise.
 # Writes map.npy, ring.npy, anchors.npy, deck.json, traj_*.npy to
 # figures/out/z4c_phasespace/ (plot with plot_z4c_phasespace.py).
 # Env: BLP_Z4C, BLP_FIG_IOTA (30), BLP_FIG_NMAP (283 GPU / 101 CPU),
@@ -217,7 +217,17 @@ function cpu_anchors(st, B, comps, labof, astep, pstep)
     return M
 end
 
-"GPU rings: bracket transitions on the dense map, then batched device bisection"
+"batched classification of image points: device tracer with a GPU, threaded Vern7 otherwise"
+function batch_captured(st, B, pts)
+    HAS_GPU && return gpu_captured(st, B, pts)
+    out = falses(length(pts))
+    Threads.@threads for k in eachindex(pts)
+        out[k] = captured(st, B, pts[k]...)
+    end
+    return out
+end
+
+"rings: bracket transitions on the dense map, then batched bisection (GPU or CPU)"
 function gpu_rings(st, B, gmask, comps, labof, step)
     naz = min(NAZ_MAX, max(90, RAY_BUDGET ÷ max(length(comps), 1)))
     gmaskof = (a, b) -> begin
@@ -258,7 +268,7 @@ function gpu_rings(st, B, gmask, comps, labof, step)
     for it in 1:niter
         mids = [(br[q].ca + (lo[q] + hi[q]) / 2 * br[q].ux,
                  br[q].cb + (lo[q] + hi[q]) / 2 * br[q].uy) for q in eachindex(br)]
-        capm = gpu_captured(st, B, mids)
+        capm = batch_captured(st, B, mids)
         for q in eachindex(br)
             mid = (lo[q] + hi[q]) / 2
             (capm[q] == br[q].prev) ? (lo[q] = mid) : (hi[q] = mid)
@@ -408,14 +418,10 @@ function main()
     @printf("[ps %s] %d CPU anchors at %d az (tol %.0e) in %.0fs\n",
             TAG, size(A, 1), NAZ, BTOL, time() - t2)
     t3 = time()
-    if HAS_GPU
-        R, naz_ring, niter = gpu_rings(st, B, mask, comps, labof, step)
-        btol_ring = BTOL_GPU
-        @printf("[ps %s] %d ring points (GPU, %d az/comp, %d launches) in %.0fs\n",
-                TAG, size(R, 1), naz_ring, niter, time() - t3)
-    else
-        R, naz_ring, btol_ring = A, NAZ, BTOL
-    end
+    R, naz_ring, niter = gpu_rings(st, B, mask, comps, labof, step)
+    btol_ring = BTOL_GPU
+    @printf("[ps %s] %d ring points (%s, %d az/comp, %d rounds) in %.0fs\n",
+            TAG, size(R, 1), HAS_GPU ? "GPU" : "CPU", naz_ring, niter, time() - t3)
     write_npy(joinpath(OUT, "ring.npy"), R)
 
     # (c) multiangle deck at this angle
