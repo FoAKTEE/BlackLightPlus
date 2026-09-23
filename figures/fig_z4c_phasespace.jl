@@ -78,14 +78,14 @@ function entry_point(B, a, b; edge=11.9)
     return P0 + (t_enter + 1e-3) * n
 end
 
-"locally null state along -d̂, nullified against the interpolated metric"
+"backward ray state p = -k of the photon received along +d̂ (k_t = -1), nullified against the interpolated metric"
 function ray_state(st, B, a, b)
     P = entry_point(B, a, b)
     P === nothing && return nothing
     x0 = SVector(0.0, P[1], P[2], P[3])
-    p = metric(st, x0) * SVector(1.0, -B.d[1], -B.d[2], -B.d[3])
-    p0 = nullify_covariant(st, x0, SVector(p[2], p[3], p[4]))
-    return vcat(x0, p0 / (-p0[1]))
+    k = metric(st, x0) * SVector(1.0, B.d[1], B.d[2], B.d[3])
+    k0 = nullify_covariant(st, x0, SVector(k[2], k[3], k[4]))
+    return vcat(x0, k0 / k0[1])
 end
 
 function trace(st, B, a, b; save=false)
