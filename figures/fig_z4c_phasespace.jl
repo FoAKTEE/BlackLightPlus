@@ -28,6 +28,14 @@ HAS_GPU && include(joinpath(dirname(@__DIR__), "src", "gpu_spacetime.jl"))
 
 const BIN = get(ENV, "BLP_Z4C", "/data2/haiyangw/aurora/nr_bbh_bl/bbh.z4c.00001.bin")
 const OUT = joinpath(@__DIR__, "out", "z4c_phasespace")
+# code version recorded in deck.json: HEAD SHA, "-dirty" if src/ has uncommitted edits
+const GIT_SHA = try
+    root = dirname(@__DIR__)
+    sha = readchomp(`git -C $root rev-parse HEAD`)
+    isempty(readchomp(`git -C $root status --porcelain -- src`)) ? sha : sha * "-dirty"
+catch
+    "unknown"
+end
 
 const HALF = 12.0
 const NGRID = 192
@@ -465,7 +473,7 @@ function main()
     meta = Dict(
         "deck" => "AthenaK Z4c BBH head-on merger, frozen slice",
         "dump_time" => snap.time, "backend" => HAS_GPU ? "gpu" : "cpu",
-        "iota_deg" => IOTA, "tag" => TAG,
+        "iota_deg" => IOTA, "tag" => TAG, "git_sha" => GIT_SHA,
         "d_hat" => collect(B.d), "e_a" => collect(B.ea), "e_b" => collect(B.eb),
         "half" => HALF, "ngrid" => NGRID, "alpha_term" => ALPHA_TERM,
         "escape" => ESCAPE, "lim" => LIM, "nmap" => NMAP,

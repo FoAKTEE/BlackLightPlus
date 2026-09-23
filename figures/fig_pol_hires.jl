@@ -17,6 +17,14 @@ const DATA = get(ENV, "BLP_TEST_GRMHD",
     "/data/haiyangw/ebh/build-no/src/bondi-100-output-r3/bin/no/torus.mhd_w_bcc.00999.athdf")
 const OUT = joinpath(@__DIR__, "out", "pol_hires")
 const SRC = joinpath(dirname(@__DIR__), "src")
+# code version recorded in meta.txt: HEAD SHA, "-dirty" if src/ has uncommitted edits
+const GIT_SHA = try
+    root = dirname(@__DIR__)
+    sha = readchomp(`git -C $root rev-parse HEAD`)
+    isempty(readchomp(`git -C $root status --porcelain -- src`)) ? sha : sha * "-dirty"
+catch
+    "unknown"
+end
 
 # GPU only if a context can actually be created (fails under exclusive-mode use).
 const GPU_OK = try
@@ -58,6 +66,7 @@ function main()
     open(joinpath(OUT, "meta.txt"), "w") do io
         println(io, 60)
         println(io, "res=$RES backend=$backend LP=$(round(lp, digits=4))")
+        println(io, "git=$GIT_SHA")
     end
     @printf("pol_hires: %d^2  %s  %.1f s  sum(I)=%.4e  LP=%.3f  |V|/I=%.4f\n",
             RES, backend, dt, sum(I), lp, cp)

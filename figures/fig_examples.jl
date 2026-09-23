@@ -17,6 +17,14 @@ using Printf
 const RES = parse(Int, get(ENV, "BLP_FIG_RES", "256"))
 const OUT = joinpath(@__DIR__, "out")
 mkpath(OUT)
+# code version recorded in examples_meta.txt: HEAD SHA, "-dirty" if src/ has uncommitted edits
+const GIT_SHA = try
+    root = dirname(@__DIR__)
+    sha = readchomp(`git -C $root rev-parse HEAD`)
+    isempty(readchomp(`git -C $root status --porcelain -- src`)) ? sha : sha * "-dirty"
+catch
+    "unknown"
+end
 
 const A = 0.94                                   # black-hole spin for both panels
 
@@ -26,6 +34,11 @@ cfg = RunConfig(bh_a=A, tracer=:analytic,
                                     fov=20.0, resolution=RES))
 ta = @elapsed img = render_analytic(cfg; bands=(0, 1, 2), source=EquatorialDisk(A))
 write_npy(joinpath(OUT, "analytic_disk_I.npy"), img.I)
+open(joinpath(OUT, "examples_meta.txt"), "w") do io
+    println(io, "git=$GIT_SHA")
+    println(io, "analytic_disk: a=$A tracer=analytic inc=17 dist=1e4 fov=20 res=$RES bands=0,1,2 source=EquatorialDisk")
+    println(io, "analytic_disk_I.npy axes: [beta, alpha] (axis 0 = beta, axis 1 = alpha)")
+end
 @printf("analytic disk : %4d^2  bands (0,1,2)  %6.1f s  sum(I) = %.4e\n",
         RES, ta, sum(img.I))
 
@@ -82,6 +95,9 @@ tb = @elapsed begin
 end
 for (k, name) in enumerate(("I", "Q", "U", "V"))
     write_npy(joinpath(OUT, "torus_$(name).npy"), reshape(S[k, :], PRES, PRES))
+end
+open(joinpath(OUT, "examples_meta.txt"), "a") do io
+    println(io, "torus: PolishDoughnut a=$A r_center=9 n_e=5e5 theta_e=40 beta=8 inc=$inc_deg dist=$dist fov=$(round(fovp, digits=3)) res=$PRES nu=$nu_obs")
 end
 @printf("polarized torus: %4d^2  r_out = %.1f M  %6.1f s  sum(I) = %.4e  max|P|/max I = %.3f\n",
         PRES, torus.r_out, tb,
