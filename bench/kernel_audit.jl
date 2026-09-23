@@ -23,8 +23,7 @@
 # kernel is no longer audited. Kernels absent from the baseline are reported as NEW.
 using BlackLightPlus, CUDA, KernelAbstractions, StaticArrays, Printf
 using ForwardDiff: Dual
-using BlackLightPlus: EquatorialDisk, SuperposedKerrSchild, SphereModel, sphere_zone,
-                      build_weight_table, zone_nsuperphotons, emission_tetrad, Spectrum
+using BlackLightPlus: EquatorialDisk, SuperposedKerrSchild, SphereModel, Spectrum, MCRng
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 
 const REPO = dirname(@__DIR__)
@@ -74,37 +73,21 @@ gsp(out, sp, gp) = (DV(out), DV(R8), BLK, XL, XL, XL, XL, sp, gp, F, F, F, Int,
                     Int, Int, Int, Int, Int)
 trace(T) = (DA(SVector{8,T}, 2), DA(T, 2), DV(Int32), DV(SVector{8,T}), T, T, T, T, Int, T, Int)
 
-# MC parameter bundles: the host builders in mc_gpu.jl, verbatim, on the default sphere.
+# MC parameter bundles from the mc_gpu.jl host builders, on the default sphere.
 function mc_params()
     model = SphereModel()
-    zone = sphere_zone(model, SVector(0.0, 0.0, 0.0, 0.0))
-    wgt = build_weight_table([zone], 1.0e3; n_esamp = 64, nu_min = 1.0e8, nu_max = 1.0e13)
-    _, dnmax = zone_nsuperphotons(zone, wgt)
-    Etet = emission_tetrad(model.ucon, model.ucov, model.bcon, model.gcov, model.gcon)
-    spec = Spectrum(; nu_min = 1.0e8, nu_max = 1.0e16, n_ebins = 200, n_thbins = 6)
-    thin = (seed = UInt32(1), ne = model.n_e, te = model.theta_e, B = model.B, R = model.R,
-            lnu_min = wgt.lnu_min, lnu_max = wgt.lnu_max, dlnu = wgt.dlnu,
-            n_nodes = length(wgt.lwgt), dnmax = dnmax,
-            weight_floor = _MCM._WEIGHT_FLOOR, reject_max = _MCM._MC_REJECT_MAX_ITER,
-            spec_lnu_min = spec.lnu_min, spec_dlnu = spec.dlnu,
-            n_ebins = 200, n_thbins = 6, dth = (0.5 * π) / 6,
-            step_frac = _MCM._MC_STEP_FRAC, track_max = _MCM._MC_TRACK_MAX_STEPS,
-            E = Etet, gcov = model.gcov, gcon = model.gcon)
-    scat = (seed = UInt32(1), ne = model.n_e, te = model.theta_e, B = model.B, R = model.R,
-            lnu_min = wgt.lnu_min, lnu_max = wgt.lnu_max, dlnu = wgt.dlnu,
-            n_nodes = length(wgt.lwgt), dnmax = dnmax,
-            weight_floor = _MCM._WEIGHT_FLOOR, reject_max = _MCM._MC_REJECT_MAX_ITER,
-            spec_lnu_min = spec.lnu_min, spec_dlnu = spec.dlnu,
-            n_ebins = 140, n_thbins = 6, dth = (0.5 * π) / 6,
-            step_frac = _MCM._MC_STEP_FRAC, track_max = _MCM._MC_TRACK_MAX_STEPS,
-            weight_min = _MCM._MC_WEIGHT_MIN, max_scatt = 3, cap = 4096,
-            E = Etet, gcov = model.gcov, gcon = model.gcon,
-            ucon = model.ucon, ucov = model.ucov, bcon = model.bcon)
+    tabs = _mc_sphere_tables(model, 1.0e3, 1.0e8, 1.0e13, 64, false)
+    thin = _mc_thin_params(model, tabs, Spectrum(; nu_min = 1.0e8, nu_max = 1.0e16,
+                                                 n_ebins = 200, n_thbins = 6), 1)
+    layout = BlackLightPlus.MonteCarlo.MCStreamLayout(tabs.N_gen, 100_000, 3)
+    scat = _mc_scatter_params(model, tabs, Spectrum(; nu_min = 1.0e8, nu_max = 1.0e17,
+                                                     n_ebins = 140, n_thbins = 6), 1, 3, layout)
     return typeof(thin), typeof(scat)
 end
 const MCP_THIN, MCP_SCAT = mc_params()
-const BINS = (DA(F, 2), DA(F, 2), DA(Int64, 2))
-const SOA = (DV(S4), DV(S4), DV(F), DV(Int32))
+const XBINS = (DA(Int64, 3), DA(Int64, 3), DA(Int64, 2))     # exact limbs w, wE; count
+const CHILD = NamedTuple{(:x, :p, :w, :n, :r),
+                         Tuple{DV(S4), DV(S4), DV(F), DV(Int32), DV(MCRng)}}
 
 const DUAL = Dual{_GIADTag,Float64,1}
 const GP_AD_RH = typeof(_giad_params(CFG, :rat_high))
@@ -144,13 +127,13 @@ const KERNELS = [
                                                 Int, Int, Int)),
     "trace"            => (_trace_kernel!,    trace(F)),
     "trace_f32"        => (_trace_kernel!,    trace(Float32)),
-    "mc_thin"          => (_mc_thin_kernel!,  (BINS..., DV(F), Nothing, MCP_THIN, Int)),
+    "mc_thin"          => (_mc_thin_kernel!,  (XBINS..., DV(F), Nothing, MCP_THIN, Int, Int)),
     "mc_scatter_primary" => (_mc_scatter_primary_kernel!,
-                             (BINS..., SOA..., DV(Int64), DA(F, 2), DV(F), Nothing, DA(F, 2),
-                              MCP_SCAT, Int)),
+                             (XBINS..., CHILD, DV(Int64), Int, DA(Int64, 3), DV(F), Nothing,
+                              DA(F, 2), MCP_SCAT, Int, Int)),
     "mc_scatter_layer" => (_mc_scatter_layer_kernel!,
-                           (BINS..., SOA..., SOA..., DV(Int64), DA(F, 2), DA(F, 2), MCP_SCAT,
-                            UInt32, Int)),
+                           (XBINS..., CHILD, CHILD, DV(Int64), Int, DA(Int64, 3), DA(F, 2),
+                            MCP_SCAT, Int)),
 ]
 
 # ---------------------------------------------------------------- compile + ptxas
