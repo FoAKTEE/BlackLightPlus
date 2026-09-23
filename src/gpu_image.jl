@@ -254,7 +254,7 @@ end
     theta_e = _gimg_theta_e(rho_cgs, pgas_cgs, beta_inv, gp)
     (gp.sigma_cut >= 0.0 && sigma > gp.sigma_cut) && return (z, z)
     (gp.theta_e_min >= 0.0 && theta_e < gp.theta_e_min) && return (z, z)
-    minus_ku = -dot(kcov, ucon)                 # = ν_local / ν_obs (p_t = -1)
+    minus_ku = -dot(kcov, ucon)                 # = ν_local / ν_obs (k_t = -1)
     kb = dot(kcov, bcon)
     cos2 = min(kb * kb / (minus_ku * minus_ku * b_sq), 1.0)
     sin_tb = sqrt(1.0 - cos2)
@@ -361,7 +361,7 @@ end
         prim = @inline sample(y)   # force-inline the sampler (see the _gpol_march note)
         if prim[1] > 0.0
             x = SVector{4,Float64}(y[1], y[2], y[3], y[4])
-            kcov = SVector{4,Float64}(y[5], y[6], y[7], y[8])
+            kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])   # photon k = -p
             j_inv, a_inv = _gimg_coeffs(prim, x, kcov, gp)
             ds = Float64(h) * gp.L_unit / gp.nu_obs
             A, B = _gimg_ab(j_inv, a_inv, ds)
@@ -574,9 +574,8 @@ end
 Flat ray indices (linear indices of the npix×npix image matrix) of every pixel within
 `rescue_px` pixels (Chebyshev dilation) of the Kerr critical curve — the Lyapunov-
 unstable set where an fp32 geodesic march fails. The `critical_curve(a, θo)` Bardeen
-screen maps to this camera as α_cam = -α_Bardeen, β_cam = β_Bardeen (a camera ray at
-(α, β) carries λ = p_φ = +α sin θo while Bardeen's α is -λ/sin θo; the curve is
-β-symmetric). Finite camera distance (O(M²/d) shift) and the 0.02 rad near-polar clamp
+screen is this camera's image plane, α_cam = α_Bardeen, β_cam = β_Bardeen (a camera
+ray at (α, β) carries λ = L_z/E = -α sin θo, Bardeen's λ; the curve is β-symmetric). Finite camera distance (O(M²/d) shift) and the 0.02 rad near-polar clamp
 are both absorbed by the ≥2 px dilation. Returns Int[] when the curve misses the frame.
 """
 function _rescue_pixels(a::Real, inc_deg::Real, fov::Real, npix::Integer; rescue_px::Int = 2)
@@ -590,8 +589,8 @@ function _rescue_pixels(a::Real, inc_deg::Real, fov::Real, npix::Integer; rescue
     m = length(αB)
     for s in 1:m
         s2 = s == m ? 1 : s + 1               # closed loop (upper + mirrored lower branch)
-        x1 = -αB[s];  y1 = βB[s]              # camera screen coords (see docstring)
-        x2 = -αB[s2]; y2 = βB[s2]
+        x1 = αB[s];  y1 = βB[s]               # camera screen coords (see docstring)
+        x2 = αB[s2]; y2 = βB[s2]
         nsub = max(1, ceil(Int, hypot(x2 - x1, y2 - y1) / (px / 2)))
         for q in 0:nsub                       # walk the segment at ≤ px/2 spacing
             t = q / nsub
@@ -699,7 +698,7 @@ end
         prim = @inline sample(y)
         if prim[1] > 0.0
             x    = SVector{4,Float64}(y[1], y[2], y[3], y[4])
-            kcov = SVector{4,Float64}(y[5], y[6], y[7], y[8])
+            kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])   # photon k = -p
             ds   = Float64(h) * L_unit / nu_obs
             # per-variant (A,B): the exact _gimg_coeffs/_gimg_ab ops with mass_scale k's
             # (d,e,b)_unit — bit-identical to a standalone render of variant k.
@@ -811,9 +810,10 @@ end
 # the one _gimg_march body with the fast kernel (only the sampler differs), so the
 # fast-light path stays bit-identical. The device reads two uploaded grids and lerps
 # their samples on the physical dump-time axis (time_series.jl :: sample_primitives_t):
-# the ray's X⁰ = y[1] is the light-travel time from the camera, so the emission time is
-# t_emit = t_obs - X⁰ and the blend weight on frame B is
-#     w = clamp((t_emit - t_a) * inv_dt, 0, 1) = clamp((t0 - X⁰) * inv_dt, 0, 1)
+# the ray starts at X⁰ = y[1] = 0 on the camera and X⁰ decreases along the backward
+# trace (X⁰ = minus the light-travel time), so the emission time is t_emit = t_obs + X⁰
+# and the blend weight on frame B is
+#     w = clamp((t_emit - t_a) * inv_dt, 0, 1) = clamp((t0 + X⁰) * inv_dt, 0, 1)
 # with t0 = t_obs - t_a precomputed on the host. Fast-light limit: inv_dt = 0 forces
 # w == 0 exactly, so the kernel reproduces render_gpu_fused on grid A bit-for-bit.
 
@@ -935,7 +935,7 @@ end
 end
 
 # SLOW-LIGHT fused kernel: the SAME _gimg_march body with the sampler swapped for the
-# time-blended _gimg_sample_t (w at emission time t_obs - X⁰; t0 = t_obs - t_a — see
+# time-blended _gimg_sample_t (w at emission time t_obs + X⁰; t0 = t_obs - t_a — see
 # the SLOW LIGHT header), so inv_dt = 0 reproduces _fused_kernel! on grid-A bit-for-bit.
 @kernel function _fused_kernel_sl!(img, @Const(y0s), @Const(gridA), @Const(gridB),
                                    t0, inv_dt, gp, a, r_h, C, escape, R_em, nmax,
@@ -944,9 +944,9 @@ end
     @inbounds if i <= nrays
         img[i] = _gimg_march(y0s[i],
                              y -> begin
-                                 # w on frame B at emission time t_obs - X⁰ (Float64
+                                 # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
-                                 w = clamp((t0 - Float64(y[1])) * inv_dt, 0.0, 1.0)
+                                 w = clamp((t0 + Float64(y[1])) * inv_dt, 0.0, 1.0)
                                  _gimg_sample_t(gridA, gridB, ng, xo, inv_dx, w,
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
@@ -975,7 +975,7 @@ end
                           time_offset=0.0) -> Matrix{Float64}
 
 Fused single-pass SLOW-LIGHT render: each ray blends the two `DeviceFluidWindow`
-buffers at its EMISSION time t_emit = t_obs - X⁰ with
+buffers at its EMISSION time t_emit = t_obs + X⁰ with
 w = clamp((t_emit - t_a) * inv_dt, 0, 1) — the physical dump-time axis of
 `sample_primitives_t`. `t_obs` is the observation epoch at the camera (default:
 the window's upper end, matching the `SnapshotSeries` default); `time_offset`

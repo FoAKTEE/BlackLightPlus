@@ -491,11 +491,11 @@ end
 
 # ================================================================ SLOW LIGHT (opt-in, direct AMR)
 # Native-AMR slow light: two DeviceAMRGrid frames blended on the physical dump-time
-# axis (emission time t_emit = t_obs - X⁰; see the gpu_image.jl SLOW LIGHT header).
+# axis (emission time t_emit = t_obs + X⁰; see the gpu_image.jl SLOW LIGHT header).
 # The fast kernels are untouched; the slow kernels below swap only the sample line for
 # the time-blended _gamr_sample_t. The two frames must SHARE the AMR mesh (same
 # amrp/xlft/dxb/leaf — true for a static-mesh run); the kernel uses frame A's geometry
-# for both blk arrays. w = clamp((t0 - X⁰) * inv_dt, 0, 1) with t0 = t_obs - t_a;
+# for both blk arrays. w = clamp((t0 + X⁰) * inv_dt, 0, 1) with t0 = t_obs - t_a;
 # inv_dt=0 (fast-light limit) makes _gamr_sample_t return frame A bit-for-bit.
 
 """
@@ -583,9 +583,9 @@ end
     @inbounds if i <= nrays
         img[i] = _gimg_march(y0s[i],
                              y -> begin
-                                 # w on frame B at emission time t_obs - X⁰ (Float64
+                                 # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
-                                 w = clamp((t0 - Float64(y[1])) * inv_dt, 0.0, 1.0)
+                                 w = clamp((t0 + Float64(y[1])) * inv_dt, 0.0, 1.0)
                                  _gamr_sample_t(blkA, blkB, xlft, dxb, leaf, amrp, w,
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
@@ -602,9 +602,9 @@ end
     @inbounds if i <= nrays
         out[i] = _gpol_march(y0s[i],
                              y -> begin
-                                 # w on frame B at emission time t_obs - X⁰ (Float64
+                                 # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
-                                 w = clamp((t0 - Float64(y[1])) * inv_dt, 0.0, 1.0)
+                                 w = clamp((t0 + Float64(y[1])) * inv_dt, 0.0, 1.0)
                                  _gamr_sample_t(blkA, blkB, xlft, dxb, leaf, amrp, w,
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
@@ -650,7 +650,7 @@ end
 
 Fused single-pass SLOW-LIGHT Stokes-I render sampling the AMR hierarchy DIRECTLY on
 device, blending the two `DeviceAMRWindow` frames at the EMISSION time
-t_emit = t_obs - X⁰ (physical dump-time axis; `t_obs` defaults to the window's
+t_emit = t_obs + X⁰ (physical dump-time axis; `t_obs` defaults to the window's
 upper end, `time_offset` advances it — movie frame time). `win.inv_dt == 0`
 reproduces `render_gpu_amr(cfg, win.a)` bit-for-bit. Accepts `order`/`wg` as `render_gpu_amr`.
 """
@@ -689,7 +689,7 @@ end
                                   time_offset=0.0) -> NamedTuple(I,Q,U,V)
 
 Full-Stokes SLOW-LIGHT render sampling the AMR fluid directly on device (frames
-blended at the emission time t_obs - X⁰, as `render_gpu_amr_slow`).
+blended at the emission time t_obs + X⁰, as `render_gpu_amr_slow`).
 `win.inv_dt == 0` reproduces `render_gpu_amr_polarized(cfg, win.a)`.
 Accepts `order`/`wg` as `render_gpu_amr_polarized`.
 """

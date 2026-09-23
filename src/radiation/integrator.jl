@@ -4,7 +4,8 @@
 # half-step parallel transport with midpoint-averaged connection and k^μ, analytic
 # plasma coupling in the fluid tetrad (stokes_couple), then a quarter-factor
 # predictor transport. Samples run SOURCE -> CAMERA; the camera readout rotates N into the
-# camera tetrad and scales invariant -> physical by ν_obs³. Normalization p_t = -1
+# camera tetrad and scales invariant -> physical by ν_obs³. Ray states carry p = -k
+# (camera.jl), so every sample reads the photon wave covector as k_μ = -p_μ; k_t = -1
 # at the camera ⇒ delta_lambda_cgs = dλ_code · L_unit / ν_obs; nonthermal electrons
 # (power-law + kappa) enter additively in the 8 coefficients.
 
@@ -13,7 +14,9 @@
         -> (j::SVector{4}, α::SVector{4}, ρ::SVector{4}, tet, valid::Bool)
 
 Invariant polarized coefficients at one sample: thermal + power-law + kappa
-additive mixing (blacklight CalculatePolarizedCoefficients). `rho`/`pgas` are
+additive mixing (blacklight CalculatePolarizedCoefficients). `kcov`/`kcon` are the
+photon wave vector (future-directed, source → camera; `-p` of a ray state), so the
+fluid-frame frequency is ν = -k·u ν_obs and cos θ_B is signed along the propagation. `rho`/`pgas` are
 code-unit scalars; `fv` is the NamedTuple from `primitive_four_vectors`. Pass
 `renorm_e1 = true` off single CKS so the returned fluid tetrad's e_(1) (hence the
 Q/U frame) is unit.
@@ -53,7 +56,7 @@ Q/U frame) is unit.
     @inbounds for μ in 1:4
         minus_ku -= kcov[μ] * fv.ucon[μ]
     end
-    nu_cgs = minus_ku * ν_obs                    # momentum_factor = 1 (p_t = -1)
+    nu_cgs = minus_ku * ν_obs                    # momentum_factor = 1 (k_t = -1)
 
     ji, jq, jv, ai, aq, av, rq, rv =
         thermal_synchrotron_polarized(cfg.plasma_thermal_frac, n_e_cgs, theta_e,
@@ -164,7 +167,7 @@ function polarized_march(st, cfg::SimCoeffConfig, sampler, ys::Vector{SVector{8,
     @inbounds for n in 1:m
         y = ys[n]
         x = SVector(y[1], y[2], y[3], y[4])
-        kcov = SVector(y[5], y[6], y[7], y[8])
+        kcov = -SVector(y[5], y[6], y[7], y[8])  # photon k = -p
         dλ = dls[n]
         dλ_new = n < m ? dls[min(n + 1, m)] : dλ
         # reference pairing: coefficients at sample n couple over the segment BEHIND it
@@ -179,10 +182,10 @@ function polarized_march(st, cfg::SimCoeffConfig, sampler, ys::Vector{SVector{8,
         kcon_old = n == 1 ? kcon : 0.5 .* (kcon_old .+ kcon)
 
         # First half-step transport with midpoint-averaged registers. The
-        # source->camera march runs OPPOSITE to the traced-λ direction, so the
-        # transport uses the NEGATED traced k (sign on dll).
+        # source->camera march runs along the photon k = -p, i.e. opposite to the
+        # traced-λ direction, over the positive affine spans dls.
         ta = _connection_dot(kcon_old, conn_old)
-        dll1 = -(dλ_old + dλ) / 2
+        dll1 = (dλ_old + dλ) / 2
         nn_tmp = nn_tmp .+ _transport_dNN(ta, nn) .* dll1
         nn = nn_tmp
 
@@ -210,7 +213,7 @@ function polarized_march(st, cfg::SimCoeffConfig, sampler, ys::Vector{SVector{8,
         # second (predictor) transport with current registers
         nn_tmp = nn
         tg = _connection_dot(kcon, Γ)
-        dll2 = -(dλ + dλ_new) / 4
+        dll2 = (dλ + dλ_new) / 4
         nn = nn .+ _transport_dNN(tg, nn_tmp) .* dll2
 
         dλ_old = dλ
@@ -221,7 +224,7 @@ function polarized_march(st, cfg::SimCoeffConfig, sampler, ys::Vector{SVector{8,
     # camera readout: rotate N into the camera tetrad, scale by ν_obs³
     y = ys[m]
     x = SVector(y[1], y[2], y[3], y[4])
-    kcov = SVector(y[5], y[6], y[7], y[8])
+    kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
     gcov = metric(st, x)
     gcon = inverse_metric(st, x)
     kcon = gcon * kcov
@@ -260,7 +263,7 @@ function unpolarized_march(st, cfg::SimCoeffConfig{T}, sampler, ys, dls,
         (s.rho <= 0.0 || s.pgas <= 0.0) && continue
         gcov = metric(st, x)
         gcon = inverse_metric(st, x)
-        kcov = SVector(y[5], y[6], y[7], y[8])
+        kcov = -SVector(y[5], y[6], y[7], y[8])  # photon k = -p
         kcon = gcon * kcov
         fv = primitive_four_vectors(s.uu[1], s.uu[2], s.uu[3],
                                     s.bb[1], s.bb[2], s.bb[3], gcov, gcon)

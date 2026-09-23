@@ -4,9 +4,12 @@
 # image plane at distance d and inclination i from the spin axis, one parallel
 # ray per pixel along the inward plane normal.
 #
-# Momentum normalization (blacklight convention): covariant p_μ rescaled so
-# p_t = -1 exactly (E = 1), making the local frequency ν = -k·u × ν_obs with no
-# extra per-pixel momentum factor.
+# Time orientation: the received photon has wave covector k_μ (future-directed,
+# travelling from the source to the camera), normalized to k_t = -1 (E = 1). The ray
+# state carries p_μ = -k_μ (p_t = +1): integrating the unchanged Hamiltonian flow to
+# increasing λ follows the same null geodesic from the camera back toward the source,
+# with x^t decreasing. Consumers recover k = -p, so the fluid-frame frequency is
+# ν = -k·u × ν_obs with no extra per-pixel momentum factor.
 
 "Plane-parallel camera at inclination `inc_deg` [deg], distance `d`, square fov."
 Base.@kwdef struct PlaneParallelCamera
@@ -29,9 +32,9 @@ end
     camera_rays(st, cam) -> Vector{SVector{8,Float64}}
 
 Initial states `[x^μ; p_μ]` for every pixel (row-major over (α, β) pixel
-centres), null and normalized to `p_t = -1`. The spatial momentum points INWARD,
-so forward-λ integration traces camera → strong field (the standard backward-
-ray-tracing convention). Works for ANY `AbstractSpacetime`: only `metric` and
+centres): `p = -k` with `k` the null wave covector of the photon received at the
+camera, normalized to `k_t = -1` (so `p_t = +1`). Forward-λ integration traces the
+received photon backward, camera → source (past-directed, spatially inward). Works for ANY `AbstractSpacetime`: only `metric` and
 `nullify_covariant` at the camera location are required.
 """
 function camera_rays(st::AbstractSpacetime, cam::PlaneParallelCamera)
@@ -45,14 +48,14 @@ end
 function camera_rays_at(st::AbstractSpacetime, cam::PlaneParallelCamera,
                         coords::Vector{Tuple{Float64,Float64}})
     i = deg2rad(cam.inc_deg)
-    n_in = SVector(-sin(i), 0.0, -cos(i))            # inward plane normal
+    n_out = SVector(sin(i), 0.0, cos(i))             # outward plane normal (toward camera)
     rays = Vector{SVector{8,Float64}}(undef, length(coords))
     for (idx, (α, β)) in enumerate(coords)
         x = _image_to_bh(α, β, cam.inc_deg, cam.d)
-        kcon = SVector(1.0, n_in[1], n_in[2], n_in[3])         # provisional k^μ
-        p = metric(st, x) * kcon                                # lower index
-        pnull = nullify_covariant(st, x, SVector(p[2], p[3], p[4]))
-        rays[idx] = vcat(x, pnull / (-pnull[1]))                # p_t = -1 exactly
+        kcon = SVector(1.0, n_out[1], n_out[2], n_out[3])      # provisional received k^μ
+        k = metric(st, x) * kcon                                # lower index
+        knull = nullify_covariant(st, x, SVector(k[2], k[3], k[4]))   # k_t < 0 (E > 0)
+        rays[idx] = vcat(x, knull / knull[1])                   # p = -k/E: p_t = +1 exactly
     end
     return rays
 end

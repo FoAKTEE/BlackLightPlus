@@ -27,7 +27,7 @@ using BlackLightPlus.Geodesics: _emission_prep, _emission_band
         g = pix_lo + t                 # global pixel (for the screen coords)
         ia = (g - 1) ÷ npix + 1
         ib = (g - 1) % npix + 1
-        alphaB = -centres[ia]          # camera image-α -> Bardeen αB
+        alphaB = centres[ia]           # camera image-α == Bardeen αB
         betaB = centres[ib]
         prep = _emission_prep(alphaB, betaB, theta_o, a; ro = ro)
         o = 0

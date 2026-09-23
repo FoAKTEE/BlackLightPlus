@@ -214,7 +214,7 @@ end
     rays = camera_rays(grid, cam)                       # camera is off-grid ⇒ flat-null rays
     @test length(rays) == 16
     @test all(abs(null_error(grid, y)) < 1e-9 for y in rays)
-    @test all(y[5] ≈ -1.0 for y in rays)                # p_t = -1 normalized
+    @test all(y[5] ≈ 1.0 for y in rays)                 # p = -k, k_t = -1
 
     sts, dls = trace_rays(grid, rays; escape=13.0, reltol=1e-9, abstol=1e-11)
     @test length(sts) == 16

@@ -98,7 +98,7 @@ end
     rays = camera_rays(bin, cam)
     @test length(rays) == 36
     @test all(abs(null_error(bin, y)) < 1e-9 for y in rays)          # null on the binary metric
-    @test all(y[5] ≈ -1.0 for y in rays)                             # p_t = -1 normalized
+    @test all(y[5] ≈ 1.0 for y in rays)                              # p = -k, k_t = -1
 
     sts, dls = trace_rays(bin, rays; escape=400.0, reltol=1e-8, abstol=1e-10)
     @test length(sts) == 36

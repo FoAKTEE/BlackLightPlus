@@ -2,8 +2,8 @@
 # limit (identity series / inv_dt=0) reproduces the single-snapshot sample/render
 # bit-for-bit; (b) sampled primitives are the exact linear-in-time blend of the
 # bracketing dumps, matching an analytic sine to Float32 storage precision; (c)
-# bracket selection is causal/monotonic along a backward-traced ray (X⁰ increases
-# camera→source, t_emit = t_obs − X⁰); (d) movies modulate the flux and their
+# bracket selection is causal/monotonic along a backward-traced ray (X⁰ decreases
+# camera→source, t_emit = t_obs + X⁰); (d) movies modulate the flux and their
 # period average matches the static image to ~3%; (e-k) GPU/KA kernels vs the CPU
 # march (corr > 0.999) plus regression pins (dump-time axis, blend short-circuits,
 # order/wg invariance). GPU slabs need CUDA + BLP_TEST_GRMHD and are skipped otherwise.
@@ -62,7 +62,7 @@ end
 
 # CPU slow-light UNPOLARIZED march on two uniform host grids, blended with the SAME
 # per-segment emission-time weight the GPU kernel uses:
-#   w = clamp((t0 - X⁰)*inv_dt, 0, 1),  t0 = t_obs - t_a  (t_emit = t_obs - X⁰).
+#   w = clamp((t0 + X⁰)*inv_dt, 0, 1),  t0 = t_obs - t_a  (t_emit = t_obs + X⁰).
 # For the GPU-vs-CPU same-fluid check (mirrors bench_gpu_pol :: cpu_march_uniform).
 function cpu_fused_slow(cfg, hostA, hostB, ng, xo, inv_dx, t_a, inv_dt; t_obs)
     st = KerrSchildCartesian(cfg.bh_a)
@@ -80,9 +80,9 @@ function cpu_fused_slow(cfg, hostA, hostB, ng, xo, inv_dx, t_a, inv_dt; t_obs)
                          plasma_kappa_frac = p.kappa_frac, cut_sigma_max = p.sigma_cut,
                          cut_theta_e_min = p.theta_e_min)
     γ = p.gamma; ν = cfg.frequency_hz; Lu = u.L_unit
-    t0 = t_obs - t_a                                  # X⁰ at which t_emit reaches t_a
+    t0 = t_obs - t_a                                  # -X⁰ at which t_emit reaches t_a
     sampler = x -> begin
-        w = clamp((t0 - x[1]) * inv_dt, 0.0, 1.0)     # w at emission time t_obs - X⁰
+        w = clamp((t0 + x[1]) * inv_dt, 0.0, 1.0)     # w at emission time t_obs + X⁰
         sA = _gimg_sample(hostA, ng, xo, inv_dx, x[2], x[3], x[4])
         prim = w == 0.0 ? sA :
                (1.0 - w) .* sA .+ w .* _gimg_sample(hostB, ng, xo, inv_dx, x[2], x[3], x[4])
@@ -139,8 +139,8 @@ end
         rho0 = sample_primitives(snap, SVector(0.0, x...)).rho
         fA = 1 + eps * sin(omega * ts[1]); fB = 1 + eps * sin(omega * ts[2])
         maxrel = 0.0
-        for t in range(0.0, 10.0; length = 9)
-            ia, w = bracketing_pair(ser, ser.t_obs - t)   # dump bracket at the EMISSION time t_obs - X⁰
+        for t in range(0.0, -10.0; length = 9)
+            ia, w = bracketing_pair(ser, ser.t_obs + t)   # dump bracket at the EMISSION time t_obs + X⁰
             @test ia == 1
             s = sample_primitives_t(ser, SVector(t, x...))
             @test s.rho == (1.0 - w) * rhoA + w * rhoB          # EXACT linear blend
@@ -166,14 +166,15 @@ end
         x0_march = [ys[i][1] for i in length(ys):-1:1]
         @test x0_march[1] == 0.0                         # camera at X⁰ = 0
         dif = diff(x0_march)
-        @test all(>=(0.0), dif)                          # X⁰ monotonic (increases camera→source)
-        @test x0_march[end] > 100.0                      # reaches the source in the past cone
-        # a dump series spanning the ray's X⁰ range: bracket indices are monotonic along the march
-        tlo, thi = x0_march[1], x0_march[end]
-        times = collect(range(tlo - 10.0, thi + 10.0; length = 6))
-        ser = synthetic_series(tiny_snap(); times = times)
-        ias = [bracketing_pair(ser, t)[1] for t in x0_march]
-        @test issorted(ias)                              # non-decreasing as X⁰ increases (causal)
+        @test all(<=(0.0), dif)                          # X⁰ monotonic (decreases camera→source)
+        @test x0_march[end] < -100.0                     # reaches the source in the past cone
+        # a dump series spanning the ray's emission times t_obs + X⁰ (t_obs = 0): bracket
+        # indices never advance along the march (deeper samples were emitted earlier)
+        thi = x0_march[end]
+        times = collect(range(thi - 10.0, 10.0; length = 6))
+        ser = synthetic_series(tiny_snap(); times = times, t_obs = 0.0)
+        ias = [bracketing_pair(ser, ser.t_obs + t)[1] for t in x0_march]
+        @test issorted(ias; rev = true)                  # non-increasing camera→source (causal)
         @printf("  [c] X⁰: 0 → %.1f over %d samples; brackets %d → %d (monotonic)\n",
                 thi, length(x0_march), ias[1], ias[end])
     end
@@ -211,8 +212,8 @@ end
 
         # ---------------------------------------------------- (e) GPU vs CPU (same fluid)
         @testset "e: GPU slow-light vs CPU slow-light (same fluid)" begin
-            # realistic ascending dump times bracketing the EMISSION times t_obs - X⁰
-            # (emitting X⁰ ~ 950-1100 at camera distance 1000, t_obs = t_b default)
+            # realistic ascending dump times bracketing the EMISSION times t_obs + X⁰
+            # (emitting X⁰ ~ -(950-1100) at camera distance 1000, t_obs = t_b default)
             t_a, t_b = 12000.0, 13200.0
             fgA = scale_grid_density(base_ug, 1.10)
             fgB = scale_grid_density(base_ug, 0.90)
@@ -264,8 +265,8 @@ end
 # ------------------------------------------------------------------------------------
 # (f) PHYSICAL DUMP-TIME AXIS (regression). Real AthenaK dump series carry large
 # ascending coordinate times (e.g. t ~ 1.2e4 GM/c³) while the backward-traced ray's
-# X⁰ starts at 0 at the camera and INCREASES toward the source; the physical emission
-# time is t_obs - X⁰ (DECREASING camera→source). Before the fix sample_primitives_t
+# X⁰ starts at 0 at the camera and DECREASES toward the source; the physical emission
+# time is t_obs + X⁰ (DECREASING camera→source). Before the fix sample_primitives_t
 # used X⁰ directly as the dump-time axis, so real dump times silently clamped every
 # sample to the EARLIEST dump (fast light on frame 1) and any shifted series was
 # applied time-reversed along the line of sight.
@@ -279,14 +280,14 @@ end
     rho(i) = sample_primitives(get_frame(ser, i), SVector(0.0, x...)).rho
     # camera end of the ray (X⁰ = 0) emits at t_obs = 13000 -> the LATEST dump
     @test sample_primitives_t(ser, SVector(0.0, x...)).rho == rho(3)
-    # X⁰ = 500 into the march emits at 12500 -> exactly the middle dump
-    @test sample_primitives_t(ser, SVector(500.0, x...)).rho == rho(2)
-    # X⁰ = 750 emits at 12250 -> the exact half blend of dumps 1 and 2
-    @test sample_primitives_t(ser, SVector(750.0, x...)).rho == 0.5 * rho(1) + 0.5 * rho(2)
-    # deeper than the window (X⁰ > 1000) clamps to the EARLIEST dump
-    @test sample_primitives_t(ser, SVector(2145.0, x...)).rho == rho(1)
-    # chronology along a march: sampled emission epoch never ADVANCES as X⁰ grows
-    rhos = [sample_primitives_t(ser, SVector(t, x...)).rho for t in 0.0:100.0:1200.0]
+    # X⁰ = -500 into the march emits at 12500 -> exactly the middle dump
+    @test sample_primitives_t(ser, SVector(-500.0, x...)).rho == rho(2)
+    # X⁰ = -750 emits at 12250 -> the exact half blend of dumps 1 and 2
+    @test sample_primitives_t(ser, SVector(-750.0, x...)).rho == 0.5 * rho(1) + 0.5 * rho(2)
+    # deeper than the window (X⁰ < -1000) clamps to the EARLIEST dump
+    @test sample_primitives_t(ser, SVector(-2145.0, x...)).rho == rho(1)
+    # chronology along a march: sampled emission epoch never ADVANCES as X⁰ decreases
+    rhos = [sample_primitives_t(ser, SVector(t, x...)).rho for t in 0.0:-100.0:-1200.0]
     @test issorted(rhos; rev = true)                 # density factor grows with dump time
     # an observation epoch outside the dump window is refused loudly instead of
     # silently collapsing to one window end
@@ -326,7 +327,7 @@ end
 # of slab f). The slow-light kernels carried the old X⁰-as-dump-time convention
 # w = clamp((X⁰ - t_a)·inv_dt, 0, 1), so realistic ascending dump times (t ~ 1.2e4)
 # silently clamped every sample to frame A (fast light on frame 1) and any in-window
-# evolution ran time-reversed. They now blend at the emission time t_emit = t_obs - X⁰
+# evolution ran time-reversed. They now blend at the emission time t_emit = t_obs + X⁰
 # via t0 = t_obs - t_a. Runs entirely on the KernelAbstractions CPU backend (the gpu_*
 # `using CUDA` loads without a device; nothing CUDA is initialized).
 # Base.include(@__MODULE__, …): runtests.jl loads this file into a dynamically
@@ -340,7 +341,7 @@ using KernelAbstractions
 using BlackLightPlus.Radiation: unpolarized_march
 using BlackLightPlus: SimCoeffConfig
 
-@testset "h: GPU slow-light kernels blend at the emission time t_obs - X⁰ (KA CPU)" begin
+@testset "h: GPU slow-light kernels blend at the emission time t_obs + X⁰ (KA CPU)" begin
     # synthetic torus on a uniform grid; frame A (density x2) at t_a, frame B (base) at t_b
     ngr = 40; box_half = 30.0
     hostB = zeros(Float32, 8, ngr, ngr, ngr)
@@ -400,13 +401,13 @@ using BlackLightPlus: SimCoeffConfig
     # doubling rho at fixed eint HALVES theta_e, so frame A is far dimmer — all the
     # test needs is two clearly distinguishable frames
     @test sum(fastA) > 0.0 && sum(fastB) > 0.0 && sum(fastA) != sum(fastB)
-    # t_obs = t_a: every emission time t_a - X⁰ <= t_a  =>  w == 0  =>  frame A, BIT-identical
+    # t_obs = t_a: every emission time t_a + X⁰ <= t_a  =>  w == 0  =>  frame A, BIT-identical
     @test bitsame(runslow(t_a - t_a, inv_dt), fastA)
     # t_obs far past t_b: w == 1 everywhere  =>  frame B, BIT-identical (w==1 short-circuit)
     @test bitsame(runslow(t_b + 2000.0 - t_a, inv_dt), fastB)
-    # t_obs = t_b (the SnapshotSeries default): the emitting X⁰ range (~500) maps to
-    # t_emit = 13000 - X⁰ strictly INSIDE the window -> a genuine blend. The old
-    # convention returned frame A exactly here (X⁰ ~ 500 << t_a  =>  w = 0): regression.
+    # t_obs = t_b (the SnapshotSeries default): the emitting X⁰ range (~ -500) maps to
+    # t_emit = 13000 + X⁰ strictly INSIDE the window -> a genuine blend. The X⁰-as-dump-
+    # time convention returned frame A exactly here (|X⁰| ~ 500 << t_a  =>  w = 0).
     slow = runslow(t_b - t_a, inv_dt)
     @test slow != fastA                                    # FAILS pre-fix (silent fast light)
     # blend flux sits strictly between the two frames' fluxes
@@ -424,7 +425,7 @@ using BlackLightPlus: SimCoeffConfig
                          cut_sigma_max = p.sigma_cut, cut_theta_e_min = p.theta_e_min)
     γ = p.gamma
     sampler = x -> begin
-        w = clamp(((t_b - x[1]) - t_a) * inv_dt, 0.0, 1.0)   # t_emit = t_obs - X⁰, t_obs = t_b
+        w = clamp(((t_b + x[1]) - t_a) * inv_dt, 0.0, 1.0)   # t_emit = t_obs + X⁰, t_obs = t_b
         prim = _gimg_sample_t(hostA, hostB, ngr, xo, inv_dx, w, x[2], x[3], x[4])
         (rho = prim[1], pgas = pgas_from_eint(prim[5], γ),
          uu = (prim[2], prim[3], prim[4]), bb = (prim[6], prim[7], prim[8]),

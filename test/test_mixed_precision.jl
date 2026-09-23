@@ -6,7 +6,7 @@
 # mask. Runs the REAL kernel source on the KA CPU() backend — no CUDA device is
 # touched. Check labels: G1 type-flow (a mismatched-precision scalar is a
 # MethodError, never a silent promotion) · G3 rescue-mask geometry (α_cam =
-# -α_Bardeen convention) · G4 accumulator-from-output-type · G5 mixed-vs-fp64 accuracy.
+# α_Bardeen convention) · G4 accumulator-from-output-type · G5 mixed-vs-fp64 accuracy.
 using Test, StaticArrays, KernelAbstractions, Statistics, LinearAlgebra
 using BlackLightPlus
 using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays
@@ -159,7 +159,7 @@ end
     # Backward-traced capture set == shadow, bounded by the critical curve. Trace the
     # SAME camera's rays (fp64 tracer kernel) and demand every captured pixel with an
     # escaped 4-neighbor lie inside the rescue mask even at rescue_px = 1 — this pins
-    # the α_cam = -α_Bardeen sign, the β symmetry, the pixel indexing AND the px scale
+    # the α_cam = α_Bardeen sign, the β symmetry, the pixel indexing AND the px scale
     # (a flipped α covers only ~40% of the boundary at this resolution; measured).
     a = 0.9375; res = 48; fov = 30.0; inc = 30.0
     st = KerrSchildCartesian(a)

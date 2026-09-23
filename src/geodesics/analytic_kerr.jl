@@ -33,8 +33,8 @@ end
 
 Energy-reduced axial angular momentum λ and Carter constant η for a photon
 landing at Bardeen screen coordinate (α, β) for an observer at inclination θo
-(rad). P2 Eqs. (58–59). `α` here is the *Bardeen* horizontal coordinate; the
-render seam maps the plane-parallel camera's image-α to this via `_cam_to_bardeen`.
+(rad). P2 Eqs. (58–59). `α` here is the *Bardeen* horizontal coordinate, equal to
+the plane-parallel camera's image-α (a camera ray at image (α, β) has L_z/E = -α sin θo).
 """
 @inline function conserved_quantities(α::T, β, θo, a) where {T}
     λ = -α * sin(θo)
@@ -307,8 +307,8 @@ ForwardDiff-generic in (α, β, θo, a).
 DOMAIN. Exact Kerr symmetries normalise the inputs: θo > π/2 mirrors through the
 equator (θo → π−θo, β → −β), a < 0 through the azimuth (α → −α; φs, λ mapped
 back), and |a| < 1e-6 is clamped to a = 1e-6 (the GL angular integrals are 0/0
-at a = 0 exactly). `α` is the *Bardeen* screen coordinate; the render seam maps
-the camera image coordinate to it via `_cam_to_bardeen`. The degenerate β = 0 ray
+at a = 0 exactly). `α` is the *Bardeen* screen coordinate, identical to the camera
+image coordinate (`conserved_quantities`). The degenerate β = 0 ray
 uses the Heaviside convention H(0) = 1 (grazes the disk's far side), shared with
 `lensing_bands.jl`.
 """

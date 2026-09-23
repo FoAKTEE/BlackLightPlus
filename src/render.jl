@@ -159,8 +159,8 @@ source radius `rs`, time-of-flight `ts`, azimuth `phis`, `redshift_sign` (each
 npix×npix, NaN off the disk) — the per-band images `Ib`, and `I = Σ_n Ib[n]`.
 `source = nothing` uses the placeholder r⁻² emissivity; an `EquatorialDisk`
 paints the AART g-disk redshift source with the Doppler+lensing brightness.
-Camera→Bardeen map: α_Bardeen = −α_image, β_Bardeen = β_image (validated
-against the numerical tracer). Threaded over pixels.
+Camera image coordinates are Bardeen's: α_Bardeen = α_image, β_Bardeen = β_image
+(validated against the numerical tracer). Threaded over pixels.
 """
 function render_analytic(cfg::RunConfig; bands=(0, 1, 2), ro::Float64=cfg.camera.distance,
                          source=nothing)
@@ -182,8 +182,7 @@ function render_analytic(cfg::RunConfig; bands=(0, 1, 2), ro::Float64=cfg.camera
     srcfun = source === nothing ? nothing :
              (r_s, νr, aa, λ, η) -> Radiation.equatorial_disk_intensity(source, r_s, νr, aa, λ, η)
     Threads.@threads for iα in 1:npx
-        αcam = centres[iα]
-        αB = -αcam                     # camera → Bardeen horizontal
+        αB = centres[iα]               # camera image-α == Bardeen α
         for iβ in 1:npx
             βB = centres[iβ]
             acc = 0.0

@@ -196,7 +196,7 @@ end
     @test maximum(maximum(abs.(yu .- yk)) for (yu, yk) in zip(ru, rk)) < 1e-9
     for y in ru
         @test abs(null_error(um, y)) < 1e-10               # null
-        @test y[5] ≈ -1.0                                  # p_t = -1 (E = 1) normalized
+        @test y[5] ≈ 1.0                                   # p = -k with k_t = -1 (E = 1)
     end
     # camera_rays_at (AMR refinement entry point) is equally widened
     ra = camera_rays_at(um, cam, [(0.0, 0.0), (3.0, -2.0)])

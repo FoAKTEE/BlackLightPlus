@@ -4,8 +4,8 @@
 # 2018, A&A 613 A2; window/blend conventions cross-checked against ipole). Both
 # bracketing dumps are sampled spatially, the primitives blended linearly in
 # coordinate time, and derived quantities reconstructed downstream. The backward
-# trace starts at X⁰ = 0 at the camera with X⁰ increasing along the ray, so the
-# emission time is t_emit = t_obs - X⁰, clamped at the dump-window ends.
+# trace starts at X⁰ = 0 at the camera with X⁰ decreasing along the ray (past-directed),
+# so the emission time is t_emit = t_obs + X⁰, clamped at the dump-window ends.
 # Δt_dump → ∞ gives w == 0 exactly, recovering fast light bit-for-bit.
 
 """
@@ -15,7 +15,7 @@ Time-ordered GRMHD snapshot sequence for slow light: ascending frame coordinate
 times plus either on-disk `.athdf` paths (lazily loaded through a `maxslots`-slot
 LRU cache) or pre-materialised in-memory frames (from `synthetic_series`).
 `t_obs` is the observation epoch at the camera (X⁰ = 0): a ray sample at X⁰ was
-emitted at `t_obs - X⁰`. `bracketing_pair(series, t)` maps a coordinate time to
+emitted at `t_obs + X⁰` (X⁰ ≤ 0). `bracketing_pair(series, t)` maps a coordinate time to
 `(ia, w)`; `sample_primitives_t(series, x)` blends the bracketing dumps; `lk`
 serialises load/LRU/evict on a path-backed series.
 """
@@ -37,7 +37,7 @@ Path-based series: `paths[i]` is loaded lazily on first access and cached,
 evicting the least-recently-used loadable frame once more than `maxslots` are
 resident. `times` must be ascending and the same length as `paths`. `t_obs`
 (default: the last dump time) must lie inside the dump window so ray emission
-times t_obs - X⁰ can actually bracket dumps.
+times t_obs + X⁰ can actually bracket dumps.
 """
 function SnapshotSeries(paths::Vector{String}, times::Vector{Float64};
                         maxslots::Integer = 2, t_obs::Real = times[end])
@@ -194,14 +194,14 @@ end
     sample_primitives_t(series, x::SVector{4}) -> NamedTuple
 
 Slow-light primitive sample at CKS position+time `x = (t, X, Y, Z)`: pick the dump
-bracket at the emission time `series.t_obs - x[1]` (X⁰ = x[1] is the light-travel
+bracket at the emission time `series.t_obs + x[1]` (X⁰ = x[1] is minus the light-travel
 time from the camera), spatially sample both dumps with `sample_primitives`, and
 blend the primitives linearly in time. Returns the same NamedTuple shape as
 `sample_primitives`. `w == 0` / `w == 1` (the window-end clamps) and
 object-identical dumps short-circuit to a single bit-identical spatial sample.
 """
 @inline function sample_primitives_t(series::SnapshotSeries, x::SVector{4})
-    ia, w = bracketing_pair(series, series.t_obs - x[1])   # emission time t_obs - X⁰
+    ia, w = bracketing_pair(series, series.t_obs + x[1])   # emission time t_obs + X⁰
     A = get_frame(series, ia)
     (w == 0.0) && return sample_primitives(A, x)
     B = get_frame(series, ia + 1)

@@ -15,12 +15,11 @@ using StaticArrays
 using ForwardDiff
 
 # ── coordinate map (documented) ──────────────────────────────────────────────
-# The plane-parallel camera's image-α maps to the Bardeen horizontal coordinate
-# with a SIGN FLIP: α_Bardeen = −α_image, β_Bardeen = β_image. Reason: for the
-# camera the physical ray at image-α has L_z/E = +α_image·sinθo (verified from
-# `angular_momentum_z`), whereas AART/Krang use λ = −α_Bardeen·sinθo; equating
-# gives α_Bardeen = −α_image. (η is even in α, so only the sign of λ flips.)
-cam_to_bardeen(αimg) = -αimg
+# The plane-parallel camera's image coordinates are Bardeen's: α_Bardeen = α_image,
+# β_Bardeen = β_image. The camera ray at image-α is the received photon traced
+# backward, with L_z/E = −α_image·sinθo (`angular_momentum_z`/`energy`), which is
+# AART/Krang's λ = −α_Bardeen·sinθo.
+cam_to_bardeen(αimg) = αimg
 
 # All equatorial (Z=0) crossing KS radii of the numerically-traced camera ray.
 # ks_radius r ≡ Boyer–Lindquist r, so the equatorial-crossing KS radius is the
@@ -61,10 +60,10 @@ end
             end
         end
         # Type II (outside crit curve → 4 real roots) vs Type III (inside → 2 real)
-        λ2, η2 = conserved_quantities(cam_to_bardeen(6.0), 2.0, deg2rad(60.0), 0.94)
+        λ2, η2 = conserved_quantities(cam_to_bardeen(-6.0), 2.0, deg2rad(60.0), 0.94)
         r2s = radial_roots(λ2, η2, 0.94)
         @test count(z -> abs(imag(z)) < 1e-8, r2s) == 4          # Type II
-        λ3, η3 = conserved_quantities(cam_to_bardeen(1.0), 0.3, deg2rad(60.0), 0.94)
+        λ3, η3 = conserved_quantities(cam_to_bardeen(-1.0), 0.3, deg2rad(60.0), 0.94)
         r3s = radial_roots(λ3, η3, 0.94)
         @test count(z -> abs(imag(z)) < 1e-8, r3s) == 2          # Type III
     end

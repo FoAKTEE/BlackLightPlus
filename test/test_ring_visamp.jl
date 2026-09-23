@@ -227,7 +227,7 @@ end
         for iy in 1:96, ix in 1:96
             v = img[iy, ix]
             v > 0 || continue
-            αB = -cent[ix]; β = cent[iy]        # camera image-α → Bardeen
+            αB = cent[ix]; β = cent[iy]         # camera image-α == Bardeen α
             inband = _inpoly(αB, β, ox, oy) && !_inpoly(αB, β, ixp, iyp)
             inband ? (fin += v) : (fout += v)
         end

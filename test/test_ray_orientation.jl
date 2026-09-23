@@ -28,12 +28,13 @@ const RO_B = 100.0                                     # field strength [G] at |
 @testset "camera ray is the backward-traced physical photon" begin
     for a in (0.0, 0.9), inc in (30.0, 60.0, 90.0)
         st = KerrSchildCartesian(a)
-        cam = PlaneParallelCamera(inc_deg = inc, d = 1000.0, fov = 10.0, npix = 1)
+        # distant camera: the finite-distance corrections to λ are O(M/d)
+        cam = PlaneParallelCamera(inc_deg = inc, d = 1.0e7, fov = 10.0, npix = 1)
         for (α, β) in ((4.0, 1.0), (-3.0, 2.5), (0.0, -5.0))
             y = camera_rays_at(st, cam, [(α, β)])[1]
             @test geodesic_rhs(st, y)[1] < 0                  # x^t decreases along the trace
             λ = angular_momentum_z(y) / energy(y)             # invariant under p -> -p
-            @test λ ≈ -α * sind(inc) atol = 1e-9 * max(1.0, abs(α))   # Bardeen λ = -α sin i
+            @test λ ≈ -α * sind(inc) atol = 1e-5              # Bardeen λ = -α sin i
         end
     end
 end

@@ -126,7 +126,7 @@ end
     theta_e = _gimg_theta_e(rho_cgs, pgas_cgs, beta_inv, gp)
     (gp.sigma_cut >= 0.0 && sigma > gp.sigma_cut) && return (z, z)
     (gp.theta_e_min >= 0.0 && theta_e < gp.theta_e_min) && return (z, z)
-    minus_ku = -dot(kcov, ucon)                 # = ν_local / ν_obs (p_t = -1)
+    minus_ku = -dot(kcov, ucon)                 # = ν_local / ν_obs (k_t = -1)
     kb = dot(kcov, bcon)
     cos2 = min(kb * kb / (minus_ku * minus_ku * b_sq), 1.0)
     sin_tb = sqrt(1.0 - cos2)
@@ -163,7 +163,7 @@ end
         r_prev = re
         prim = @inline sample(y)
         if prim[1] > 0.0
-            kcov = SVector(y[5], y[6], y[7], y[8])
+            kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
             gcov = metric(sp, SVector(y[1], y[2], y[3], y[4]))
             gcon = inv(gcov)          # == inverse_metric(sp, x) (both generic spacetimes)
             j_inv, a_inv = _gimg_coeffs_st(prim, kcov, gcov, gcon, gp)
@@ -250,7 +250,7 @@ end
                                 C::Float64, escape::Float64, R_em::Float64,
                                 nmax) where {F}
     y = y0
-    x0 = SVector(y0[1], y0[2], y0[3], y0[4]); kcov0 = SVector(y0[5], y0[6], y0[7], y0[8])
+    x0 = SVector(y0[1], y0[2], y0[3], y0[4]); kcov0 = -SVector(y0[5], y0[6], y0[7], y0[8])
     gcov0 = metric(sp, x0); gcon0 = inv(gcov0); kcon0 = gcon0 * kcov0
     e0c = _gpol_normal_observer(gcon0)
     e0cov0 = gcov0 * e0c
@@ -272,7 +272,7 @@ end
         if prim[1] > 0.0
             x = SVector(y[1], y[2], y[3], y[4])
             gcov = metric(sp, x); gcon = inv(gcov)
-            kcov = SVector(y[5], y[6], y[7], y[8]); kcon = gcon * kcov
+            kcov = -SVector(y[5], y[6], y[7], y[8]); kcon = gcon * kcov   # photon k = -p
             j, al, ro, tet_fl, valid = _gpol_coeffs(prim, x, kcov, gcov, gcon, gp,
                                                     _gsp_tetrad)
             if valid

@@ -601,7 +601,7 @@ const _GPOL_FRAME_TOL = 1.0e-2
     # camera readout frame: built in Float64 from the CONVERTED initial state (identity
     # at Tg == Float64), then NARROWED onto the Tg transport lane
     y64 = SVector{8,Float64}(y0)
-    x0 = SVector(y64[1], y64[2], y64[3], y64[4]); kcov0 = SVector(y64[5], y64[6], y64[7], y64[8])
+    x0 = SVector(y64[1], y64[2], y64[3], y64[4]); kcov0 = -SVector(y64[5], y64[6], y64[7], y64[8])
     gcov0, gcon0 = _gimg_metric(x0, gp.bh_a); kcon0 = gcon0 * kcov0
     # camera readout tetrad -> initial transported up-vector eU (= its e_(2))
     e0c = _gpol_normal_observer(gcon0)   # unit Eulerian observer (CPU shift-sign fix mirror)
@@ -630,7 +630,7 @@ const _GPOL_FRAME_TOL = 1.0e-2
             # RT lane: Float64 from the CONVERTED state (identity at Tg == Float64)
             x = SVector{4,Float64}(y[1], y[2], y[3], y[4])
             gcov, gcon = _gimg_metric(x, gp.bh_a)
-            kcov = SVector{4,Float64}(y[5], y[6], y[7], y[8]); kcon = gcon * kcov
+            kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8]); kcon = gcon * kcov   # photon k = -p
             j, al, ro, tet_fl, valid = _gpol_coeffs(prim, x, kcov, gcov, gcon, gp)
             if valid
                 # readout screen = the parallel-transported camera tetrad: its
@@ -814,8 +814,8 @@ end
 
 # ================================================================ SLOW LIGHT (opt-in, polarized)
 # The SAME _gpol_march body with the sampler swapped for the time-blended
-# _gimg_sample_t (gpu_image.jl); w = clamp((t0 - X⁰) * inv_dt, 0, 1) at the emission
-# time t_emit = t_obs - X⁰, t0 = t_obs - t_a (the physical dump-time axis — see the
+# _gimg_sample_t (gpu_image.jl); w = clamp((t0 + X⁰) * inv_dt, 0, 1) at the emission
+# time t_emit = t_obs + X⁰, t0 = t_obs - t_a (the physical dump-time axis — see the
 # gpu_image.jl SLOW LIGHT header). inv_dt=0 (fast-light limit) makes _gimg_sample_t
 # return grid-A's sample bit-for-bit -> render_gpu_polarized_slow reproduces
 # render_gpu_polarized(win.a).
@@ -826,9 +826,9 @@ end
     @inbounds if i <= nrays
         out[i] = _gpol_march(y0s[i],
                              y -> begin
-                                 # w on frame B at emission time t_obs - X⁰ (Float64
+                                 # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
-                                 w = clamp((t0 - Float64(y[1])) * inv_dt, 0.0, 1.0)
+                                 w = clamp((t0 + Float64(y[1])) * inv_dt, 0.0, 1.0)
                                  _gimg_sample_t(gridA, gridB, ng, xo, inv_dx, w,
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
@@ -858,7 +858,7 @@ end
 
 Fused single-pass SLOW-LIGHT polarized render on a `DeviceFluidWindow`: identical
 transport to `render_gpu_polarized`, but each ray blends the two window buffers at
-its EMISSION time t_emit = t_obs - X⁰ (physical dump-time axis; `t_obs` defaults to
+its EMISSION time t_emit = t_obs + X⁰ (physical dump-time axis; `t_obs` defaults to
 the window's upper end, `time_offset` advances it — movie frame time).
 `win.inv_dt == 0` reproduces `render_gpu_polarized(cfg, win.a)` bit-for-bit
 (fast-light limit). Accepts `order` as `render_gpu_polarized`.
@@ -925,7 +925,7 @@ end
             prim = _gimg_sample(grid, ng, xo, inv_dx, y[2], y[3], y[4])
             if prim[1] > 0.0
                 gcov, gcon = _gimg_metric(x, a)
-                kcov = SVector(y[5], y[6], y[7], y[8])
+                kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
                 j, al, ro, tet_fl, valid = _gpol_coeffs(prim, x, kcov, gcov, gcon, gp)
                 if valid
                     ds = h * gp.L_unit / gp.nu_obs
