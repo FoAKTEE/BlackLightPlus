@@ -25,3 +25,21 @@ sign-fix      |  614    614  1m11.4s
 │   GPU = false
 └   DATA = true
 ",2026-09-23T06:10:15+00:00
+2026-09-23T07:18:57.876982+00:00,arxiv-2609.26298,figures-regen,1,figures-regen,60150f7,software,solid,"Figures 2-4 and figures/examples/*.png regenerated from runs after ray-orientation fix 706b55f (run metadata git e6beecd, 5c30761): analytic disk 256^2 (now saved as .npy and read by plot_analytic.py), polarized AthenaK torus 384^2 CPU (|P|/I 0.519, net LP 0.052, net V/I +0.0042; was 0.457/0.10/-0.0055), Z4c capture map 1201^2 CPU Vern7 with map-bracket ring bisection (8186 points, anchors within 1.1e-2 M). Approaching side (alpha<0) brighter and Kerr shadow displaced toward +alpha. plot_pol_hires.py extent/transpose and README torus caption fixed. Paper commit 22a657e; builds, bibliography on page 6.",results/blp/paper_arxiv-2609.26298/evidence/check_figures_regen.py,"[""figures"", ""sign-fix""]",,worker,3109662b30fde93b17fb72b22378dc3019c4f36bb2882bc8f214b33d08dc88da,"No usable GPU (CUDA_ERROR_NO_DEVICE): z4c capture map and ring bisection used CPU Vern7 instead of the GPU RK4 tracer; 6143 of 1201^2 map cells differ from the pre-fix GPU map (tracer and orientation changes not separated). Z4c map is alpha-symmetric, so its layout is unchanged by the mirror fix.",row 5e23de90c70bbe70a039d42f2f22774d2407ea3f0f24855fc584749be2637319,5e23de90c70bbe70a039d42f2f22774d2407ea3f0f24855fc584749be2637319,python3 results/blp/paper_arxiv-2609.26298/evidence/check_figures_regen.py,300,python3 results/blp/paper_arxiv-2609.26298/evidence/check_figures_regen.py,0.119,0,fafab2054b571d27a2215071733981a98ac2ca9b55a278677246ad05d599d6de,"ok   fig_analytic.pdf 42 KiB
+ok   fig_performance.pdf 12 KiB
+ok   fig_pipeline.pdf 26 KiB
+ok   fig_polarized.pdf 176 KiB
+ok   fig_z4c.pdf 162 KiB
+42 literals in data block, 0 not in benchmarks.md
+ok   newer than 706b55f paper/figures/fig_analytic.pdf
+ok   newer than 706b55f paper/figures/fig_polarized.pdf
+ok   newer than 706b55f paper/figures/fig_z4c.pdf
+ok   newer than 706b55f figures/examples/analytic_disk_I.png
+ok   newer than 706b55f figures/examples/pol_hires.png
+ok   newer than 706b55f figures/examples/torus_IQUV.png
+ok   newer than 706b55f figures/examples/z4c_phasespace_i30.png
+ok   figures/out/examples_meta.txt git=e6beecd0bd20da3c81dbfa5f12b26f5a011d8345
+ok   figures/out/pol_hires/meta.txt git=e6beecd0bd20da3c81dbfa5f12b26f5a011d8345
+ok   figures/out/z4c_phasespace/deck.json git=5c30761a39e996fb5022f3f627c2b42d5a9d1712
+OK: figures 2-4 built from post-706b55f runs
+",2026-09-23T07:18:57+00:00
