@@ -260,6 +260,7 @@ end
     Ecam = _gsp_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
     eU  = SVector(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])   # camera e_(2) (up)
     eUu = e0c                    # camera 4-velocity, parallel-transported alongside eU
+    wcam = -dot(kcov0, e0c)      # -k·u_cam: conserved by exact parallel transport
     S = _gpz4; G = _gpI4
     r_prev = Inf
     for _ in 1:nmax
@@ -275,6 +276,8 @@ end
             j, al, ro, tet_fl, valid = _gpol_coeffs(prim, x, kcov, gcov, gcon, gp,
                                                     _gsp_tetrad)
             if valid
+                # frame-fidelity stop near the horizon (see _gpol_march)
+                abs(-dot(kcov, eUu) - wcam) > _GPOL_FRAME_TOL * wcam && break
                 E = _gsp_tetrad(eUu, gcov * eUu, kcon, kcov, eU, gcov, gcon)
                 ds = h * gp.L_unit / gp.nu_obs
                 M, b = _gpol_segMB(j, al, ro, ds)
