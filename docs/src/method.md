@@ -77,7 +77,7 @@ For stationary metrics $\dot p_t\equiv0$, so integrating covariant momentum
 conserves the energy $E=-p_t$ exactly (zero drift by construction); only the
 three spatial $p_i$ are advanced, with $\partial_i g^{\mu\nu}$ from AD.
 `nullify_covariant` closes the initial condition by solving the null quadratic
-for the past-oriented $p_t$.
+for the root with $p_t<0$ (positive energy).
 
 Two integration modes are provided. `trace_geodesic` is an adaptive
 high-order solve (Vern7, `reltol` $10^{-9}$–$10^{-10}$) with event-terminated
@@ -90,8 +90,14 @@ $L_z$ and null drift below $10^{-8}$, Schwarzschild shadow $b_c=3\sqrt3$ to
 better than $10^{-3}$.
 
 `PlaneParallelCamera` places a parallel-ray image plane at distance $d$ and
-inclination $i$; momenta are rescaled to $p_t=-1$ so the observed frequency
-needs no per-pixel factor.
+inclination $i$. Each pixel's ray is the photon received at the camera, with
+wave covector $k_\mu$ normalized to $k_t=-1$, so the fluid-frame frequency
+$\nu=-k_\mu u^\mu\,\nu_{\rm obs}$ needs no per-pixel factor. The ray state
+carries $p_\mu=-k_\mu$ and is integrated to increasing $\lambda$: the received
+photon traced backward along its null geodesic, past-directed, with $x^t$
+decreasing from 0 at the camera (slow light samples the fluid at
+$t_{\rm emit}=t_{\rm obs}+x^t$). Image coordinates $(\alpha,\beta)$ are
+Bardeen's screen coordinates: a ray at $\alpha$ has $\lambda=L_z/E=-\alpha\sin i$.
 
 ## Analytic Kerr fast path and lensing bands
 
@@ -148,7 +154,14 @@ function when thick.
 parallel-transported along the ray in a Strang split with the analytic
 constant-coefficient Stokes coupling of
 [LandiDeglInnocenti1985](@citet) applied per segment in the
-fluid tetrad (Gram–Schmidt frame anchored to $u^\mu$, $k^\mu$, $b^\mu$). The
+fluid tetrad (Gram–Schmidt frame anchored to $u^\mu$, $k^\mu$, $b^\mu$).
+Stokes parameters are referred to the basis $(e_{(2)},-e_{(1)})$ of each tetrad,
+with $e_{(3)}$ along the propagation direction. In the fluid frame $e_{(2)}$ is
+the projection of $b^\mu$, the basis of the [Marszewski2021](@citet)
+coefficients ($Q>0$ in the $k$–$B$ plane); at the camera $e_{(2)}$ is the image
+vertical $+\beta$ (north) and $-e_{(1)}$ is $-\alpha$ (east), so the output
+follows IEEE/IAU: $Q>0$ north–south, EVPA $\chi=\tfrac12\arg(Q+iU)$ east of
+north, $V>0$ counter-clockwise as seen by the observer. The
 coupling handles all branches — emission-only, pure absorption, pure Faraday
 rotation, and the full absorption+rotation eigenstructure — and matches
 matrix-exponential oracles to $10^{-9}$–$10^{-16}$. Degenerate couplings fall
@@ -231,9 +244,10 @@ Three deliberate, oracle-verified departures from Blacklight
    BlackLightPlus routes $\rho_p=0$ through the full analytic branch, which
    reduces exactly to that limit and matches the oracle to $10^{-9}$.
 2. **Coherency transport direction.** $N^{\mu\nu}$ is parallel-transported
-   along the physical march direction (source to camera), i.e. with the negated
-   traced momentum; the references' sign convention is tied to their sample
-   ordering. Verified by polarized/unpolarized consistency.
+   along the physical march direction (source to camera), i.e. along the photon
+   wave vector $k^\mu=-p^\mu$ of the traced state; the references' sign
+   convention is tied to their sample ordering. Verified by
+   polarized/unpolarized consistency.
 3. **Degenerate-coupling fallback** is the total-absorption solution
    (admissibility-clamped), not the removed defective branch.
 
