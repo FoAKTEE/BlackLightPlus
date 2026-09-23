@@ -32,8 +32,8 @@
     "analytic": {"regs": 255, "stack": 3712, "spill_st": 1556, "spill_ld": 1744, "callee_spill": 1904},
     "trace": {"regs": 182, "stack": 2208, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
     "trace_f32": {"regs": 79, "stack": 1120, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
-    "mc_thin": {"regs": 120, "stack": 40, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
-    "mc_scatter_primary": {"regs": 216, "stack": 2464, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
-    "mc_scatter_layer": {"regs": 220, "stack": 2464, "spill_st": 0, "spill_ld": 0, "callee_spill": 0}
+    "mc_thin": {"regs": 124, "stack": 40, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
+    "mc_scatter_primary": {"regs": 228, "stack": 2576, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
+    "mc_scatter_layer": {"regs": 232, "stack": 2576, "spill_st": 0, "spill_ld": 0, "callee_spill": 0}
   }
 }
