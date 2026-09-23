@@ -1,0 +1,13 @@
+{
+  "paper": "arxiv-2609.26298",
+  "maxWorkers": 3,
+  "maxWaves": 20,
+  "packetSize": 1,
+  "digestThreshold": 5,
+  "models": {
+    "worker": "claude-opus-5-5",
+    "jobs": "claude-opus-5-5",
+    "judge": "claude-opus-5-5",
+    "observer": "claude-opus-5-5"
+  }
+}

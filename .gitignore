@@ -24,3 +24,9 @@ LocalPreferences.toml
 .vscode/
 .DS_Store
 __pycache__/
+
+progress
+ref-paper/
+ref-code/
+Chandra/
+paper/
