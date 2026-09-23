@@ -132,6 +132,26 @@ else
             @test p_scat > p_dir
             @test p_scat > 0.0
         end
+
+        # ---- (e): bitwise independent of the thread (chunk) count ----
+        # Seeds are keyed by global id, children by genealogy, and every total is an
+        # exact integer-limb sum (results/blp/multigpu/dag.md MG05/MG06).
+        @testset "(e) chunk-count invariance with scattering" begin
+            run(nt) = mc_spectrum_grmhd(model, 400; scattering = true, stride = 20,
+                                        r_emit_max = 40.0, C = 32.0, seed = 0xC0FFEE,
+                                        n_ebins = 120, bias0 = 300.0, max_scatt = 3,
+                                        nthreads = nt)
+            b(r) = reinterpret(UInt64, vcat(vec(r.total.sumwE), vec(r.total.sumw),
+                                            (vec(s.sumwE) for s in r.spectra)...,
+                                            r.emitted_power, r.escaped_power))
+            e1 = run(1)
+            @test e1.n_recorded > 0
+            for nt in (4, 16)
+                ek = run(nt)
+                @test b(ek) == b(e1)
+                @test ek.n_recorded == e1.n_recorded
+            end
+        end
     end
 end
 

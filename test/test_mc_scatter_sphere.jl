@@ -86,7 +86,12 @@ function order_stats(res)
         push!(W, total_weight(s))
         push!(E, mean_energy(s))
         nu, L, _ = nuLnu_total(s)
-        push!(NUPK, nu[argmax(L)])
+        # peak of nu L_nu smoothed over +-3 bins (+-0.2 dex): the raw argmax of the sparse
+        # order-2/3 bumps near the grid top moves between neighbouring bins with the
+        # Monte Carlo noise (the raw-argmax ordering failed 2 of 32 seeds of the
+        # slot-keyed implementation; the smoothed peak failed 0 of 64 runs)
+        Ls = [sum(view(L, max(1, i - 3):min(length(L), i + 3))) for i in eachindex(L)]
+        push!(NUPK, nu[argmax(Ls)])
     end
     return W, E, NUPK
 end
@@ -177,17 +182,17 @@ function first_order_ledger(tau_es; N = 20_000, seed = 0xBEEF)
     zone = sphere_zone(model, SVector(0.0, 0.0, 0.0, 0.0))
     wgt = build_weight_table([zone], 1.0e5 / log(1.0e13 / 1.0e8); nu_min = 1.0e8, nu_max = 1.0e13)
     _, dnmax = zone_nsuperphotons(zone, wgt)
-    ws = ScatterWorkspace(Int(seed) ⊻ 0x51ED9E37)
+    ws = ScatterWorkspace()
     loss = 0.0
     for i in 1:N
         rng = MCRng(Int(seed), i)
         sp, rng = sample_sphere_photon(model, wgt, dnmax, rng)
-        # track ONLY the primary (do not drain children): ws.first_order_weight collects
+        # track ONLY the primary (do not drain children): first_order_weight(ws) collects
         # the weight it spawns, `l` its physical scatter loss -- their ratio is the estimator.
         _, _, l, _ = track_superphoton_scatter!(ws, sp, model, SC_TBL, rng; max_scatt = SC_MAXSC)
         loss += l
     end
-    return ws.first_order_weight / loss
+    return BlackLightPlus.MonteCarlo.first_order_weight(ws) / loss
 end
 
 @testset "scattering sphere: exp-transform estimator does not saturate at large b*dtau" begin
@@ -222,4 +227,52 @@ const SC_RES_TAB = mc_spectrum_scatter(SC_SPH, SC_TBL, SC_NS; seed = 0xBEEF,
     @test nbins >= 20
     @test worstf < 0.10                  # check (a) shape, tabulated run
     @test 0.82 <= S <= 0.93
+end
+
+# ------------------------------------------------------------ (h) agreement with slot-keyed streams
+# Genealogy-keyed child streams (results/blp/multigpu/dag.md MG05) and exact accumulation
+# (MG06) change which random numbers a child of order >= 2 draws, not the estimator. The
+# pinned numbers are the mean and seed-to-seed standard deviation of 32 runs of the
+# previous implementation (per-chunk child seeds, float sums; seeds 0xBEEF + 1:32, this
+# deck): nu L_nu power per decade band [10^d, 10^(d+1)) Hz of each scattering order
+# (bands with a mean count >= 20), and the child ledger. This run must agree band by band
+# within 4.5 sd, and in aggregate (chi^2 over the bands).
+const SC_OLD_BANDS = [   # (order, decade d, mean Sum wE, sd)
+    (0, 8, 1.265946e+30, 8.3347e+27), (0, 9, 1.446833e+31, 8.3712e+28),
+    (0, 10, 7.325630e+31, 3.6373e+29), (0, 11, 4.814777e+31, 2.8290e+29),
+    (0, 12, 1.430858e+30, 1.1927e+28),
+    (1, 8, 1.451611e+28, 8.3568e+26), (1, 9, 6.494493e+29, 1.9957e+28),
+    (1, 10, 1.583397e+31, 2.5934e+29), (1, 11, 1.466211e+32, 2.5097e+30),
+    (1, 12, 7.685633e+32, 1.3205e+31), (1, 13, 1.240176e+33, 3.6397e+31),
+    (1, 14, 4.788721e+32, 3.0484e+31), (1, 15, 1.826814e+31, 4.9709e+30),
+    (2, 9, 9.625652e+27, 1.9405e+27), (2, 10, 5.348658e+29, 5.0572e+28),
+    (2, 11, 1.251500e+31, 6.9997e+29), (2, 12, 2.167657e+32, 1.1423e+31),
+    (2, 13, 1.805904e+33, 8.2653e+31), (2, 14, 9.761087e+33, 5.5153e+32),
+    (2, 15, 2.276690e+34, 1.6924e+33), (2, 16, 2.236291e+34, 3.9369e+33),
+    (3, 11, 3.738538e+29, 9.7192e+28), (3, 12, 1.197925e+31, 1.7427e+30),
+    (3, 13, 2.167107e+32, 2.3417e+31), (3, 14, 2.962615e+33, 2.7431e+32),
+    (3, 15, 2.311128e+34, 1.9049e+33), (3, 16, 1.256385e+35, 1.0138e+34)]
+const SC_OLD_LEDGER = (n_children = (3.649075e+04, 2.4133e+02),
+                       w_children = (2.057956e+41, 1.8989e+39),
+                       scatter_loss = (2.062531e+41, 5.7502e+38))
+
+"Sum w E of order `k` over the bins whose centre lies in decade `d`."
+function band_power(res, k, d)
+    o = res.orders[k + 1]
+    s = 0.0
+    for (i, nu) in enumerate(nu_centers(o))
+        floor(Int, log10(nu)) == d && (s += sum(view(o.sumwE, :, i)))
+    end
+    return s
+end
+
+@testset "scattering sphere: agrees with the slot-keyed implementation within MC error" begin
+    z = [(band_power(SC_RES, k, d) - m) / sd for (k, d, m, sd) in SC_OLD_BANDS]
+    @info "scatter sphere gate (h)" max_abs_z = round(maximum(abs, z), digits = 2) chi2 = round(sum(abs2, z), digits = 1) nbands = length(z)
+    @test maximum(abs, z) <= 4.5
+    # chi^2 with 27 dof: mean 27, sd sqrt(54); the bound is ~ +5.5 sd
+    @test sum(abs2, z) <= length(z) + 5.5 * sqrt(2 * length(z))
+    for (f, (m, sd)) in pairs(SC_OLD_LEDGER)
+        @test abs(getfield(SC_RES, f) - m) <= 4.5 * sd
+    end
 end

@@ -6,18 +6,17 @@
 # across nd. The ray count (10² = 100) is not a multiple of 2 or 3, so the parts are
 # uneven.
 #
-# Monte Carlo target properties: the superphoton streams and the reduced spectrum are
-# independent of the device (partition) count, and a scattering run is reproducible
-# run to run. The cases that fail on this code are `@test_broken`, each tagged with its
-# finding in results/blp/multigpu/design.md §3:
-#   C1  GPU child streams are keyed by an atomic buffer slot (mc_gpu.jl
-#       `MCRng(child_seed, j)`, j from `atomic_add!`): scheduling dependent.
-#   C2  device `di` keys its primaries (seed + (di-1)·2³⁰ mod 2³², local id): the
-#       stream set depends on the device count, and device 5 reuses device 1's key.
-#   C3  CPU child keys are per chunk (`seed ⊻ 0x51ED9E37·c`) and chunk spectra are
-#       float-summed per chunk: results depend on the chunk (thread/device) count.
-# The GPU-only cases (C1 and the spectrum under a real device split) run when CUDA is
-# functional and are `@test_skip` otherwise.
+# Monte Carlo: the superphoton streams and the reduced spectrum are independent of the
+# device (partition) count, and a scattering run is reproducible run to run (findings
+# C1-C3 of results/blp/multigpu/design.md §3, resolved by MG05/MG06):
+#   C1  a child's stream is keyed by its genealogy (`mc_child_rng`), not by the atomic
+#       buffer slot that stores it;
+#   C2  device shares are contiguous global-id ranges of one seed: the stream set is the
+#       same for any device count, with no key reuse at five devices;
+#   C3  spectra and diagnostics are exact integer-limb sums (exact_sum.jl), and CPU
+#       child keys do not depend on the chunk: bitwise independent of the chunk count.
+# The device scatter driver runs on HostDevices (KA CPU backend) always, and on CUDA
+# devices when CUDA is functional.
 using Test, StaticArrays, KernelAbstractions
 using BlackLightPlus
 using BlackLightPlus: KerrSchildCartesian, SuperposedKerrSchild
@@ -159,22 +158,24 @@ end
 @testset "MC: GPU driver stream assignment (_mc_device_shares)" begin
     seed = 0x5ca77e5
     N = 1001
-    streams(nd) = Set((_mc_seed_key(s.seed), i)
-                      for s in _mc_device_shares(seed, N, nd) for i in 1:s.n)
+    # the Philox (key, counter-word) identity of every launched primary stream
+    streams(nd) = Set((r.key, r.sid) for s in _mc_device_shares(N, nd)
+                      for r in (BlackLightPlus.MonteCarlo.mc_primary_rng(seed, g)
+                                for g in s.first:(s.first + s.n - 1)))
     for nd in 1:5
-        sh = _mc_device_shares(seed, N, nd)
+        sh = _mc_device_shares(N, nd)
         @test sum(s.n for s in sh) == N           # every superphoton launched once
         @test length(streams(nd)) <= N
     end
-    @test _mc_device_shares(seed, N, 1)[1].seed == seed   # devices=[d] == single device
-    # target: the primary stream set does not depend on the device count
-    @test_broken streams(2) == streams(1)         # C2: per-device seed, device-local ids
-    @test_broken streams(3) == streams(1)         # C2
-    # target: no two superphotons share a stream, for any device count
+    @test _mc_device_shares(N, 1)[1] == (first = 1, n = N)   # devices=[d] == single device
+    # the primary stream set does not depend on the device count
+    @test streams(2) == streams(1)                # C2
+    @test streams(3) == streams(1)                # C2
+    # no two superphotons share a stream, for any device count
     for nd in 2:4
         @test length(streams(nd)) == N
     end
-    @test_broken length(streams(5)) == N          # C2: 4·2³⁰ = 2³², device 5 == device 1
+    @test length(streams(5)) == N                 # C2: no key reuse at five devices
 end
 
 # CPU MC: `nthreads` sets the chunk count, the CPU analogue of the device count.
@@ -185,8 +186,8 @@ end
     for k in (2, 3)
         tk = thin(k)
         @test tk.count == t1.count                # same superphotons, integer bins
-        # target: bitwise spectrum; per-chunk float sums are merged in chunk order
-        @test_broken di_bits(tk.sumw) == di_bits(t1.sumw)     # C3
+        # bitwise spectrum: exact per-chunk sums merged by integer addition
+        @test di_bits(tk.sumw) == di_bits(t1.sumw)            # C3
     end
 
     tbl = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))   # Thomson table
@@ -199,26 +200,33 @@ end
     s1 = scat(1)
     @test s1.n_children > 0                       # scattering is exercised
     for k in (2, 3)
-        # target: identical children and spectrum for any chunk count
-        @test_broken di_bits(scat(k).total.sumw) == di_bits(s1.total.sumw)   # C3
+        # identical children and spectrum for any chunk count
+        @test di_bits(scat(k).total.sumw) == di_bits(s1.total.sumw)   # C3
     end
 end
 
-@testset "MC: GPU scatter reproducibility and device split (CUDA only)" begin
+@testset "MC: GPU scatter reproducibility and device split" begin
+    tbl = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
+    # the device kernels on the KA CPU backend (HostDevice), always run
+    hrun(nd) = mc_spectrum_gpu(ScatteringSphere(), tbl, 5_000; devices = di_devices(nd),
+                               seed = 0xBEEF, n_ebins = 60, max_scatt = 2)
+    a = hrun(1); b = hrun(1)
+    @test a.n_children > 0
+    @test di_bits(a.total.sumw) == di_bits(b.total.sumw)                  # C1: run to run
+    @test di_bits(hrun(2).total.sumw) == di_bits(a.total.sumw)            # C1, C2: 1 vs 2
     if CUDA.functional()
-        tbl = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
         run(devs) = mc_spectrum_gpu(ScatteringSphere(), tbl, 200_000; devices = devs,
                                     seed = 0xBEEF, max_scatt = 2)
-        a = run([0]); b = run([0])
-        @test_broken di_bits(a.total.sumw) == di_bits(b.total.sumw)   # C1: slot-keyed children
+        g = run([0])
+        @test di_bits(g.total.sumw) == di_bits(run([0]).total.sumw)       # C1 on CUDA
         if length(CUDA.devices()) >= 2
-            @test_broken di_bits(run([0, 1]).total.sumw) == di_bits(a.total.sumw)  # C1, C2
+            @test di_bits(run([0, 1]).total.sumw) == di_bits(g.total.sumw)  # C1, C2 on CUDA
         else
-            @test_skip false
+            @test_skip false                      # needs two CUDA devices
         end
     else
-        @test_skip false                          # C1: needs a CUDA device
-        @test_skip false                          # C1, C2: needs two CUDA devices
+        @test_skip false                          # CUDA run to run: needs a CUDA device
+        @test_skip false                          # CUDA 1 vs 2: needs two CUDA devices
     end
 end
 
