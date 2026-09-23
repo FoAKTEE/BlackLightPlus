@@ -31,6 +31,15 @@ const _MCM = BlackLightPlus.MonteCarlo
 # single-device path bit-for-bit. Stride 2^30 keeps the masked 32-bit seeds far apart.
 const _MC_MULTI_SEED_STRIDE = 1_073_741_824   # 2^30
 
+# Per-device share of a multi-device run of `N_gen_full` superphotons over `ndev`
+# devices: device `di` launches ids `1:shares[di].n` with global seed `shares[di].seed`.
+_mc_device_shares(seed::Integer, N_gen_full::Integer, ndev::Integer) =
+    [(seed = Int(seed) + (di - 1) * _MC_MULTI_SEED_STRIDE,
+      n = div(N_gen_full, ndev) + (di <= mod(N_gen_full, ndev) ? 1 : 0)) for di in 1:ndev]
+
+# 32-bit Philox key word of a global seed: superphoton `i` draws from `MCRng(key, i)`.
+_mc_seed_key(seed::Integer) = UInt32(Int(seed) & 0xffffffff)
+
 # ---------------------------------------------------------------- device selection
 if !@isdefined(select_devices)
 """
@@ -244,10 +253,11 @@ function mc_spectrum_gpu(model::SphereModel, Ns::Real;
         N_target, _ = zone_nsuperphotons(zone, wgt)
         N_gen_full = max(1, round(Int, N_target))
         parts = Vector{Spectrum}(undef, ndev)
+        shares = _mc_device_shares(seed, N_gen_full, ndev)
         @sync for di in 1:ndev
             dev = devlist[di]
-            sdev = Int(seed) + (di - 1) * _MC_MULTI_SEED_STRIDE
-            n_this = div(N_gen_full, ndev) + (di <= mod(N_gen_full, ndev) ? 1 : 0)
+            sdev = shares[di].seed
+            n_this = shares[di].n
             @async begin
                 CUDA.device!(dev)
                 parts[di] = mc_spectrum_gpu(model, Ns; device = dev,
@@ -296,7 +306,7 @@ function mc_spectrum_gpu(model::SphereModel, Ns::Real;
     d_sumwE = CUDA.zeros(Float64, n_thbins, n_ebins)
     d_cnt   = CUDA.zeros(Int64,   n_thbins, n_ebins)
 
-    p = (seed = UInt32(Int(seed) & 0xffffffff),
+    p = (seed = _mc_seed_key(seed),
          ne = model.n_e, te = model.theta_e, B = model.B, R = model.R,
          lnu_min = wgt.lnu_min, lnu_max = wgt.lnu_max, dlnu = wgt.dlnu,
          n_nodes = length(wgt.lwgt), dnmax = dnmax,
@@ -556,10 +566,11 @@ function mc_spectrum_gpu(model::SphereModel, table::HotcrossTable, Ns::Real;
         N_target, _ = zone_nsuperphotons(zone, wgt)
         N_gen_full = max(1, round(Int, N_target))
         parts = Vector{ScatterResult}(undef, ndev)
+        shares = _mc_device_shares(seed, N_gen_full, ndev)
         @sync for di in 1:ndev
             dev = devlist[di]
-            sdev = Int(seed) + (di - 1) * _MC_MULTI_SEED_STRIDE
-            n_this = div(N_gen_full, ndev) + (di <= mod(N_gen_full, ndev) ? 1 : 0)
+            sdev = shares[di].seed
+            n_this = shares[di].n
             @async begin
                 CUDA.device!(dev)
                 parts[di] = mc_spectrum_gpu(model, table, Ns; device = dev,
@@ -617,7 +628,7 @@ function mc_spectrum_gpu(model::SphereModel, table::HotcrossTable, Ns::Real;
     ctr  = CUDA.zeros(Int64, 1)
     diag = CUDA.zeros(Float64, 3, _MC_DIAG_STRIPE)   # [child_w; scatter_loss; primary_w]
 
-    p = (seed = UInt32(Int(seed) & 0xffffffff),
+    p = (seed = _mc_seed_key(seed),
          ne = model.n_e, te = model.theta_e, B = model.B, R = model.R,
          lnu_min = wgt.lnu_min, lnu_max = wgt.lnu_max, dlnu = wgt.dlnu,
          n_nodes = length(wgt.lwgt), dnmax = dnmax,

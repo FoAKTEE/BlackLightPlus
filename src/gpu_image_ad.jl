@@ -50,11 +50,11 @@ end
 
 # Render ray range `rng` on the CURRENTLY active device, output Dual per pixel.
 function _giad_part!(out, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C, escape, R_em, nmax, DT)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(grid_d)
     kern = _fused_kernel_ad!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{DT}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, DT, cnt)
     kern(outd, y0d, grid_d, gp, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx, cnt;
          ndrange = cnt)
     KernelAbstractions.synchronize(backend)
@@ -101,7 +101,7 @@ function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = selec
         idx = di:nd:nrays; dev = devices[di]     # interleaved: even cheap/expensive-ray mix per GPU
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _giad_part!(out, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
                         dgrid.inv_dx, gp, a, r_h, Cf, escape, R_em, nmax, DT)
         end

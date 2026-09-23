@@ -25,13 +25,13 @@ by device id so repeated renders reuse one upload). Device layout: `dev_blk`
 (3,nmb) face extents (scan oracle only); `dev_leaf` (N1,N2,N3) Int32 finest-block index
 grid (owning leaf mb, 0 = vacuum); `amrp` isbits NamedTuple of locate scalars.
 """
-struct DeviceAMRGrid
-    dev_blk::Dict{Int,CuArray{Float32,5}}
-    dev_xlft::Dict{Int,CuArray{Float64,2}}
-    dev_dxb::Dict{Int,CuArray{Float64,2}}
-    dev_lo::Dict{Int,CuArray{Float64,2}}
-    dev_hi::Dict{Int,CuArray{Float64,2}}
-    dev_leaf::Dict{Int,CuArray{Int32,3}}
+struct DeviceAMRGrid{DB<:AbstractDict,DX<:AbstractDict,DL<:AbstractDict}
+    dev_blk::DB
+    dev_xlft::DX
+    dev_dxb::DX
+    dev_lo::DX
+    dev_hi::DX
+    dev_leaf::DL
     amrp::NamedTuple
 end
 
@@ -66,19 +66,12 @@ function upload_amr(snap::AthenaKSnapshot, devices; upload_bounds::Bool = true)
     dxb_host  = reduce(hcat, snap.dx)
     leaf_host, amrp = _build_leaf_table(snap)
 
-    dblk = Dict{Int,CuArray{Float32,5}}(); dxl = Dict{Int,CuArray{Float64,2}}()
-    ddx  = Dict{Int,CuArray{Float64,2}}(); dlo = Dict{Int,CuArray{Float64,2}}()
-    dhi  = Dict{Int,CuArray{Float64,2}}(); dlf = Dict{Int,CuArray{Int32,3}}()
-    lo_host = upload_bounds ? reduce(hcat, snap.ext_lo) : nothing
-    hi_host = upload_bounds ? reduce(hcat, snap.ext_hi) : nothing
-    for dev in devices
-        CUDA.device!(dev)
-        dblk[dev] = CuArray(blk_host); dxl[dev] = CuArray(xlft_host)
-        ddx[dev]  = CuArray(dxb_host); dlf[dev] = CuArray(leaf_host)
-        if upload_bounds
-            dlo[dev] = CuArray(lo_host); dhi[dev] = CuArray(hi_host)
-        end
-    end
+    dblk = _upload_per_device(blk_host, devices)
+    dxl  = _upload_per_device(xlft_host, devices)
+    ddx  = _upload_per_device(dxb_host, devices)
+    dlf  = _upload_per_device(leaf_host, devices)
+    dlo  = upload_bounds ? _upload_per_device(reduce(hcat, snap.ext_lo), devices) : empty(dxl)
+    dhi  = upload_bounds ? _upload_per_device(reduce(hcat, snap.ext_hi), devices) : empty(dxl)
     return DeviceAMRGrid(dblk, dxl, ddx, dlo, dhi, dlf, amrp)
 end
 
@@ -246,11 +239,11 @@ function _gamr_domain_radius(p)
 end
 
 function _famr_part!(img, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(dg.dev_blk[dev])
     kern = _famr_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{Float64}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, Float64, cnt)
     _kern_launch!(kern, wg, cnt, outd, y0d, dg.dev_blk[dev], dg.dev_xlft[dev], dg.dev_dxb[dev],
                   dg.dev_leaf[dev], dg.amrp, gp, a, r_h, C, escape, R_em, Int(nmax), cnt)
     KernelAbstractions.synchronize(backend)
@@ -259,11 +252,11 @@ function _famr_part!(img, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, esca
 end
 
 function _gpol_amr_part!(out, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(dg.dev_blk[dev])
     kern = _gpol_amr_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
     _kern_launch!(kern, wg, cnt, outd, y0d, dg.dev_blk[dev], dg.dev_xlft[dev], dg.dev_dxb[dev],
                   dg.dev_leaf[dev], dg.amrp, gp, a, r_h, C, escape, R_em, Int(nmax), cnt)
     KernelAbstractions.synchronize(backend)
@@ -281,7 +274,7 @@ function _famr_sweep!(img, rays, pool, devices, dg, gp, a, r_h, C, escape, R_em,
         idx = pool[di:nd:end]; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _famr_part!(img, rays, idx, dg, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
         end
     end
@@ -294,7 +287,7 @@ function _gpol_amr_sweep!(out, rays, pool, devices, dg, gp, a, r_h, C, escape, R
         idx = pool[di:nd:end]; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _gpol_amr_part!(out, rays, idx, dg, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
         end
     end
@@ -614,11 +607,11 @@ end
 end
 
 function _famr_part_sl!(img, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(win.a.dev_blk[dev])
     kern = _famr_kernel_sl!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{Float64}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, Float64, cnt)
     ga = win.a; gb = win.b
     _kern_launch!(kern, wg, cnt, outd, y0d, ga.dev_blk[dev], gb.dev_blk[dev], ga.dev_xlft[dev],
                   ga.dev_dxb[dev], ga.dev_leaf[dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C,
@@ -629,11 +622,11 @@ function _famr_part_sl!(img, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_
 end
 
 function _gpol_amr_part_sl!(out, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(win.a.dev_blk[dev])
     kern = _gpol_amr_kernel_sl!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
     ga = win.a; gb = win.b
     _kern_launch!(kern, wg, cnt, outd, y0d, ga.dev_blk[dev], gb.dev_blk[dev], ga.dev_xlft[dev],
                   ga.dev_dxb[dev], ga.dev_leaf[dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C,
@@ -676,7 +669,7 @@ function render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices = select_devices
         idx = di:nd:nrays; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _famr_part_sl!(img, rays, idx, win, dev, t0, gp, a, r_h, Cf, escape, R_em, nmax, wg)
         end
     end
@@ -715,7 +708,7 @@ function render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices = sele
         idx = di:nd:nrays; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _gpol_amr_part_sl!(out, rays, idx, win, dev, t0, gp, a, r_h, Cf, escape, R_em, nmax, wg)
         end
     end

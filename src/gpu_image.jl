@@ -47,13 +47,36 @@ struct UniformFluidGrid
 end
 
 """
+    HostDevice(id)
+
+Logical device on the KernelAbstractions `CPU()` backend. A `devices` list of
+`HostDevice`s in place of CUDA ordinals runs a multi-device driver's split, per-device
+upload and per-part launch on the host, one logical device per entry.
+"""
+struct HostDevice
+    id::Int
+end
+
+# Device handle -> activation, KA backend, host->device copy. CUDA ordinals keep the
+# CUDA.device! / CUDABackend / CuArray path; HostDevice maps to CPU() and a host copy.
+_device!(dev::Integer) = CUDA.device!(dev)
+_device!(::HostDevice) = nothing
+_backend(::Integer) = CUDABackend()
+_backend(::HostDevice) = CPU()
+_upload(backend, x::AbstractArray) =
+    copyto!(KernelAbstractions.allocate(backend, eltype(x), size(x)), x)
+# One copy of host array `x` per device, keyed by device handle.
+_upload_per_device(x, devices) =
+    Dict(dev => (_device!(dev); _upload(_backend(dev), x)) for dev in devices)
+
+"""
     DeviceFluidGrid
 
-Per-device pre-uploaded copies of a `UniformFluidGrid` (id => CuArray{Float32,4}),
-so repeated renders / both GPUs reuse one upload. Built by `upload_grid`.
+Per-device pre-uploaded copies of a `UniformFluidGrid` (device => Float32 (8,n,n,n)
+array), so repeated renders / both GPUs reuse one upload. Built by `upload_grid`.
 """
-struct DeviceFluidGrid
-    dev_data::Dict{Int,CuArray{Float32,4}}
+struct DeviceFluidGrid{D<:AbstractDict}
+    dev_data::D
     n::Int
     xo::Float64
     inv_dx::Float64
@@ -97,12 +120,7 @@ end
 Upload `fg.host` to each CUDA device in `devices` (one CuArray per device).
 """
 function upload_grid(fg::UniformFluidGrid, devices)
-    d = Dict{Int,CuArray{Float32,4}}()
-    for dev in devices
-        CUDA.device!(dev)
-        d[dev] = CuArray(fg.host)
-    end
-    return DeviceFluidGrid(d, fg.n, fg.xo, fg.inv_dx)
+    return DeviceFluidGrid(_upload_per_device(fg.host, devices), fg.n, fg.xo, fg.inv_dx)
 end
 
 # ---------------------------------------------------------------- device: geodesic RHS
@@ -537,11 +555,11 @@ end
 # The geodesic-lane type is eltype(eltype(rays)); the caller passes the march scalars at
 # that type. The accumulator stays Float64 (from the output eltype).
 function _fused_part!(img, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(grid_d)
     kern = _fused_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{Float64}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, Float64, cnt)
     _kern_launch!(kern, wg, cnt, outd, y0d, grid_d, gp, a, r_h, C, escape, R_em,
                   Int(nmax), ng, xo, inv_dx, cnt)
     KernelAbstractions.synchronize(backend)
@@ -560,7 +578,7 @@ function _fused_sweep!(img, rays, pool, devices, dgrid, gp, a, r_h, C, escape, R
         idx = pool[di:nd:end]; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _fused_part!(img, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
                          dgrid.inv_dx, gp, a, r_h, C, escape, R_em, nmax, wg)
         end
@@ -733,11 +751,11 @@ end
 # Render ray subset `rng` on the CURRENTLY active device; SVector{K,Float64} output per pixel.
 function _fused_part_kv!(img::Vector{SVector{K,Float64}}, rays, rng, grid_d, ng, xo, inv_dx,
                          gps, a, r_h, C, escape, R_em, nmax) where {K}
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(grid_d)
     kern = _fused_kernel_kv!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{K,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{K,Float64}, cnt)
     kern(outd, y0d, grid_d, gps, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx, cnt;
          ndrange = cnt)
     KernelAbstractions.synchronize(backend)
@@ -752,7 +770,7 @@ function _fused_sweep_kv!(img, rays, devices, dgrid, gps, a, r_h, C, escape, R_e
         idx = di:nd:length(rays); dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _fused_part_kv!(img, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
                             dgrid.inv_dx, gps, a, r_h, C, escape, R_em, nmax)
         end
@@ -957,11 +975,11 @@ end
 
 function _fused_part_sl!(img, rays, rng, gA, gB, ng, xo, inv_dx, t0, inv_dt,
                          gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(gA)
     kern = _fused_kernel_sl!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{Float64}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, Float64, cnt)
     _kern_launch!(kern, wg, cnt, outd, y0d, gA, gB, t0, inv_dt, gp, a, r_h, C, escape,
                   R_em, Int(nmax), ng, xo, inv_dx, cnt)
     KernelAbstractions.synchronize(backend)
@@ -1005,7 +1023,7 @@ function render_gpu_fused_slow(cfg, win::DeviceFluidWindow; devices = select_dev
         idx = di:nd:nrays; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _fused_part_sl!(img, rays, idx, ga.dev_data[dev], gb.dev_data[dev], ga.n,
                             ga.xo, ga.inv_dx, t0, win.inv_dt, gp, a, r_h, Cf,
                             escape, R_em, nmax, wg)

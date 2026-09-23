@@ -63,10 +63,10 @@ One `DevADMParams` per CUDA device (the (10,nx,ny,nz) field array uploaded per d
 grid built with 0.15).
 """
 function upload_adm(st::ADMGridSpacetime, devices; alpha_min::Real = st.alpha_min)
-    d = Dict{Int,Any}()
+    d = Dict{eltype(devices),Any}()
     for dev in devices
-        CUDA.device!(dev)
-        d[dev] = DevADMParams(st, CuArray(st.data); alpha_min = alpha_min)
+        _device!(dev)
+        d[dev] = DevADMParams(st, _upload(_backend(dev), st.data); alpha_min = alpha_min)
     end
     return d
 end
@@ -316,12 +316,12 @@ Per-device uploaded AMR fluid + per-block face bounds for the SCAN-locate sample
 (no leaf table — for meshes beyond the dense-grid cap where `upload_amr` errors).
 Built by `upload_amr_scan`; consumed by the generic-spacetime kernels.
 """
-struct DeviceAMRScanGrid
-    dev_blk::Dict{Int,CuArray{Float32,5}}
-    dev_xlft::Dict{Int,CuArray{Float64,2}}
-    dev_dxb::Dict{Int,CuArray{Float64,2}}
-    dev_lo::Dict{Int,CuArray{Float64,2}}
-    dev_hi::Dict{Int,CuArray{Float64,2}}
+struct DeviceAMRScanGrid{DB<:AbstractDict,DX<:AbstractDict}
+    dev_blk::DB
+    dev_xlft::DX
+    dev_dxb::DX
+    dev_lo::DX
+    dev_hi::DX
     ni::Int; nj::Int; nk::Int; nmb::Int
 end
 
@@ -338,15 +338,11 @@ function upload_amr_scan(snap::AthenaKSnapshot, devices)
     dxb_host  = reduce(hcat, snap.dx)
     lo_host   = reduce(hcat, snap.ext_lo)
     hi_host   = reduce(hcat, snap.ext_hi)
-    dblk = Dict{Int,CuArray{Float32,5}}(); dxl = Dict{Int,CuArray{Float64,2}}()
-    ddx  = Dict{Int,CuArray{Float64,2}}(); dlo = Dict{Int,CuArray{Float64,2}}()
-    dhi  = Dict{Int,CuArray{Float64,2}}()
-    for dev in devices
-        CUDA.device!(dev)
-        dblk[dev] = CuArray(blk_host); dxl[dev] = CuArray(xlft_host)
-        ddx[dev]  = CuArray(dxb_host); dlo[dev] = CuArray(lo_host)
-        dhi[dev]  = CuArray(hi_host)
-    end
+    dblk = _upload_per_device(blk_host, devices)
+    dxl  = _upload_per_device(xlft_host, devices)
+    ddx  = _upload_per_device(dxb_host, devices)
+    dlo  = _upload_per_device(lo_host, devices)
+    dhi  = _upload_per_device(hi_host, devices)
     return DeviceAMRScanGrid(dblk, dxl, ddx, dlo, dhi, snap.ni, snap.nj, snap.nk, snap.nmb)
 end
 
@@ -420,17 +416,17 @@ end
 # ---------------------------------------------------------------- host drivers
 # The per-device spacetime parameter: isbits spacetimes are shared as-is; an
 # ADMGridSpacetime is uploaded per device (or pass the `upload_adm` Dict directly).
-_gsp_per_device(st, devices) = Dict{Int,Any}(dev => st for dev in devices)
+_gsp_per_device(st, devices) = Dict{eltype(devices),Any}(dev => st for dev in devices)
 _gsp_per_device(st::ADMGridSpacetime, devices) = upload_adm(st, devices)
 _gsp_per_device(d::Dict, devices) = d
 
 function _gsp_part!(img, rays, rng, sg::DeviceAMRScanGrid, dev, sp, gp, C, escape,
                     R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(sg.dev_blk[dev])
     kern = _gsp_amr_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{Float64}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, Float64, cnt)
     _kern_launch!(kern, wg, cnt, outd, y0d, sg.dev_blk[dev], sg.dev_xlft[dev],
                   sg.dev_dxb[dev], sg.dev_lo[dev], sg.dev_hi[dev], sp, gp, C, escape,
                   R_em, Int(nmax), sg.ni, sg.nj, sg.nk, sg.nmb, cnt)
@@ -441,11 +437,11 @@ end
 
 function _gsp_pol_part!(out, rays, rng, sg::DeviceAMRScanGrid, dev, sp, gp, C, escape,
                         R_em, nmax, wg)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(sg.dev_blk[dev])
     kern = _gsp_pol_amr_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
     _kern_launch!(kern, wg, cnt, outd, y0d, sg.dev_blk[dev], sg.dev_xlft[dev],
                   sg.dev_dxb[dev], sg.dev_lo[dev], sg.dev_hi[dev], sp, gp, C, escape,
                   R_em, Int(nmax), sg.ni, sg.nj, sg.nk, sg.nmb, cnt)
@@ -488,7 +484,7 @@ function march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays::Vector{SVecto
             idx = di:nd:nrays; dev = devices[di]
             isempty(idx) && continue
             @async begin
-                CUDA.device!(dev)
+                _device!(dev)
                 _gsp_pol_part!(out, rays, idx, sg, dev, sps[dev], gp, Cf, escape,
                                Float64(R_em), nmax, wg)
             end
@@ -506,7 +502,7 @@ function march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays::Vector{SVecto
         idx = di:nd:nrays; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _gsp_part!(img, rays, idx, sg, dev, sps[dev], gp, Cf, escape,
                        Float64(R_em), nmax, wg)
         end
@@ -570,13 +566,13 @@ function trace_shadow_gpu(st, rays::Vector{SVector{8,Float64}};
         idx = di:nd:n; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
-            backend = CUDABackend()
+            _device!(dev)
+            backend = _backend(dev)
             kern = _gsp_shadow_kernel!(backend)
             cnt = length(idx)
-            y0d = CuArray(rays[idx])
-            oyd = CuArray{SVector{8,Float64}}(undef, cnt)
-            omd = CuArray{SVector{4,Float64}}(undef, cnt)
+            y0d = _upload(backend, rays[idx])
+            oyd = KernelAbstractions.allocate(backend, SVector{8,Float64}, cnt)
+            omd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
             _kern_launch!(kern, wg, cnt, oyd, omd, y0d, sps[dev], Float64(C),
                           Float64(escape), Int(nmax), cnt)
             KernelAbstractions.synchronize(backend)

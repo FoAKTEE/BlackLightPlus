@@ -711,11 +711,11 @@ end
 const _GPOL_WG = 64
 
 function _gpol_part!(out, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C, escape, R_em, nmax)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(grid_d)
     kern = _gpol_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
     kern(outd, y0d, grid_d, gp, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx, cnt;
          ndrange = cnt, workgroupsize = min(_GPOL_WG, cnt))
     KernelAbstractions.synchronize(backend)
@@ -733,7 +733,7 @@ function _gpol_sweep!(out, rays, pool, devices, dgrid, gp, a, r_h, C, escape, R_
         idx = pool[di:nd:end]; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _gpol_part!(out, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
                         dgrid.inv_dx, gp, a, r_h, C, escape, R_em, nmax)
         end
@@ -839,11 +839,11 @@ end
 
 function _gpol_part_sl!(out, rays, rng, gA, gB, ng, xo, inv_dx, t0, inv_dt,
                         gp, a, r_h, C, escape, R_em, nmax)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(gA)
     kern = _gpol_kernel_sl!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
     kern(outd, y0d, gA, gB, t0, inv_dt, gp, a, r_h, C, escape, R_em, Int(nmax),
          ng, xo, inv_dx, cnt; ndrange = cnt, workgroupsize = min(_GPOL_WG, cnt))
     KernelAbstractions.synchronize(backend)
@@ -886,7 +886,7 @@ function render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices = select
         idx = di:nd:nrays; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _gpol_part_sl!(out, rays, idx, ga.dev_data[dev], gb.dev_data[dev], ga.n,
                            ga.xo, ga.inv_dx, t0, win.inv_dt, gp, a, r_h, Cf,
                            escape, R_em, nmax)
@@ -947,11 +947,11 @@ end
 
 function _gpol_stiff_part!(out, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C,
                            escape, R_em, nmax, thresh)
-    backend = CUDABackend()
+    backend = KernelAbstractions.get_backend(grid_d)
     kern = _gpol_stiff_kernel!(backend)
     cnt = length(rng)
-    y0d = CuArray(rays[rng])
-    outd = CuArray{SVector{4,Float64}}(undef, cnt)
+    y0d = _upload(backend, rays[rng])
+    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
     kern(outd, y0d, grid_d, gp, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx,
          Float64(thresh), cnt; ndrange = cnt, workgroupsize = min(_GPOL_WG, cnt))
     KernelAbstractions.synchronize(backend)
@@ -994,7 +994,7 @@ function stiffness_telemetry(cfg, snap_or_grid; devices = select_devices(),
         idx = di:nd:nrays; dev = devices[di]
         isempty(idx) && continue
         @async begin
-            CUDA.device!(dev)
+            _device!(dev)
             _gpol_stiff_part!(out, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
                               dgrid.inv_dx, gp, a, r_h, Cf, escape, R_em, nmax, thresh)
         end
