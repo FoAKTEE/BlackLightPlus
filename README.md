@@ -7,10 +7,12 @@ transfer in **arbitrary spacetimes**, written in Julia.
 [![Docs](https://img.shields.io/badge/docs-dev-blue.svg)](https://foaktee.github.io/BlackLightPlus/dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<img src="figures/examples/torus_IQUV.png" alt="Polarized IQUV image of an AthenaK GRMHD torus" width="100%">
+<img src="figures/examples/torus_IQUV.png" alt="Polarized image of an analytic magnetized torus around a Kerr black hole" width="100%">
 
-*Full IQUV image of an AthenaK GRMHD torus at 230 GHz, a/M = 0.9, i = 60°.
-Produced by [`figures/fig_examples.jl`](figures/fig_examples.jl).*
+*Stokes I, linear polarization fraction |P|/I, Q and U of an analytic
+magnetized torus (`PolishDoughnut`, pressure maximum at r = 9 M) around a Kerr
+black hole with a/M = 0.94, at 230 GHz and i = 60°, 128² pixels, from the
+coherency-tensor march. Produced by [`figures/fig_examples.jl`](figures/fig_examples.jl).*
 
 A single code path renders images from analytic metrics, superposed
 Kerr–Schild binaries, and numerical-relativity spacetimes, on CPU and GPU, with
