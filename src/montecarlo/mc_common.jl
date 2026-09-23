@@ -58,7 +58,9 @@ is null and constant, so each straight-line step accumulates the trapezoid
 scattering depth, runs `_mc_scatter_event`, and depletes the incident beam by
 the physical `exp(-dtau_s)` (absorption neglected — idealized Comptonization
 sphere). `nu_alpha_s(x, kcon)` supplies the invariant scattering rate and
-`spawn!(xev, weight_scat, tau_s, rng) -> (kept_w, rng)` the child sink; `mp`
+`spawn!(xev, weight_scat, tau_s, rng, event) -> (kept_w, rng)` the child sink,
+where `event` is the 0-based spawn ordinal along this march (< `track_max`, the
+child's stream-identity field, see rng.jl); `mp`
 bundles `gcon, R, ne, te, weight_min, max_scatt, step_frac, track_max`.
 Returns the escape flag, final state, accumulated scattering depth, the
 incident weight lost to scattering, and the total spawned child weight.
@@ -78,6 +80,7 @@ incident weight lost to scattering, and the total spawned child weight.
     tau_s = tau_s0
     scatter_loss = 0.0
     child_w = 0.0
+    nspawn = 0
     recorded = false
     @inbounds for _ in 1:mp.track_max
         xn = x .+ kcon .* dlam
@@ -91,8 +94,9 @@ incident weight lost to scattering, and the total spawned child weight.
                 _mc_scatter_event(w, b, dtau_s, mp.weight_min, rng)
             if spawn
                 xev = x .+ kcon .* (dlam * frac)
-                kept, rng = spawn!(xev, weight_scat, tau_s, rng)
+                kept, rng = spawn!(xev, weight_scat, tau_s, rng, nspawn)
                 child_w += kept
+                nspawn += 1
             end
         end
 

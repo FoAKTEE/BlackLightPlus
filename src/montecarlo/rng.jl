@@ -71,18 +71,23 @@ end
 # ============================================================ RNG stream handle
 
 """
-    MCRng(key::NTuple{2,UInt32}, ctr::UInt32)
+    MCRng(key::NTuple{2,UInt32}, ctr::UInt32[, sid::NTuple{3,UInt32}])
 
-Immutable, `isbits` handle for a single superphoton's random stream. `key`
-identifies the stream (typically `(global_seed, superphoton_id)`); `ctr` is the
-next draw index. All samplers are pure functions of an `MCRng` and return the
-advanced handle, so no mutable/global state is ever touched — the same call runs
-on the CPU and inside a KA kernel.
+Immutable, `isbits` handle for a single superphoton's random stream. Draw `n`
+of the stream is `philox4x32((n, sid...), key)`: `key = (seed, id word 0)` and
+the counter words 2-4 `sid` carry the rest of the stream identity (see
+`mc_stream_id`); `ctr` is the next draw index. All samplers are pure functions
+of an `MCRng` and return the advanced handle, so no mutable/global state is
+ever touched — the same call runs on the CPU and inside a KA kernel.
 """
 struct MCRng
     key::NTuple{2,UInt32}
     ctr::UInt32
+    sid::NTuple{3,UInt32}
 end
+
+@inline MCRng(key::NTuple{2,UInt32}, ctr::UInt32) =
+    MCRng(key, ctr, (0x00000000, 0x00000000, 0x00000000))
 
 "`MCRng(global_seed, stream_id [, ctr])` — start a stream at counter `ctr` (default 0)."
 @inline MCRng(global_seed::Integer, stream_id::Integer, ctr::Integer = 0) =
@@ -94,9 +99,94 @@ end
 Draw one uniform and return it together with the counter-advanced stream.
 """
 @inline function mc_uniform(rng::MCRng)
-    ctr = (rng.ctr, 0x00000000, 0x00000000, 0x00000000)
+    ctr = (rng.ctr, rng.sid[1], rng.sid[2], rng.sid[3])
     u = philox_rand(rng.key, ctr)
-    return u, MCRng(rng.key, rng.ctr + 0x00000001)
+    return u, MCRng(rng.key, rng.ctr + 0x00000001, rng.sid)
+end
+
+# ============================================================ stream identity
+#
+# Every superphoton stream is named by a 128-bit identity `I` that depends only
+# on the photon's genealogy, never on the device, chunk, thread or buffer slot:
+#
+#   I = gid + sum_{j=1..k} e_j * 2^(G + (j-1) E) + k * 2^124
+#
+# `gid` in 1:N is the global primary index, `k` the scattering layer (0 for a
+# primary), and `e_j` the 0-based spawn ordinal of the generation-j ancestor
+# along its parent's march. The words of `I` are the Philox key word 2
+# (bits 0-31) and counter words 2-4 (bits 32-127); counter word 1 is the draw
+# index. The layout `MCStreamLayout(G, E, K)` holds the field widths: G bits
+# for gid, E bits per event, K layers at most. For a run, gid <= N < 2^G and
+# e_j < track_max <= 2^E (one spawn per march step at most); with
+# G + K E <= 124 and K <= 15 the fields are disjoint bit ranges, so distinct
+# genealogies give distinct I and hence distinct (key, counter) Philox inputs
+# for every draw index. Different seeds differ in key word 1. A primary with
+# gid < 2^32 has I = gid, the stream `MCRng(seed, gid)`.
+
+"""
+    MCStreamLayout(n_primary, track_max, max_layer)
+
+Bit widths of the stream-identity fields for a run of `n_primary` primaries,
+at most `track_max` march steps per photon (so at most `track_max` spawns) and
+at most `max_layer` scattering layers. Throws when the fields do not fit the
+124 identity bits below the layer tag.
+"""
+struct MCStreamLayout
+    gid_bits::Int
+    event_bits::Int
+    max_layer::Int
+    function MCStreamLayout(n_primary::Integer, track_max::Integer, max_layer::Integer)
+        n_primary >= 1 || throw(ArgumentError("n_primary must be >= 1"))
+        track_max >= 1 || throw(ArgumentError("track_max must be >= 1"))
+        G = _bitwidth(n_primary)
+        E = max(1, _bitwidth(track_max - 1))
+        K = Int(max_layer)
+        0 <= K <= 15 || throw(ArgumentError("max_layer = $K outside 0:15"))
+        G + K * E <= 124 || throw(ArgumentError(
+            "stream identity does not fit: $G gid bits + $K layers x $E event bits > 124"))
+        return new(G, E, K)
+    end
+end
+
+@inline _bitwidth(n::Integer) = 64 - leading_zeros(UInt64(n))
+
+"The 128-bit stream identity `I` of `rng` (key word 2 and counter words 2-4)."
+@inline mc_stream_id(rng::MCRng) =
+    UInt128(rng.key[2]) | (UInt128(rng.sid[1]) << 32) |
+    (UInt128(rng.sid[2]) << 64) | (UInt128(rng.sid[3]) << 96)
+
+"Scattering layer `k` of a stream (0 = primary), from the identity's top four bits."
+@inline mc_stream_layer(rng::MCRng) = Int(rng.sid[3] >> 28)
+
+@inline function _mc_rng_from_id(key1::UInt32, id::UInt128)
+    return MCRng((key1, UInt32(id & 0xffffffff)), 0x00000000,
+                 (UInt32((id >> 32) & 0xffffffff), UInt32((id >> 64) & 0xffffffff),
+                  UInt32((id >> 96) & 0xffffffff)))
+end
+
+"""
+    mc_primary_rng(seed, gid) -> MCRng
+
+Stream of global primary `gid >= 1`: identity `I = gid`, draw counter 0.
+"""
+@inline mc_primary_rng(seed::Integer, gid::Integer) =
+    _mc_rng_from_id(UInt32(seed & 0xffffffff), UInt128(gid))
+
+"""
+    mc_child_rng(parent, event, layout) -> MCRng
+
+Stream of the child spawned at 0-based ordinal `event` along the march of the
+photon that owns `parent` (at any draw count): appends `event` in the next
+event field of the parent's identity and increments the layer tag. Pure and
+device-safe; depends only on the genealogy.
+"""
+@inline function mc_child_rng(parent::MCRng, event::Integer, L::MCStreamLayout)
+    id = mc_stream_id(parent)
+    k = id >> 124
+    pos = L.gid_bits + Int(k) * L.event_bits
+    cid = (id & ((UInt128(1) << 124) - UInt128(1))) | (UInt128(event) << pos) |
+          ((k + UInt128(1)) << 124)
+    return _mc_rng_from_id(parent.key[1], cid)
 end
 
 """

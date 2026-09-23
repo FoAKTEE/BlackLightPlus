@@ -22,6 +22,7 @@ using ..Geodesics
 export
     # rng.jl
     philox4x32, philox_rand, MCRng, mc_uniform, mc_gauss,
+    MCStreamLayout, mc_stream_id, mc_stream_layer, mc_primary_rng, mc_child_rng,
     sample_direction, standard_gamma, chi_square,
     # emissivity.jl
     j_nu, alpha_nu, jmax, int_jnu_zone, emission_tetrad,
@@ -47,7 +48,9 @@ export
     # track.jl
     track_superphoton,
     # spectrum.jl
-    Spectrum, record!, record_energy!, merge_spectra!, nu_centers, nuLnu, nuLnu_total,
+    Spectrum, record!, record_energy!, merge_spectra!,
+    # exact_sum.jl
+    ExactSpectrum, xsum_add!, xsum_round, nu_centers, nuLnu, nuLnu_total,
     nuLnu_solid, total_power, total_weight, mean_energy,
     # sphere_model.jl
     SphereModel, sphere_zone, sample_sphere_photon, analytic_nuLnu,
@@ -69,8 +72,9 @@ include("hotcross.jl")
 include("scatter.jl")
 include("emission_tables.jl")
 include("generate.jl")
-include("track.jl")
 include("spectrum.jl")
+include("exact_sum.jl")
+include("track.jl")
 include("sphere_model.jl")
 include("grmhd_model.jl")
 include("mc_cpu.jl")

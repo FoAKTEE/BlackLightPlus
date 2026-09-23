@@ -14,8 +14,10 @@
 
 Run the sphere Monte Carlo: build the one-zone weight table, generate ~`Ns`
 superphotons (uniform-random emission points in the ball), track each to
-escape and bin it into the returned `Spectrum`. Threaded with one accumulator
-per thread, reduced at the end; `seed` fixes the Philox streams.
+escape and bin it into the returned `Spectrum`. Photon `i` owns the Philox
+stream `mc_primary_rng(seed, i)`; the `nthreads` chunks accumulate exactly
+(`ExactSpectrum`) and merge by integer addition, so the result is bitwise
+independent of `nthreads` and of scheduling.
 `nu_min`/`nu_max` set both the generation band and the spectrum grid.
 `tabulated_gen = true` opts into the tabulated frequency rejection
 (much cheaper generation, statistically identical but not guaranteed bitwise).
@@ -39,16 +41,16 @@ function mc_spectrum(model::SphereModel, Ns::Real;
     tabulated_gen && (dnmax = tabulated_dnmax(gt, wgt))  # envelope of the interpolant
 
     nchunks = max(1, Int(nthreads))
-    specs = [Spectrum(; nu_min = nu_min, nu_max = nu_max,
-                      n_ebins = n_ebins, n_thbins = n_thbins) for _ in 1:nchunks]
+    specs = [ExactSpectrum(; nu_min = nu_min, nu_max = nu_max,
+                           n_ebins = n_ebins, n_thbins = n_thbins) for _ in 1:nchunks]
     _mc_sphere_loop!(specs, model, wgt, dnmax, N_gen, Int(seed), gt)
 
-    total = Spectrum(; nu_min = nu_min, nu_max = nu_max,
-                     n_ebins = n_ebins, n_thbins = n_thbins)
+    total = ExactSpectrum(; nu_min = nu_min, nu_max = nu_max,
+                          n_ebins = n_ebins, n_thbins = n_thbins)
     for s in specs
         merge_spectra!(total, s)
     end
-    return total
+    return Spectrum(total)
 end
 
 # =========================================================================
@@ -92,8 +94,10 @@ the generation band `[gen_nu_min, gen_nu_max]`, generate ~`Ns` seed
 superphotons, and track+scatter each into per-order spectra on the wider
 spectrum grid `[spec_nu_min, spec_nu_max]` (which must reach the up-scattered
 bumps). `table` is the hot-cross lookup; `max_scatt` caps the scattering
-generations. Threaded over primaries with private per-order accumulators;
-children get RNG streams disjoint from the primaries'.
+generations. Threaded over primaries with private exact per-order
+accumulators; a child's stream is keyed by its genealogy (`mc_child_rng`), so
+the children, the spectra and the diagnostics are bitwise independent of
+`nthreads` and of scheduling.
 """
 function mc_spectrum_scatter(model::SphereModel, table::HotcrossTable, Ns::Real;
                              nthreads::Integer = Threads.nthreads(),
@@ -115,81 +119,88 @@ function mc_spectrum_scatter(model::SphereModel, table::HotcrossTable, Ns::Real;
     nchunks = max(1, Int(nthreads))
     K = Int(max_scatt)
 
-    mkorders() = [Spectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
-                           n_ebins = n_ebins, n_thbins = n_thbins) for _ in 0:K]
+    layout = MCStreamLayout(N_gen, _MC_TRACK_MAX_STEPS, K)
+
+    mkorders() = [ExactSpectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
+                                n_ebins = n_ebins, n_thbins = n_thbins) for _ in 0:K]
     orders_by_chunk = [mkorders() for _ in 1:nchunks]
+    # per-chunk exact diagnostics: 1 primary weight, 2 scatter loss
+    diag_by_chunk = [ExactScalars(2) for _ in 1:nchunks]
+    ws_by_chunk = [ScatterWorkspace(layout) for _ in 1:nchunks]
 
-    wp = zeros(Float64, nchunks); wc = zeros(Float64, nchunks)
-    wfo = zeros(Float64, nchunks); sl = zeros(Float64, nchunks)
-    nc = zeros(Int, nchunks); np = zeros(Int, nchunks)
-
-    _mc_scatter_loop!(orders_by_chunk, model, table, wgt, dnmax, gt, N_gen,
-                      Int(seed), K, wp, wc, wfo, sl, nc, np)
+    _mc_scatter_loop!(orders_by_chunk, diag_by_chunk, ws_by_chunk, model, table, wgt,
+                      dnmax, gt, N_gen, Int(seed), K)
 
     orders = mkorders()
-    for c in 1:nchunks, n in 1:(K + 1)
-        merge_spectra!(orders[n], orders_by_chunk[c][n])
+    diag = ExactScalars(2)
+    wdiag = ExactScalars(2)
+    for c in 1:nchunks
+        for n in 1:(K + 1)
+            merge_spectra!(orders[n], orders_by_chunk[c][n])
+        end
+        merge_scalars!(diag, diag_by_chunk[c])
+        merge_scalars!(wdiag, ws_by_chunk[c].diag)
     end
-    total = Spectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
-                     n_ebins = n_ebins, n_thbins = n_thbins)
-    for n in 1:(K + 1)
-        merge_spectra!(total, orders[n])
-    end
+    return _scatter_result(orders, K, N_gen, sum(ws.n_children for ws in ws_by_chunk),
+                           xsum_round(diag, 1), xsum_round(wdiag, 1),
+                           xsum_round(wdiag, 2), xsum_round(diag, 2))
+end
 
-    return ScatterResult(orders, total, K, sum(np), sum(nc),
-                         sum(wp), sum(wc), sum(wfo), sum(sl))
+# Round exact per-order spectra into a `ScatterResult`; the total is the exact
+# sum over orders, rounded once.
+function _scatter_result(xorders::Vector{ExactSpectrum}, K::Int, n_primary::Int,
+                         n_children::Int, w_primary, w_children, w_first_order,
+                         scatter_loss)
+    x1 = xorders[1]
+    xtotal = ExactSpectrum(; nu_min = x1.nu_min, nu_max = x1.nu_max,
+                           n_ebins = x1.n_ebins, n_thbins = x1.n_thbins)
+    for o in xorders
+        merge_spectra!(xtotal, o)
+    end
+    return ScatterResult([Spectrum(o) for o in xorders], Spectrum(xtotal), K, n_primary,
+                         n_children, w_primary, w_children, w_first_order, scatter_loss)
 end
 
 """
-    _mc_scatter_loop!(orders_by_chunk, model, table, wgt, dnmax, gt, N_gen, seed,
-                      max_scatt, wp, wc, wfo, sl, nc, np) -> orders_by_chunk
+    _mc_scatter_loop!(orders_by_chunk, diag_by_chunk, ws_by_chunk, model, table, wgt,
+                      dnmax, gt, N_gen, seed, max_scatt) -> orders_by_chunk
 
-Threaded generate/track/scatter/record kernel. Each `@threads` chunk owns a
-private per-order accumulator set, a `ScatterWorkspace` (child stream key
-disjoint from every other chunk and from the primaries) and its own diagnostic
-slots, so the run is race-free regardless of task migration. Each primary is
-pushed, then the work queue is drained: pop, track+scatter, record into the
+Threaded generate/track/scatter/record kernel over contiguous chunks of the
+primaries `1:N_gen`. Each chunk owns exact per-order accumulators, exact
+diagnostics (primary weight, scatter loss) and a `ScatterWorkspace`; primary
+`i` draws from `mc_primary_rng(seed, i)` and every child from its genealogy
+stream, so nothing a photon does depends on its chunk. Each primary is pushed,
+then the work queue is drained: pop, track+scatter, record into the
 scattering-order bin.
 """
-function _mc_scatter_loop!(orders_by_chunk, model::SphereModel, table::HotcrossTable,
+function _mc_scatter_loop!(orders_by_chunk, diag_by_chunk, ws_by_chunk,
+                           model::SphereModel, table::HotcrossTable,
                            wgt::WeightTable, dnmax::Float64,
                            gt::Union{Nothing,IntJnuTable}, N_gen::Int, seed::Int,
-                           max_scatt::Int,
-                           wp::Vector{Float64}, wc::Vector{Float64},
-                           wfo::Vector{Float64}, sl::Vector{Float64},
-                           nc::Vector{Int}, np::Vector{Int})
+                           max_scatt::Int)
     nchunks = length(orders_by_chunk)
     Threads.@threads for c in 1:nchunks
         orders = orders_by_chunk[c]
+        diag = diag_by_chunk[c]
+        ws = ws_by_chunk[c]
         lo = div((c - 1) * N_gen, nchunks) + 1
         hi = div(c * N_gen, nchunks)
-        # per-chunk child stream key (⊻ a large odd multiple of c) — disjoint from
-        # the primary streams (keyed by `seed`) and from every other chunk.
-        ws = ScatterWorkspace(seed ⊻ (0x51ED9E37 * c))
-        w_prim = 0.0
-        s_loss = 0.0
         for i in lo:hi
-            rng = MCRng(seed, i)
+            rng = mc_primary_rng(seed, i)
             sp, rng = sample_sphere_photon(model, wgt, dnmax, rng, gt)
-            w_prim += sp.w
+            xsum_add!(diag, 1, sp.w)
             push_photon!(ws, sp, rng)
             while !isempty(ws.sp)
                 cur, crng = pop_photon!(ws)
                 esc, recorded, loss, crng =
                     track_superphoton_scatter!(ws, cur, model, table, crng; max_scatt = max_scatt)
-                s_loss += loss
+                xsum_add!(diag, 2, loss)
                 if recorded
                     ord = min(Int(esc.nscatt), max_scatt) + 1
                     record!(orders[ord], esc)
                 end
             end
         end
-        wp[c] = w_prim
-        wc[c] = ws.child_weight
-        wfo[c] = ws.first_order_weight
-        sl[c] = s_loss
-        nc[c] = ws.n_children
-        np[c] = hi - lo + 1
     end
     return orders_by_chunk
 end
@@ -198,11 +209,11 @@ end
     _mc_sphere_loop!(specs, model, wgt, dnmax, N_gen, seed, gt) -> specs
 
 Threaded generate/track/record kernel: the `1:N_gen` packets are split into
-contiguous chunks, each processed into its own private `Spectrum`, so the
-result is race-free regardless of task migration. Each superphoton owns an
-independent Philox stream keyed `(seed, id)`.
+contiguous chunks, each processed into its own private `ExactSpectrum`, so the
+result is race-free regardless of task migration. Superphoton `i` owns the
+Philox stream `mc_primary_rng(seed, i)`.
 """
-function _mc_sphere_loop!(specs::Vector{Spectrum}, model::SphereModel,
+function _mc_sphere_loop!(specs::Vector{ExactSpectrum}, model::SphereModel,
                           wgt::WeightTable, dnmax::Float64, N_gen::Int, seed::Int,
                           gt::Union{Nothing,IntJnuTable} = nothing)
     nchunks = length(specs)
@@ -211,7 +222,7 @@ function _mc_sphere_loop!(specs::Vector{Spectrum}, model::SphereModel,
         lo = div((c - 1) * N_gen, nchunks) + 1
         hi = div(c * N_gen, nchunks)
         for i in lo:hi
-            rng = MCRng(seed, i)
+            rng = mc_primary_rng(seed, i)
             sp, rng = sample_sphere_photon(model, wgt, dnmax, rng, gt)
             sp, recorded = track_superphoton(sp, model, rng)
             recorded && record!(spec, sp)
@@ -394,6 +405,9 @@ function track_superphoton_grmhd_scatter!(ws::ScatterWorkspace, sph::Superphoton
     ns0 = _grmhd_nu_alpha_scatt(table, pl, p)
     r_prev = ks_radius(st, x)
     recorded = false
+    rng0 = rng                                    # this photon's stream identity
+    nspawn = 0
+    child_w = 0.0
     @inbounds for _ in 1:_GRMHD_MAX_STEPS
         r = ks_radius(st, SVector(y[1], y[2], y[3], y[4]))
         r < r_h + _GRMHD_HORIZON_EPS && break
@@ -418,6 +432,8 @@ function track_superphoton_grmhd_scatter!(ws::ScatterWorkspace, sph::Superphoton
             spawn, weight_scat, frac, rng =
                 _mc_scatter_event(w, b, dtau_s, _MC_WEIGHT_MIN, rng)
             if spawn
+                event = nspawn
+                nspawn += 1
                 yev = rk4_step_fixed(st, y, h * frac)             # event point in-step
                 xev = SVector(yev[1], yev[2], yev[3], yev[4])
                 pev = SVector(yev[5], yev[6], yev[7], yev[8])
@@ -432,7 +448,8 @@ function track_superphoton_grmhd_scatter!(ws::ScatterWorkspace, sph::Superphoton
                                         nscatt = nscatt + Int32(1),
                                         x1i = sph.x1i, x2i = sph.x2i,
                                         ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
-                    _spawn_child!(ws, child)
+                    _spawn_child!(ws, child, mc_child_rng(rng0, event, ws.layout))
+                    child_w += w_child
                 end
             end
         end
@@ -443,6 +460,7 @@ function track_superphoton_grmhd_scatter!(ws::ScatterWorkspace, sph::Superphoton
         tau_s += dtau_s
         y = y2; x = xn; p = pn; na0 = na1; ns0 = ns1
     end
+    _ws_child_weight!(ws, child_w, sph.nscatt)
     sp = Superphoton(x, p, w; tau_abs = tau_a, tau_scatt = tau_s, nscatt = nscatt,
                      x1i = sph.x1i, x2i = sph.x2i,
                      ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
@@ -506,9 +524,10 @@ Run the GRMHD Monte Carlo: build the emitting-zone list and grid weight table,
 distribute ~`Ns` seed superphotons over the zones (per-zone count ~ N_s,
 stochastic rounding), track each to escape/capture (curved geodesic, absorption
 always; Compton scattering when `scattering=true`), and bin the escaped photons
-by asymptotic inclination x log-nu. Threaded with one private accumulator set
-per chunk; each seed owns a Philox stream keyed by its global id, children a
-disjoint per-chunk stream. `stride`/`max_zones` subsample the grid for fast
+by asymptotic inclination x log-nu. Threaded with one private exact
+accumulator set per chunk; each seed owns the Philox stream of its global id
+and each child the stream of its genealogy (`mc_child_rng`), so the result is
+bitwise independent of `nthreads`. `stride`/`max_zones` subsample the grid for fast
 tests; `r_emit_max` caps the emitting region to the luminous torus. `bias0`
 boosts the rare scattering rate (unbiased for any `bias0 >= 1`);
 `tabulated_gen` opts into the tabulated frequency rejection (see `mc_spectrum`).
@@ -593,32 +612,36 @@ function mc_spectrum_grmhd(model::GRMHDModel, Ns::Real;
     end
 
     nchunks = max(1, Int(nthreads))
-    mkbands() = [Spectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
-                          n_ebins = n_ebins, n_thbins = 1) for _ in 1:nb]
+    mkbands() = [ExactSpectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
+                               n_ebins = n_ebins, n_thbins = 1) for _ in 1:nb]
+    mktotal() = ExactSpectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
+                              n_ebins = n_ebins, n_thbins = 1)
     bands_by_chunk = [mkbands() for _ in 1:nchunks]
-    total_by_chunk = [Spectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
-                               n_ebins = n_ebins, n_thbins = 1) for _ in 1:nchunks]
-    emit = zeros(Float64, nchunks)
-    esc = zeros(Float64, nchunks)
+    total_by_chunk = [mktotal() for _ in 1:nchunks]
+    # exact per-chunk powers: 1 emitted, 2 escaped (Sum w E)
+    pow_by_chunk = [ExactScalars(2) for _ in 1:nchunks]
     nrec = zeros(Int, nchunks)
+    layout = MCStreamLayout(max(1, Ntot), _GRMHD_MAX_STEPS, scattering ? Int(max_scatt) : 0)
 
-    _mc_grmhd_loop!(bands_by_chunk, total_by_chunk, emit, esc, nrec,
+    _mc_grmhd_loop!(bands_by_chunk, total_by_chunk, pow_by_chunk, nrec,
                     model, zones, wgt, dnmax, lint, offset, Ntot, tbl,
                     Float64(C), Float64(R_record), Rem, Float64(bias0), Int(max_scatt),
-                    scattering, Int(seed), lo, hi)
+                    scattering, Int(seed), lo, hi, layout)
 
     bands = mkbands()
-    total = Spectrum(; nu_min = spec_nu_min, nu_max = spec_nu_max,
-                     n_ebins = n_ebins, n_thbins = 1)
+    total = mktotal()
+    pow = ExactScalars(2)
     for c in 1:nchunks
         merge_spectra!(total, total_by_chunk[c])
         for b in 1:nb
             merge_spectra!(bands[b], bands_by_chunk[c][b])
         end
+        merge_scalars!(pow, pow_by_chunk[c])
     end
     mec2 = ME * CL * CL
-    return GRMHDSpectrumResult(cen, Float64(half_width_deg), dOmega, bands, total,
-                               mec2 * sum(emit), mec2 * sum(esc), nz, Ntot,
+    return GRMHDSpectrumResult(cen, Float64(half_width_deg), dOmega,
+                               [Spectrum(b) for b in bands], Spectrum(total),
+                               mec2 * xsum_round(pow, 1), mec2 * xsum_round(pow, 2), nz, Ntot,
                                sum(nrec), scattering)
 end
 
@@ -644,37 +667,38 @@ end
 
 Threaded generate/track/record kernel over the global photon range `1:Ntot`,
 split into contiguous equal-size sub-ranges (a single bright zone's photons are
-spread across chunks). Each chunk owns private accumulators, a
-`ScatterWorkspace` with a disjoint child stream, and its diagnostic slots —
-race-free regardless of task migration. Photon `gid` maps to its zone by binary
-search on the cumulative `offset` and is seeded `MCRng(seed, gid)`. `lint` is
-the optional tabulated-generation matrix (`nothing` = exact default).
+spread across chunks). Each chunk owns private exact accumulators, a
+`ScatterWorkspace` and its diagnostic slots — race-free regardless of task
+migration. Photon `gid` maps to its zone by binary search on the cumulative
+`offset` and is seeded `mc_primary_rng(seed, gid)`; children are keyed by
+genealogy under `layout`. `lint` is the optional tabulated-generation matrix
+(`nothing` = exact default).
 """
-function _mc_grmhd_loop!(bands_by_chunk, total_by_chunk, emit, esc, nrec,
+function _mc_grmhd_loop!(bands_by_chunk, total_by_chunk, pow_by_chunk, nrec,
                          model::GRMHDModel, zones, wgt::WeightTable,
                          dnmax::Vector{Float64}, lint::Union{Nothing,Matrix{Float64}},
                          offset::Vector{Int}, Ntot::Int,
                          table::HotcrossTable,
                          C::Float64, R_record::Float64, Rem::Float64, bias0::Float64,
-                         max_scatt::Int, scattering::Bool, seed::Int, lo, hi)
+                         max_scatt::Int, scattering::Bool, seed::Int, lo, hi,
+                         layout::MCStreamLayout)
     st = model.spacetime
     nchunks = length(total_by_chunk)
     Threads.@threads for c in 1:nchunks
         bands = bands_by_chunk[c]
         total = total_by_chunk[c]
-        ws = ScatterWorkspace(seed ⊻ (0x51ED9E37 * c))
-        e_emit = 0.0
-        e_esc = 0.0
+        pow = pow_by_chunk[c]
+        ws = ScatterWorkspace(layout)
         nr = 0
         glo = div((c - 1) * Ntot, nchunks) + 1
         ghi = div(c * Ntot, nchunks)
         @inbounds for gid in glo:ghi
             z = searchsortedfirst(offset, gid) - 1        # offset[z] < gid <= offset[z+1]
             zone = zones[z]
-            rng = MCRng(seed, gid)
+            rng = mc_primary_rng(seed, gid)
             sp, rng = sample_zone_photon(zone, wgt, dnmax[z], rng,
                                          _zone_int_table(lint, wgt, z))
-            e_emit += sp.w * sp.E
+            xsum_add!(pow, 1, sp.w * sp.E)
             if scattering
                 push_photon!(ws, sp, rng)
                 while !isempty(ws.sp)
@@ -682,7 +706,7 @@ function _mc_grmhd_loop!(bands_by_chunk, total_by_chunk, emit, esc, nrec,
                     e, recorded, crng = track_superphoton_grmhd_scatter!(
                         ws, cur, model, table, C, R_record, Rem, bias0, max_scatt, crng)
                     if recorded
-                        e_esc += e.w * e.E
+                        xsum_add!(pow, 2, e.w * e.E)
                         nr += 1
                         _grmhd_record!(bands, total, e, st, lo, hi)
                     end
@@ -690,14 +714,12 @@ function _mc_grmhd_loop!(bands_by_chunk, total_by_chunk, emit, esc, nrec,
             else
                 e, recorded = track_superphoton_grmhd(sp, model, C, R_record, Rem)
                 if recorded
-                    e_esc += e.w * e.E
+                    xsum_add!(pow, 2, e.w * e.E)
                     nr += 1
                     _grmhd_record!(bands, total, e, st, lo, hi)
                 end
             end
         end
-        emit[c] = e_emit
-        esc[c] = e_esc
         nrec[c] = nr
     end
     return nothing

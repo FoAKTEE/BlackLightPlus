@@ -200,9 +200,8 @@ end
 
 Fast-path weight table from a prebuilt `ZoneEmissionTable`: `w(nu_m) = (Sum_z
 jt.jnu[m,z] jt.dV[z]) / (h Ns)`, stored as `log w`. Threaded over zones into
-per-thread partial accumulators reduced in fixed thread-index order, so the
-result is deterministic but may differ from the serial method in the last bits
-(different zone summation order).
+per-chunk exact accumulators (exact_sum.jl) merged by integer addition, so the
+zone sum is correctly rounded and bitwise independent of `nthreads`.
 """
 function build_weight_table(jt::ZoneEmissionTable, Ns::Real;
                             nthreads::Integer = Threads.nthreads())
@@ -210,25 +209,26 @@ function build_weight_table(jt::ZoneEmissionTable, Ns::Real;
     nz = size(jt.jnu, 2)
     hNs = HPL * Float64(Ns)
     nchunks = clamp(Int(nthreads), 1, max(1, nz))
-    partials = [zeros(Float64, n_nodes) for _ in 1:nchunks]
+    nz <= XSUM_MAX_ADDENDS || error("build_weight_table: too many zones for exact sum")
+    partials = [xsum_zeros(n_nodes) for _ in 1:nchunks]
     Threads.@threads for c in 1:nchunks
-        s = partials[c]
+        acc = partials[c]
         lo = div((c - 1) * nz, nchunks) + 1
         hi = div(c * nz, nchunks)
         @inbounds for z in lo:hi
             dVz = jt.dV[z]
             for m in 1:n_nodes
-                s[m] += jt.jnu[m, z] * dVz
+                xsum_add!(acc, jt.jnu[m, z] * dVz, m)
             end
         end
     end
+    total = partials[1]
+    for c in 2:nchunks
+        total .+= partials[c]
+    end
     lwgt = Vector{Float64}(undef, n_nodes)
     @inbounds for m in 1:n_nodes
-        s = 0.0
-        for c in 1:nchunks          # fixed thread-index order -> deterministic
-            s += partials[c][m]
-        end
-        lwgt[m] = log(s / hNs + _WEIGHT_FLOOR)
+        lwgt[m] = log(xsum_round(total, m) / hNs + _WEIGHT_FLOOR)
     end
     return WeightTable(jt.lnu_min, jt.lnu_max, jt.dlnu, lwgt)
 end

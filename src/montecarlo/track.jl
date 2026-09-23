@@ -140,26 +140,33 @@ end
 # ------------------------------------------------------------ work queue
 
 """
-    ScatterWorkspace
+    ScatterWorkspace([layout::MCStreamLayout])
 
 Per-thread iterative work queue for the layered (non-recursive) multi-scatter
-loop: a LIFO stack of pending superphotons and their independent RNG streams,
-plus running diagnostics — total spawned child weight, first-order child weight
-(spawned by primaries) and child count. Children get a stream
-`MCRng(child_seed, next_id)` disjoint from the primaries'.
+loop: a LIFO stack of pending superphotons and their RNG streams, plus exact
+running diagnostics — total spawned child weight and first-order child weight
+(spawned by primaries), one addend per marched photon — and the child count.
+A child's stream is `mc_child_rng(parent stream, spawn ordinal, layout)`, a
+function of its genealogy only, so the children and their streams do not
+depend on which workspace (thread, chunk) processes the primary. The default
+layout admits primaries with 32-bit ids and five scattering layers.
 """
 mutable struct ScatterWorkspace
     sp::Vector{Superphoton}
     rngs::Vector{MCRng}
-    child_seed::Int
-    next_id::Int
-    child_weight::Float64
-    first_order_weight::Float64
+    layout::MCStreamLayout
+    diag::ExactScalars           # 1: child weight, 2: first-order child weight
     n_children::Int
 end
 
-ScatterWorkspace(child_seed::Integer) =
-    ScatterWorkspace(Superphoton[], MCRng[], Int(child_seed), 0, 0.0, 0.0, 0)
+ScatterWorkspace(layout::MCStreamLayout) =
+    ScatterWorkspace(Superphoton[], MCRng[], layout, ExactScalars(2), 0)
+ScatterWorkspace() = ScatterWorkspace(MCStreamLayout(typemax(UInt32), _MC_TRACK_MAX_STEPS, 5))
+
+"Total weight spawned into children so far (exact sum, rounded once)."
+child_weight(ws::ScatterWorkspace) = xsum_round(ws.diag, 1)
+"Weight spawned by primaries (first-order children) so far (exact sum, rounded once)."
+first_order_weight(ws::ScatterWorkspace) = xsum_round(ws.diag, 2)
 
 "Push a photon (typically a freshly generated primary) and its stream onto the queue."
 @inline function push_photon!(ws::ScatterWorkspace, sp::Superphoton, rng::MCRng)
@@ -173,15 +180,20 @@ end
     return pop!(ws.sp), pop!(ws.rngs)
 end
 
-# Spawn a scattered child: give it a fresh independent stream, accumulate diagnostics.
-@inline function _spawn_child!(ws::ScatterWorkspace, child::Superphoton)
-    id = ws.next_id
-    ws.next_id = id + 1
+# Queue a scattered child with its genealogy-keyed stream `crng`.
+@inline function _spawn_child!(ws::ScatterWorkspace, child::Superphoton, crng::MCRng)
+    mc_stream_layer(crng) <= ws.layout.max_layer ||
+        error("scatter layer $(mc_stream_layer(crng)) exceeds the stream layout")
     push!(ws.sp, child)
-    push!(ws.rngs, MCRng(ws.child_seed, id))
-    ws.child_weight += child.w
-    child.nscatt == Int32(1) && (ws.first_order_weight += child.w)
+    push!(ws.rngs, crng)
     ws.n_children += 1
+    return ws
+end
+
+# Record one marched photon's spawned weight in the exact diagnostics.
+@inline function _ws_child_weight!(ws::ScatterWorkspace, child_w::Float64, nscatt::Integer)
+    xsum_add!(ws.diag, 1, child_w)
+    nscatt == 0 && xsum_add!(ws.diag, 2, child_w)
     return ws
 end
 
@@ -201,7 +213,8 @@ Absorption is neglected (idealized Comptonization sphere).
 function track_superphoton_scatter!(ws::ScatterWorkspace, sph::Superphoton, model,
                                     table::HotcrossTable, rng::MCRng; max_scatt::Int)
     nu_alpha_s = (x, kcon) -> _nu_alpha_scatt(model, table, x, kcon)
-    spawn! = (xev, weight_scat, tau_s, srng) -> begin
+    rng0 = rng                                   # this photon's stream identity
+    spawn! = (xev, weight_scat, tau_s, srng, event) -> begin
         p_new, _, srng = scatter_superphoton(sph.p, model.ucon, model.ucov, model.bcon,
                                              model.theta_e, model.gcov, model.gcon, srng)
         child = Superphoton(xev, p_new, weight_scat;
@@ -209,15 +222,16 @@ function track_superphoton_scatter!(ws::ScatterWorkspace, sph::Superphoton, mode
                             nscatt = sph.nscatt + Int32(1),
                             x1i = sph.x1i, x2i = sph.x2i,
                             ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
-        _spawn_child!(ws, child)
-        return weight_scat, srng                 # ws carries the child-weight ledger
+        _spawn_child!(ws, child, mc_child_rng(rng0, event, ws.layout))
+        return weight_scat, srng
     end
     mp = (gcon = model.gcon, R = model.R, ne = model.n_e, te = model.theta_e,
           weight_min = _MC_WEIGHT_MIN, max_scatt = max_scatt,
           step_frac = _MC_STEP_FRAC, track_max = _MC_TRACK_MAX_STEPS)
-    recorded, x, w, tau_s, scatter_loss, _, rng =
+    recorded, x, w, tau_s, scatter_loss, child_w, rng =
         _mc_march_scatter_core(sph.x, sph.p, sph.w, sph.tau_scatt, sph.nscatt, rng,
                                mp, nu_alpha_s, spawn!)
+    _ws_child_weight!(ws, child_w, sph.nscatt)
     sp = Superphoton(x, sph.p, w; tau_abs = sph.tau_abs, tau_scatt = tau_s,
                      nscatt = sph.nscatt, x1i = sph.x1i, x2i = sph.x2i,
                      ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
