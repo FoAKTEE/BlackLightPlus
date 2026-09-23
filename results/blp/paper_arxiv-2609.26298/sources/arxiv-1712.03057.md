@@ -1,0 +1,11 @@
+# arxiv-1712.03057 — Mościbrodzka & Gammie 2018, ipole (MNRAS 475, 43)
+- Mirror: ref-paper/arxiv-1712.03057/ (PROVENANCE.md). Bib key: MoscibrodzkaGammie2018.
+- Role: reference (polarized-transfer scheme; Stokes/coherency convention).
+- Declarations (literature-grounded):
+  - Invariants $\mathbf S=(I_\nu,Q_\nu,U_\nu,V_\nu)/\nu^3$; unsubscripted coefficients are invariant, $\alpha_I=\nu\alpha_{\nu,I}$, $\rho_V=\nu\rho_{\nu,V}$ (ms.tex l.293, l.400).
+  - Transfer matrix (LD85 form) with $(Q,U)$ row $\rho_V,-\rho_U$; $\rho_U$ sign opposite to Dexter 2016, irrelevant because $\rho_U=0$ in the coefficient frame (l.268–280).
+  - $V>0$ is RCP in the IEEE sense (right-handed about $k$; counter-clockwise seen by the receiver) (l.285).
+  - $N^{(a)(b)}=m_A^{(a)(b)}S_A$, $S_A=\tfrac12 m_A^{*(a)(b)}N_{(a)(b)}$ with Pauli $m_{I,Q,U,V}$ (l.305–356).
+  - Plasma tetrad: $e_{(0)}=u$, $e_{(3)}\parallel$ spatial $k$, $e_{(2)}$ in the $k$–$B$ plane, $Q>0$ along $e_{(1)}$ (l.474).
+  - Geodesics traced backward from the camera, transfer integrated forward to the camera (l.468–470).
+- [OPEN] none for this node.

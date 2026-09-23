@@ -1,0 +1,61 @@
+% Notation macros for the BlackLightPlus method paper (see conventions.md).
+% Requires amsmath (for \boldsymbol, \operatorname, \text), loaded by revtex docs via \usepackage{amsmath,amssymb}.
+% ---- code names ----------------------------------------------------------
+\newcommand{\blp}{\textsc{BlackLightPlus}}
+\newcommand{\blacklight}{\textsc{Blacklight}}
+\newcommand{\ipole}{\textsc{ipole}}
+\newcommand{\grmonty}{\textsc{grmonty}}
+\newcommand{\kpolaris}{\textsc{KPolaris}}
+\newcommand{\athenak}{\textsc{AthenaK}}
+% ---- geometry --------------------------------------------------------------
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\rg}{r_{\rm g}}                       % GM/c^2
+\newcommand{\GMc}{GM/c^{2}}
+\newcommand{\rhor}{r_{\rm h}}                    % outer horizon radius
+\newcommand{\gcov}{g_{\mu\nu}}
+\newcommand{\gcon}{g^{\mu\nu}}
+\newcommand{\kcov}{k_{\mu}}                       % covariant wave vector (code state)
+\newcommand{\kcon}{k^{\mu}}
+\newcommand{\ucon}{u^{\mu}}
+\newcommand{\bcon}{b^{\mu}}
+\newcommand{\aff}{\lambda}                        % affine parameter
+\newcommand{\tetrad}[2]{e_{(#1)}^{\;#2}}          % \tetrad{a}{\mu} -> e_{(a)}^mu
+\newcommand{\Ncoh}{N^{\mu\nu}}                    % coherency tensor
+\newcommand{\Kerr}{\mathrm{CKS}}
+% ---- camera / screen -------------------------------------------------------
+\newcommand{\incl}{i}                              % inclination from +z
+\newcommand{\aimg}{\alpha_{\rm img}}
+\newcommand{\bimg}{\beta_{\rm img}}
+\newcommand{\aB}{\alpha_{\rm B}}                   % Bardeen screen coordinates
+\newcommand{\bB}{\beta_{\rm B}}
+\newcommand{\EVPA}{\chi}
+\newcommand{\mnet}{m_{\rm net}}
+% ---- frequencies and plasma ------------------------------------------------
+\newcommand{\nuobs}{\nu_{\rm obs}}
+\newcommand{\nuc}{\nu_{\rm c}}                     % eB/(2 pi m_e c)
+\newcommand{\nus}{\nu_{\rm s}}                     % (2/9) nu_c Theta_e^2 sin(theta_B)
+\newcommand{\thB}{\theta_{B}}
+\newcommand{\Thetae}{\Theta_{\rm e}}
+\newcommand{\nel}{n_{\rm e}}
+\newcommand{\pgas}{p_{\rm gas}}
+\newcommand{\pmag}{p_{\rm mag}}
+\newcommand{\Rhigh}{R_{\rm high}}
+\newcommand{\Rlow}{R_{\rm low}}
+\newcommand{\betacrit}{\beta_{\rm crit}}
+\newcommand{\Mscale}{\mathcal{M}}                  % density mass scale
+% ---- polarized transfer ----------------------------------------------------
+\newcommand{\Svec}{\boldsymbol{\mathcal{S}}}       % invariant Stokes vector
+\newcommand{\Iinv}{\mathcal{I}}                    % I_nu / nu^3
+\newcommand{\Kmat}{\mathbf{K}}                     % transfer matrix
+\newcommand{\jnu}[1]{j_{\nu,#1}}                   % frame emissivity
+\newcommand{\anu}[1]{\alpha_{\nu,#1}}              % frame absorptivity
+\newcommand{\rnu}[1]{\rho_{\nu,#1}}                % frame rotativity
+\newcommand{\jinv}[1]{j_{#1}}                      % invariant j_{nu,A}/nu^2
+\newcommand{\ainv}[1]{\alpha_{#1}}                 % invariant nu alpha_{nu,A}
+\newcommand{\rinv}[1]{\rho_{#1}}                   % invariant nu rho_{nu,A}
+\newcommand{\sgn}{\operatorname{sgn}}
+% ---- Monte Carlo -----------------------------------------------------------
+\newcommand{\wsp}{w}                               % superphoton weight
+\newcommand{\Nsp}{N_{\rm s}}                       % number of superphotons
+\newcommand{\sigh}{\sigma_{\rm h}}                 % hot Klein-Nishina cross section
+\newcommand{\nuLnu}{\nu L_{\nu}}
