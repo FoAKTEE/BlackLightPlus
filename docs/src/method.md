@@ -145,16 +145,24 @@ device-safe polynomial fits, so the per-step kernel code is closed-form.
 
 **Unpolarized transport** uses the exact constant-coefficient segment solution
 of the invariant transfer equation
-$d\mathcal I/d\lambda=j_{\rm inv}-\alpha_{\rm inv}\mathcal I$, with a
-third-order Taylor branch at small optical depth and saturation to the source
-function when thick.
+$d\mathcal I/d\lambda=j_{\rm inv}-\alpha_{\rm inv}\mathcal I$, written as the
+affine operator $\mathcal I\mapsto A\mathcal I+B$ with $A=e^{-\Delta\tau}$,
+$B=(j/\alpha)\,e^{-\Delta\tau}\,\mathrm{expm1}(\Delta\tau)$, and saturation
+to the source function when thick.
 
-**Polarized transport** follows the ipole scheme
-[MoscibrodzkaGammie2018](@citep): the complex coherency tensor $N^{\mu\nu}$ is
-parallel-transported along the ray in a Strang split with the analytic
-constant-coefficient Stokes coupling of
-[LandiDeglInnocenti1985](@citet) applied per segment in the
-fluid tetrad (Gram–Schmidt frame anchored to $u^\mu$, $k^\mu$, $b^\mu$).
+**Polarized transport** applies the analytic constant-coefficient Stokes
+coupling of [LandiDeglInnocenti1985](@citet) per segment in the fluid tetrad
+(Gram–Schmidt frame anchored to $u^\mu$, $k^\mu$, $b^\mu$), as an affine
+operator $S\mapsto MS+b$. Instead of transporting the coherency tensor
+$N^{\mu\nu}$ [MoscibrodzkaGammie2018](@citep), the camera polarization frame
+(its vertical leg and 4-velocity) is parallel-transported along the ray with the
+same fourth-order Runge–Kutta step as the geodesic, and each segment operator is
+rotated into it by a Q–U rotation (the angle between the fluid $e_{(1)}$ and the
+transported screen leg). The Stokes vector is accumulated camera-to-source with a
+running Mueller transmission (below); CPU and GPU run this one march. On a
+Kerr torus deck the scheme converges at first order in $1/C$ like the coefficient
+quadrature, with 30% smaller Stokes errors and five to eight times smaller EVPA
+errors than the Strang-split coherency transport at equal $C$.
 Stokes parameters are referred to the basis $(e_{(2)},-e_{(1)})$ of each tetrad,
 with $e_{(3)}$ along the propagation direction. In the fluid frame $e_{(2)}$ is
 the projection of $b^\mu$, the basis of the [Marszewski2021](@citet)
@@ -181,9 +189,10 @@ storing no trajectory — only the image returns to the host. Key elements:
   $G\leftarrow G\,(RMR^{\mathsf T})$, where $(M,b)$ is the analytic segment
   solution in the fluid frame and $R$ the Q–U rotation into a
   parallel-transported camera readout frame (two frame vectors carried as extra
-  RK4 states). Per-ray state is $O(1)$ regardless of path length. The polarized
-  kernel reproduces the CPU coherency march bit-for-bit on identical
-  trajectories.
+  RK4 states). Per-ray state is $O(1)$ regardless of path length. The kernel
+  runs the CPU march itself (one march per transfer mode, fed by a fixed-control
+  step or by stored trajectory states), so CPU and GPU agree to floating-point
+  contraction on identical trajectories.
 - **In-kernel AD.** Metric derivatives come from ForwardDiff dual numbers
   evaluated inside the kernel; no Christoffel tensor is ever materialized
   (a major register saving). The same mechanism seeds a dual on a physical

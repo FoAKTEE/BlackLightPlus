@@ -47,8 +47,9 @@ identical to the host sampler. **Prefer this for production.**
 
 Full IQUV on device with native AMR sampling. Accumulates the segment couplings
 in reverse with a running transmission, so per-ray state is $O(1)$ regardless
-of path length. Reproduces the CPU coherency march bit-for-bit on identical
-trajectories. Returns a Stokes `NamedTuple`.
+of path length. Runs the CPU polarized march (`reverse_polarized_march`), so it
+agrees with `render` to floating-point contraction on identical trajectories.
+Returns a Stokes `NamedTuple`.
 
 *File:* `src/gpu_pol.jl`
 

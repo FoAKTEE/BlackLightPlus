@@ -130,10 +130,10 @@ scale and $R_\mathrm{high}$ respectively.
 
 ## Verifying against the CPU
 
-GPU and CPU parity is bit-for-bit wherever the same algorithm runs on both
-sides. The polarized kernel reproduces the CPU coherency march exactly on
-identical trajectories, so a mismatch means the trajectories differ, not the
-transfer:
+CPU and GPU run the same marches and per-sample physics (one function per
+transfer mode and per coefficient), so on identical trajectories they agree to
+floating-point contraction; a larger mismatch means the trajectories or the fluid
+sampling differ, not the transfer:
 
 ```julia
 cpu = render(cfg, snap; polarized = true)

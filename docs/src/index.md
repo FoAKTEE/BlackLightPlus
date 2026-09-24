@@ -21,13 +21,13 @@ automatic differentiation through the entire pipeline.
   superposed Kerr–Schild binary black holes; ADM grid spacetimes with
   AD-through-interpolation derivatives; real numerical-relativity data
   (AthenaK Z4c `.bin`, including BBH mergers).
-- **Radiative transfer** — full IQUV polarized transport via the coherency
-  tensor; thermal, power-law, and kappa synchrotron emission and absorption;
+- **Radiative transfer** — full IQUV polarized transport in a
+  parallel-transported camera frame with analytic Stokes segment operators; thermal, power-law, and kappa synchrotron emission and absorption;
   Faraday rotation and conversion; $R_\mathrm{high}/R_\mathrm{low}$ electron
   temperature prescriptions.
 - **GPU** — fused single-kernel imaging with geodesic integration, fluid
-  sampling, and radiative transfer all on device; polarized GPU transport that
-  is bit-for-bit identical to the CPU march; native AMR meshblock sampling;
+  sampling, and radiative transfer all on device, running the CPU marches and
+  coefficient code; native AMR meshblock sampling;
   multi-GPU.
 - **Differentiability** — forward AD (ForwardDiff, including inside GPU
   kernels) and reverse AD (Enzyme) through the radiation chain, for
