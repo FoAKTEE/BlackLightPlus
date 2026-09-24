@@ -52,6 +52,15 @@ trajectories. Returns a Stokes `NamedTuple`.
 
 *File:* `src/gpu_pol.jl`
 
+### `AMRStokes(cfg, snapshot; polarized=false, devices=default_pool())`
+
+Native-AMR device marcher for the `stokes` argument of `render_amr`: refinement blocks
+are streamed through the device pool, rays are made on the device from each block's
+origin and pixel size, and children are queued as soon as their parent is tested, with
+no barrier between levels. Also callable as `stokes(coords)`.
+
+*File:* `src/gpu_amr.jl`
+
 ### `render_analytic_gpu(cfg; source=...)`
 
 The exact-Kerr elliptic tracer on device. Matches the CPU tracer per pixel to

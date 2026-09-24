@@ -14,6 +14,9 @@ Each script prints one machine-parseable line per timed leg (`grep '^BENCH'`).
   per-device CUPTI phases (host prologue/epilogue, kernel, H2D, D2H, idle). It loads the
   `src/` of the active project, so running it from a worktree of another commit times that
   commit. Record format and parser: **bench_lines.jl** (`BENCH`/`PHASE`/`SKIP` lines).
+- **bench_amr_host.jl** — host time of `render_amr` (block coordinates, painting,
+  refinement test, canvas) on a synthetic base-384, 2-level deck whose Stokes closure is
+  nearly free; best of 9 after a full GC each. Run with `-t 1` and `-t 16`.
 - **kernel_audit.jl** — offline resource audit, no GPU needed: compiles every
   KernelAbstractions kernel in `src/` for sm_80 as a CUDA launch would and prints
   registers, stack and spill bytes from `ptxas --verbose` (`grep '^KRES'`). `--check`

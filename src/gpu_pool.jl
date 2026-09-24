@@ -410,29 +410,38 @@ end
     march!(outs::Tuple, pool, parts)
 
 Run every `MarchPart` over the pool: each part's `items` split into chunks of
-`pool.chunk`, queued part by part in item order. A chunk makes its rays on the device,
-launches, copies the outputs back through pinned staging and stores output `k` of item
-`i` at `outs[k][i]`. Items are independent, so the result does not depend on the device
-count, the chunking or the queue order.
+`pool.chunk`, queued part by part in item order; `march_chunk!` runs a chunk. Items are
+independent, so the result does not depend on the device count, the chunking or the
+queue order.
 """
 function march!(outs::Tuple, pool::DevicePool, parts)
     chunks = [(p, r) for (p, part) in enumerate(parts)
               for r in Iterators.partition(eachindex(part.items), pool.chunk)]
     foreach_chunk(pool, chunks) do lane, (p, r)
-        part = parts[p]
-        idx = view(part.items, r)
-        n = length(idx)
-        y0d = rays_on_device!(lane, part.rays, idx)
-        outd = ntuple(k -> lane_buffer(lane, (:out, k), eltype(outs[k]), n), length(outs))
-        part.launch(lane, outd, y0d, n)
-        KernelAbstractions.synchronize(lane.backend)
-        for k in eachindex(outs)
-            st = lane_stage(lane, (:out, k), eltype(outs[k]), n)
-            copyto!(st, 1, outd[k], 1, n)
-            o = outs[k]
-            @inbounds for (q, i) in enumerate(idx)
-                o[i] = st[q]
-            end
+        march_chunk!(lane, outs, parts[p].rays, parts[p].launch, view(parts[p].items, r))
+    end
+    return outs
+end
+
+"""
+    march_chunk!(lane, outs::Tuple, rays, launch, idx)
+
+One chunk on `lane`: makes the rays of items `idx` on the device (`rays_on_device!`),
+launches, copies the outputs back through pinned staging and stores output `k` of item
+`i` at `outs[k][i]`.
+"""
+function march_chunk!(lane::PoolLane, outs::Tuple, rays, launch, idx)
+    n = length(idx)
+    y0d = rays_on_device!(lane, rays, idx)
+    outd = ntuple(k -> lane_buffer(lane, (:out, k), eltype(outs[k]), n), length(outs))
+    launch(lane, outd, y0d, n)
+    KernelAbstractions.synchronize(lane.backend)
+    for k in eachindex(outs)
+        st = lane_stage(lane, (:out, k), eltype(outs[k]), n)
+        copyto!(st, 1, outd[k], 1, n)
+        o = outs[k]
+        @inbounds for (q, i) in enumerate(idx)
+            o[i] = st[q]
         end
     end
     return outs

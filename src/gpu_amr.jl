@@ -13,6 +13,8 @@ using KernelAbstractions
 using CUDA
 using LinearAlgebra: dot
 using BlackLightPlus.Simulation: AthenaKSnapshot, SnapshotSeries, get_frame, leaf_table
+using BlackLightPlus: AMRBlock, camera_rays_at
+import BlackLightPlus: stream_blocks!
 
 # ---------------------------------------------------------------- device AMR grid
 """
@@ -422,6 +424,84 @@ function _amr_frame(cfg, snap_or_amrgrid, polarized, devices, nmax, C, order, wg
     end
     rescued_frac === nothing || (rescued_frac[] = frac)
     return out
+end
+
+# ================================================================ AMR DRIVER (streamed)
+"""
+    AMRStokes(cfg, snap_or_amrgrid; polarized=false, devices=default_pool(),
+              nmax=cfg.max_steps, C=80, wg=<pol _GPOL_WG / unpol nothing>)
+
+The native-AMR fused march as the `stokes` of `render_amr`, streamed: every refinement
+block is a work item of the device pool; the device makes a block's rays from its origin
+and pixel size (`BlockGrid`), and the worker that copies a chunk back paints and tests
+its blocks and queues their children at once, so refined blocks march while the rest of
+their parent level is still in flight (no level barrier). Images, level map and ray
+count equal the level-by-level driver's. Also callable as `stokes(coords)` (host rays
+through `march_rays_gpu_amr`).
+"""
+struct AMRStokes{C,G}
+    cfg::C
+    dg::G
+    pool::DevicePool
+    polarized::Bool
+    nmax::Int
+    C::Float64
+    wg::Any
+end
+AMRStokes(cfg, snap_or_amrgrid; polarized::Bool = false, devices = default_pool(),
+          nmax::Int = cfg.max_steps, C::Real = 80, wg = polarized ? _GPOL_WG : nothing) =
+    (pool = device_pool(devices);
+     AMRStokes(cfg, resident_amr(pool, snap_or_amrgrid), pool, polarized, nmax, Float64(C), wg))
+
+_amr_camera(cfg) = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
+                                       cfg.camera.fov, cfg.camera.resolution)
+
+(m::AMRStokes)(coords::Vector{Tuple{Float64,Float64}}) =
+    march_rays_gpu_amr(m.cfg, m.dg, camera_rays_at(KerrSchildCartesian(m.cfg.bh_a),
+                                                   _amr_camera(m.cfg), coords);
+                       polarized = m.polarized, devices = m.pool, nmax = m.nmax, C = m.C,
+                       wg = m.wg)
+
+function stream_blocks!(m::AMRStokes, work::Vector{AMRBlock}, block::Int, visit)
+    cfg = m.cfg
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    R_em = _gamr_domain_radius(m.dg.amrp)
+    launch = m.polarized ?
+        _gpol_amr_launch(m.dg, _gpol_params(cfg), a, r_h, m.C, escape, R_em, m.nmax, m.wg) :
+        _famr_launch(m.dg, _gimg_params(cfg), a, r_h, m.C, escape, R_em, m.nmax, m.wg)
+    st = KerrSchildCartesian(a)
+    fr = CameraFrame(_amr_camera(cfg))
+    bb = block * block
+    per = max(1, m.pool.chunk ÷ bb)            # blocks per chunk
+    stream_chunks(m.pool, _block_chunks(work, per)) do lane, blks, job
+        rays = CameraRays(st, fr, BlockGrid([SVector(b[4], b[5], b[6] / block) for b in blks],
+                                            block))
+        S = _amr_stokes_rows(lane, rays, launch, length(blks) * bb, m.polarized)
+        kids = AMRBlock[]
+        for (w, b) in enumerate(blks)
+            append!(kids, visit(b, S, (w - 1) * bb))
+        end
+        foreach(c -> enqueue!(job, c), _block_chunks(kids, per))
+    end
+    return nothing
+end
+
+_block_chunks(blks, per) = [blks[r] for r in Iterators.partition(eachindex(blks), per)]
+
+# One chunk's Stokes, 4 rows × n block pixels (Q, U, V rows zero when unpolarized).
+function _amr_stokes_rows(lane, rays, launch, n, polarized)
+    if polarized
+        out = Vector{SVector{4,Float64}}(undef, n)
+        march_chunk!(lane, (out,), rays, launch, 1:n)
+        return reinterpret(reshape, Float64, out)
+    end
+    out = Vector{Float64}(undef, n)
+    march_chunk!(lane, (out,), rays, launch, 1:n)
+    S = zeros(4, n)
+    S[1, :] .= out
+    return S
 end
 
 # ================================================================ SLOW LIGHT (opt-in, direct AMR)

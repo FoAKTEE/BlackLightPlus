@@ -137,11 +137,14 @@ function imaging_legs()
         st = KerrSchildCartesian(cfg.bh_a)
         cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                                   cfg.camera.fov, cfg.camera.resolution)
-        stokes(d) = coords -> march_rays_gpu_amr(cfg, dg, camera_rays_at(st, cam, coords);
-                                                 polarized = true, devices = d)
+        # the streamed device marcher where the checkout has it, else the level closure
+        streamed = @isdefined(AMRStokes)
+        stokes(d) = streamed ? AMRStokes(cfg, dg; polarized = true, devices = d) :
+            coords -> march_rays_gpu_amr(cfg, dg, camera_rays_at(st, cam, coords);
+                                         polarized = true, devices = d)
         run(d) = render_amr(cfg, SNAP; block = 8, max_level = 2, polarized = true,
                             stokes = stokes(d))
-        (run = run, items = run(devs[1:1]).nrays, variant = "closure")
+        (run = run, items = run(devs[1:1]).nrays, variant = streamed ? "streamed" : "closure")
     end)
     return [uni("fused_384", 384, render_gpu_fused), uni("fused_768", 768, render_gpu_fused),
             uni("fused_pol_256", 256, render_gpu_polarized),

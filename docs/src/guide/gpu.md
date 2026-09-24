@@ -85,6 +85,23 @@ close(pool)
 KernelAbstractions CPU backend, one logical device per entry, which is how the
 multi-device tests run without a GPU.
 
+## Adaptive refinement on the GPU
+
+`render_amr` refines image blocks where the intensity varies sharply. Pass the native-AMR
+device marcher as its `stokes` to march the blocks on the GPUs:
+
+```julia
+S = render_amr(cfg, ""; block = 8, max_level = 2, polarized = true,
+               stokes = AMRStokes(cfg, snap; polarized = true, devices = [0, 1]))
+```
+
+Every block is a work item of the device pool. The device builds a block's rays from
+its origin and pixel size, and the worker that receives a block's Stokes values paints
+it into the mosaic, tests it and queues its four children at once, so refined blocks
+march while the rest of their parent level is still in flight. Painting and the
+refinement test run on the host threads. The mosaic, level map and ray count are the
+same as those of the level-by-level driver, for any device count.
+
 ## Other drivers
 
 | File | Entry point | Purpose |
