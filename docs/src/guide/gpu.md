@@ -43,7 +43,8 @@ EVPA on Faraday-thick decks. Prefer `render_gpu_amr` for production.
 
 ## Choosing devices
 
-Devices default to `select_devices()`, which probes for idle GPUs. To pin them:
+Devices default to `default_pool()`: the idle GPUs that `select_devices()` finds,
+probed once per session. To pin them:
 
 ```julia
 img = render_gpu_amr(cfg, snap; devices = [0, 1])
@@ -52,11 +53,54 @@ img = render_gpu_amr(cfg, snap; devices = [0, 1])
 or restrict visibility before starting Julia:
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1 julia --project=.
+CUDA_VISIBLE_DEVICES=0,1 julia --project=. -t 4
 ```
 
-Rays are split across devices in interleaved order so that cheap and expensive
-rays balance. Two-GPU scaling on full frames is 1.74–1.82×.
+Each device list gets one persistent `DevicePool`, created on first use: two worker
+tasks per device, each with its own stream and pinned staging buffers. Start Julia with
+at least one more thread than devices (`-t 3` for two GPUs) so the workers of different
+devices run in parallel. Rays are queued in chunks and each worker pulls the next chunk
+when it finishes the last, so a slower or shared device simply takes fewer. The queue holds
+16×16-pixel tiles, those nearest the photon ring (the longest rays) first
+(`cost_order`), so the slowest work starts early instead of ending the render; pass
+`order` to set another queue order, e.g. `march_sort_order(counts)` from a previous
+frame's trip counts. With `precision = :mixed` the near-ring pixels that need fp64 enter
+the same queue ahead of the fp32 pixels. Each chunk sends only its pixel indices; the
+camera rays are generated on the device by the same `camera_ray` function as the CPU
+`camera_rays`. Every ray writes its own pixel, so the
+image is bitwise identical for any device count and chunking. [Benchmarks](@ref) lists the measured multi-GPU scaling.
+
+A snapshot or `UniformFluidGrid` passed to a driver is uploaded once per pool and reused
+by later calls with the same object; do not modify it in place between renders (upload
+a new object instead). Pre-uploaded grids (`upload_grid`, `upload_amr`) are used as
+given. For explicit control, build a pool and pass it as `devices`:
+
+```julia
+pool = DevicePool([0, 1]; lanes = 2, chunk = 65536)
+img  = render_gpu_amr(cfg, snap; devices = pool)
+close(pool)
+```
+
+`devices = [HostDevice(1), HostDevice(2)]` runs the same drivers on the
+KernelAbstractions CPU backend, one logical device per entry, which is how the
+multi-device tests run without a GPU.
+
+## Adaptive refinement on the GPU
+
+`render_amr` refines image blocks where the intensity varies sharply. Pass the native-AMR
+device marcher as its `stokes` to march the blocks on the GPUs:
+
+```julia
+S = render_amr(cfg, ""; block = 8, max_level = 2, polarized = true,
+               stokes = AMRStokes(cfg, snap; polarized = true, devices = [0, 1]))
+```
+
+Every block is a work item of the device pool. The device builds a block's rays from
+its origin and pixel size, and the worker that receives a block's Stokes values paints
+it into the mosaic, tests it and queues its four children at once, so refined blocks
+march while the rest of their parent level is still in flight. Painting and the
+refinement test run on the host threads. The mosaic, level map and ray count are the
+same as those of the level-by-level driver, for any device count.
 
 ## Other drivers
 

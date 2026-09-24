@@ -13,44 +13,8 @@ using ForwardDiff: Dual, partials
 using KernelAbstractions
 using CUDA
 
-# ---------------------------------------------------------------- device selection
-# Identical guarded copy of gpu_image.jl :: select_devices (self-contained) so the tracer
-# can auto-pick idle GPUs whether or not gpu_image.jl was co-included. First include wins.
-if !@isdefined(select_devices)
-"""
-    select_devices(candidates=[0,1]; util_threshold=15, min_free_gb=8) -> Vector{Int}
-
-Return the subset of VISIBLE CUDA devices (index < `CUDA.ndevices()`, correct under
-`CUDA_VISIBLE_DEVICES` masking) in `candidates` that are idle enough (free ≥ `min_free_gb`
-GB and, if NVML util is available, ≤ `util_threshold` %). Always returns ≥1 device; any
-probe failure falls back to the static list.
-"""
-function select_devices(candidates = [0, 1]; util_threshold::Real = 15, min_free_gb::Real = 8)
-    vis = try
-        filter(d -> 0 <= d < CUDA.ndevices(), candidates)
-    catch
-        return collect(candidates)
-    end
-    isempty(vis) && return collect(candidates)
-    idle = Int[]
-    for d in vis
-        ok = try
-            CUDA.device!(d)
-            free, _ = CUDA.memory_info()
-            u = try
-                Float64(CUDA.NVML.utilization_rates(CUDA.NVML.Device(CUDA.uuid(CUDA.CuDevice(d)))).compute) * 100.0
-            catch
-                -1.0
-            end
-            (free / 1024^3 >= min_free_gb) && (u < 0 || u <= util_threshold)
-        catch
-            false
-        end
-        ok && push!(idle, d)
-    end
-    return isempty(idle) ? vis[1:1] : idle
-end
-end # @isdefined select_devices
+# Device handles, select_devices and the DevicePool runtime (shared with the imagers).
+isdefined(@__MODULE__, :DevicePool) || Base.include(@__MODULE__, joinpath(@__DIR__, "..", "gpu_pool.jl"))
 
 # ---------------------------------------------------------------- device kernels
 # The RK4 step is the Geodesics `rk4_step_fixed` on `KerrSchildCartesian` (the CPU
@@ -90,56 +54,49 @@ isdefined(@__MODULE__, :_gimg_stop) || include(joinpath(@__DIR__, "..", "gpu_met
 end
 
 # ---------------------------------------------------------------- host driver
-# Trace a contiguous ray range `rng` on the CURRENTLY active CUDA device, chunked.
-# Buffers are allocated once and reused across chunks; only the used step-depth is
-# copied back (max count, typically ≪ nmax). Fills states/dls in place, per the
-# `trace_rays_sampled` contract (source→camera; dl[k] = step behind, dl[m] = 0).
-# Device containers carry T = the ray element type (Float32 traj/hlog halve the dominant
-# footprint); the DOWNLOAD converts back to Float64 (the states/dls element types), so
-# the CPU radiation stage consumes exactly the same types. The caller passes the kernel
-# scalars already converted to T.
-function _trace_part!(states, dls, rays::Vector{SVector{8,T}}, rng, a, r_h, C, escape,
-                      R_em, nmax, chunk) where {T}
-    backend = CUDABackend()
-    kern = _trace_kernel!(backend)
-    pl = length(rng)
-    width = min(chunk, pl)
-    traj = CuArray{SVector{8,T}}(undef, width, nmax + 1)
-    hlog = CuArray{T}(undef, width, nmax)
-    cnt = CuArray{Int32}(undef, width)
-    y0d = CuArray{SVector{8,T}}(undef, width)
-    lo = first(rng)
-    for cstart in 1:chunk:pl
-        cur = min(cstart + chunk - 1, pl) - cstart + 1
-        g0 = lo + cstart - 1
-        copyto!(y0d, 1, rays, g0, cur)                   # bulk H2D (no scalar indexing)
-        kern(traj, hlog, cnt, y0d, a, C, escape, R_em, nmax, r_h, cur; ndrange=cur)
-        KernelAbstractions.synchronize(backend)
-        hcnt = Array(view(cnt, 1:cur))
-        maxn = Int(maximum(hcnt))
-        htraj = Array(traj[1:cur, 1:maxn + 1])
-        hhlog = maxn >= 1 ? Array(hlog[1:cur, 1:maxn]) : Array{T}(undef, cur, 0)
-        @inbounds for lj in 1:cur
-            m = Int(hcnt[lj]) + 1                       # stored states (y0 + steps)
-            rev = Vector{SVector{8,Float64}}(undef, m)
-            dl = Vector{Float64}(undef, m)
-            for k in 1:m
-                rev[k] = htraj[lj, m + 1 - k]           # integration is camera→source
-            end
-            for k in 1:m-1
-                dl[k] = hhlog[lj, m - k]                 # step behind (rev[k]→rev[k+1])
-            end
-            dl[m] = 0.0
-            states[g0 + lj - 1] = rev
-            dls[g0 + lj - 1] = dl
+# Trace the contiguous ray range `rng` on `lane`'s device. The lane's trajectory buffers
+# (`width` rays deep) are reused across chunks; only the used step-depth is copied back
+# (max count, typically ≪ nmax). Fills states/dls in place, per the `trace_rays_sampled`
+# contract (source→camera; dl[k] = step behind, dl[m] = 0). Device containers carry
+# T = the ray element type (Float32 traj/hlog halve the dominant footprint); the DOWNLOAD
+# converts back to Float64 (the states/dls element types), so the CPU radiation stage
+# consumes exactly the same types. The caller passes the kernel scalars already
+# converted to T.
+function _trace_chunk!(states, dls, rays::Vector{SVector{8,T}}, rng, lane, a, r_h, C, escape,
+                       R_em, nmax, width) where {T}
+    traj = lane_array(lane, :traj, SVector{8,T}, (width, nmax + 1))
+    hlog = lane_array(lane, :hlog, T, (width, nmax))
+    cnt = lane_buffer(lane, :cnt, Int32, width)
+    cur = length(rng)
+    g0 = first(rng)
+    y0d = rays_on_device!(lane, HostRays(rays), rng)
+    _trace_kernel!(lane.backend)(traj, hlog, cnt, y0d, a, C, escape, R_em, nmax, r_h, cur;
+                                 ndrange = cur)
+    KernelAbstractions.synchronize(lane.backend)
+    hcnt = Array(view(cnt, 1:cur))
+    maxn = Int(maximum(hcnt))
+    htraj = Array(traj[1:cur, 1:maxn + 1])
+    hhlog = maxn >= 1 ? Array(hlog[1:cur, 1:maxn]) : Array{T}(undef, cur, 0)
+    @inbounds for lj in 1:cur
+        m = Int(hcnt[lj]) + 1                           # stored states (y0 + steps)
+        rev = Vector{SVector{8,Float64}}(undef, m)
+        dl = Vector{Float64}(undef, m)
+        for k in 1:m
+            rev[k] = htraj[lj, m + 1 - k]               # integration is camera→source
         end
+        for k in 1:m-1
+            dl[k] = hhlog[lj, m - k]                     # step behind (rev[k]→rev[k+1])
+        end
+        dl[m] = 0.0
+        states[g0 + lj - 1] = rev
+        dls[g0 + lj - 1] = dl
     end
     return nothing
 end
 
 """
     trace_rays_gpu(st, rays; C=80.0, escape=1.1e3, R_em=Inf, nmax=3000,
-                   devices=select_devices(), chunk=8192, precision=:f64)
+                   devices=default_pool(), chunk=8192, precision=:f64)
         -> (states, dls)
 
 Multi-GPU drop-in for `trace_rays_sampled`: the same fixed-control RK4 sampling
@@ -151,9 +108,9 @@ Multi-GPU drop-in for `trace_rays_sampled`: the same fixed-control RK4 sampling
 States/steps agree with `trace_rays_sampled` to fp roundoff (~1 ulp per RHS
 evaluation, ~1e-8 max pixel rel end-to-end; see the header), not bit-for-bit.
 
-The ray list is split into `length(devices)` contiguous parts (kept contiguous for the
-bulk H2D `copyto!`); each part runs on its own CUDA device (`CUDA.device!`) inside an
-`@async` task so both GPUs execute concurrently. `devices` defaults to `select_devices()`.
+The ray list is cut into contiguous `chunk`-ray pieces that the device pool of `devices`
+(a device list or a `DevicePool`; default `default_pool()`) pulls as its workers free up;
+each worker reverses its chunk's trajectories on its own thread.
 `R_em` (default `Inf`, disabled) adds a far-field early-out: once a ray is outbound past
 `R_em` (which must exceed the emission support of the consuming radiation stage) it stops
 logging the vacuum return leg — pass it only when the fluid is known to be confined.
@@ -167,7 +124,7 @@ acceptance before adopting :mixed for a given configuration.
 """
 function trace_rays_gpu(st::KerrSchildCartesian, rays::Vector{SVector{8,T}};
                         C::Real=80.0, escape::Real=1.1e3, R_em::Real=Inf,
-                        nmax::Int=3000, devices=select_devices(), chunk::Int=8192,
+                        nmax::Int=3000, devices=default_pool(), chunk::Int=8192,
                         precision::Symbol=:f64) where {T<:AbstractFloat}
     precision in (:f64, :mixed) ||
         error("trace_rays_gpu: precision must be :f64 or :mixed, got :$precision")
@@ -184,17 +141,9 @@ function trace_rays_gpu(st::KerrSchildCartesian, rays::Vector{SVector{8,T}};
     aT = T(a); r_hT = T(r_h); CT = T(C); escapeT = T(escape); R_emT = T(R_em)
     states = Vector{Vector{SVector{8,Float64}}}(undef, n)
     dls = Vector{Vector{Float64}}(undef, n)
-    nd = length(devices)
-    bounds = [round(Int, n * k / nd) for k in 0:nd]      # balanced contiguous split
-    @sync for di in 1:nd
-        lo = bounds[di] + 1
-        hi = bounds[di+1]
-        dev = devices[di]
-        lo <= hi || continue
-        @async begin
-            CUDA.device!(dev)
-            _trace_part!(states, dls, rays, lo:hi, aT, r_hT, CT, escapeT, R_emT, nmax, chunk)
-        end
+    width = min(chunk, n)
+    foreach_chunk(device_pool(devices), collect(Iterators.partition(1:n, chunk))) do lane, rng
+        _trace_chunk!(states, dls, rays, rng, lane, aT, r_hT, CT, escapeT, R_emT, nmax, width)
     end
     return states, dls
 end

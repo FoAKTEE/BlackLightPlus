@@ -87,6 +87,9 @@ function _block_needs_refinement(I::Matrix{Float64};
     return false
 end
 
+"A refinement block: base-block indices (bi, bj), level l, image-plane origin (a0, b0) and span."
+const AMRBlock = Tuple{Int,Int,Int,Float64,Float64,Float64}
+
 """
     render_amr(cfg, snapshot_path; block=8, max_level=2, polarized=false,
                tracer=trace_rays_sampled, stokes=nothing,
@@ -107,9 +110,12 @@ pair saturates. `tracer` is the phase-1 backend of the default Stokes closure
     stokes(coords::Vector{Tuple{Float64,Float64}}) -> 4 × length(coords) Matrix
 
 rows `I,Q,U,V`; `coords[k] = (α, β)` in the `camera_rays_at` image-plane
-convention. This is the seam for a fused single-pass GPU imager (built over
-`march_rays_gpu_amr`); the snapshot/sampler/coefficient/`tracer` stack is then
-not built, so `snapshot_path` and the plasma config go unused.
+convention, called once per refinement level with every block of the level. The
+snapshot/sampler/coefficient/`tracer` stack is then not built, so `snapshot_path` and
+the plasma config go unused. A device marcher (`AMRStokes`, gpu_amr.jl) may instead
+stream blocks through `stream_blocks!` without level barriers. Blocks are painted and
+tested in parallel threads; the images, level map and ray count do not depend on the
+thread count or on the order in which blocks finish.
 """
 function render_amr(cfg::RunConfig, snapshot_path::AbstractString;
                     block::Int=8, max_level::Int=2, polarized::Bool=false,
@@ -167,63 +173,96 @@ function render_amr(cfg::RunConfig, snapshot_path::AbstractString;
     fov = cam.fov
     px0 = fov / npix0                        # level-0 pixel size
     eff = npix0 * 2^max_level                # effective final resolution
-    imgs = zeros(4, eff, eff)
+    # canvas planes I, Q, U, V in render()'s [iβ, iα] layout; level 0 paints every cell
+    planes = ntuple(_ -> Matrix{Float64}(undef, eff, eff), 4)
     levels = zeros(Int, nb, nb)
-    nrays = 0
+    levels_lock = ReentrantLock()
+    nblocks = Threads.Atomic{Int}(0)
 
     # blacklight scheme: a refined block spawns 4 children, each `block`x`block`
-    # pixels over a quarter of the parent area (pixel size halves per level)
-    struct_area(bi, bj) = (-fov / 2 + (bi - 1) * block * px0,
-                           -fov / 2 + (bj - 1) * block * px0)
-
-    # paint helper: block at level l, origin (a0, b0), pixel size ps, block px I
-    function paint!(S::Array{Float64,3}, a0, b0, vals::Matrix{Float64}, comp::Int,
-                    cell::Int)
-        # cell = canvas cells per block pixel = 2^(max_level - l)
-        # canvas index of block origin
-        ca = round(Int, (a0 + fov / 2) / (fov / eff))
-        cb = round(Int, (b0 + fov / 2) / (fov / eff))
-        bs = size(vals, 1)
-        # canvas uses render()'s I[iβ, iα] layout: β (j / cb) is the FIRST axis
-        @inbounds for i in 1:bs, j in 1:bs, di in 1:cell, dj in 1:cell
-            S[comp, cb + (j-1)*cell + dj, ca + (i-1)*cell + di] = vals[i, j]
-        end
+    # pixels over a quarter of the parent area (pixel size halves per level). `visit`
+    # paints a marched block (columns col+1 : col+block² of S) and returns its children.
+    function visit(blk::AMRBlock, S::AbstractMatrix, col::Int)
+        bi, bj, l, a0, b0, span = blk
+        _paint_block!(planes, S, col, a0, b0, block, 2^(max_level - l), fov, eff)
+        Threads.atomic_add!(nblocks, 1)
+        l < max_level || return AMRBlock[]
+        vals = [S[1, col + (i-1)*block + j] for i in 1:block, j in 1:block]
+        _block_needs_refinement(vals; rel_grad_cut, rel_grad_frac, rel_lapl_cut,
+                                rel_lapl_frac, abs_grad_cut, abs_grad_count) || return AMRBlock[]
+        @lock levels_lock levels[bj, bi] = max(levels[bj, bi], l + 1)   # [β-block, α-block]
+        half = span / 2
+        return [(bi, bj, l + 1, a0 + da, b0 + db, half)
+                for (da, db) in ((0.0, 0.0), (half, 0.0), (0.0, half), (half, half))]
     end
 
-    # worklist of blocks to render at the current level
-    work = [(bi, bj, 0, struct_area(bi, bj)..., block * px0) for bi in 1:nb, bj in 1:nb][:]
-    while !isempty(work)
-        # coords for ALL blocks at this level in one batch
-        coords = Tuple{Float64,Float64}[]
-        for (bi, bj, l, a0, b0, span) in work
-            ps = span / block
-            for i in 1:block, j in 1:block
-                push!(coords, (a0 + (i - 0.5) * ps, b0 + (j - 0.5) * ps))
-            end
-        end
-        S = stokes_at(coords)
-        nrays += length(coords)
-        next = Tuple{Int,Int,Int,Float64,Float64,Float64}[]
-        for (w, (bi, bj, l, a0, b0, span)) in enumerate(work)
-            base = (w - 1) * block * block
-            vals = [S[1, base + (i-1)*block + j] for i in 1:block, j in 1:block]
-            cellsz = Int(2^(max_level - l))
-            for comp in 1:4
-                vc = [S[comp, base + (i-1)*block + j] for i in 1:block, j in 1:block]
-                paint!(imgs, a0, b0, vc, comp, cellsz)
-            end
-            if l < max_level && _block_needs_refinement(vals; rel_grad_cut, rel_grad_frac,
-                                                        rel_lapl_cut, rel_lapl_frac,
-                                                        abs_grad_cut, abs_grad_count)
-                levels[bj, bi] = max(levels[bj, bi], l + 1)   # [β-block, α-block], like the images
-                half = span / 2
-                for (da, db) in ((0.0, 0.0), (half, 0.0), (0.0, half), (half, half))
-                    push!(next, (bi, bj, l + 1, a0 + da, b0 + db, half))
+    work = AMRBlock[(bi, bj, 0, -fov / 2 + (bi - 1) * block * px0,
+                     -fov / 2 + (bj - 1) * block * px0, block * px0) for bi in 1:nb, bj in 1:nb][:]
+    stream_blocks!(stokes_at, work, block, visit)
+    return (I=planes[1], Q=planes[2], U=planes[3], V=planes[4], levels=levels,
+            nrays=nblocks[] * block * block)
+end
+
+# Paint block pixel (i, j) = S[comp, col + (i-1)*block + j] over its `cell`×`cell` canvas
+# cells; the block's origin (a0, b0) maps to canvas cell offsets (ca, cb).
+function _paint_block!(planes, S, col, a0, b0, block, cell, fov, eff)
+    ca = round(Int, (a0 + fov / 2) / (fov / eff))
+    cb = round(Int, (b0 + fov / 2) / (fov / eff))
+    @inbounds for comp in 1:4
+        P = planes[comp]
+        for i in 1:block, di in 1:cell
+            c = ca + (i - 1) * cell + di
+            for j in 1:block
+                v = S[comp, col + (i - 1) * block + j]
+                for dj in 1:cell
+                    P[cb + (j - 1) * cell + dj, c] = v
                 end
             end
         end
-        work = next
     end
-    return (I=Matrix(imgs[1, :, :]), Q=Matrix(imgs[2, :, :]), U=Matrix(imgs[3, :, :]),
-            V=Matrix(imgs[4, :, :]), levels=levels, nrays=nrays)
+    return nothing
+end
+
+"""
+    stream_blocks!(stokes, blocks, block, visit)
+
+Run the refinement worklist of `render_amr`: march every `AMRBlock` of `blocks`, call
+`visit(blk, S, col)` with its Stokes values in columns `col+1 : col+block²` of the 4-row
+matrix `S`, and march the children `visit` returns, until none remain. This method, for
+a `stokes(coords)` closure, goes level by level: one `stokes` call with every block of
+the level (block-major, pixel (i, j) at (a0 + (i - 0.5) ps, b0 + (j - 0.5) ps), j
+fastest), then the visits in parallel threads, children kept in block order. A device
+marcher adds a method that streams blocks without level barriers. `visit` may run
+concurrently for different blocks.
+"""
+function stream_blocks!(stokes, work::Vector{AMRBlock}, block::Int, visit)
+    while !isempty(work)
+        S = stokes(_level_coords(work, block))
+        work = _visit_level(visit, work, S, block)
+    end
+    return nothing
+end
+
+# Pixel coordinates of every block of a level (block-major, j fastest), filled in parallel.
+function _level_coords(work::Vector{AMRBlock}, block::Int)
+    bb = block * block
+    coords = Vector{Tuple{Float64,Float64}}(undef, length(work) * bb)
+    Threads.@threads for w in eachindex(work)
+        _, _, _, a0, b0, span = work[w]
+        ps = span / block
+        base = (w - 1) * bb
+        @inbounds for i in 1:block, j in 1:block
+            coords[base + (i - 1) * block + j] = (a0 + (i - 0.5) * ps, b0 + (j - 0.5) * ps)
+        end
+    end
+    return coords
+end
+
+# Visit every block of a level in parallel; their children, in block order.
+function _visit_level(visit, work::Vector{AMRBlock}, S, block::Int)
+    kids = Vector{Vector{AMRBlock}}(undef, length(work))
+    Threads.@threads for w in eachindex(work)
+        kids[w] = visit(work[w], S, (w - 1) * block * block)
+    end
+    return reduce(vcat, kids)
 end

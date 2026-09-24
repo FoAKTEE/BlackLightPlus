@@ -25,7 +25,7 @@ above it.
 
 ## Imaging kernels
 
-### `render_gpu_fused(cfg, snapshot; devices=select_devices())`
+### `render_gpu_fused(cfg, snapshot; devices=default_pool())`
 
 Fused single-pass unpolarized imager. Geodesic integration, fluid sampling, and
 radiative transfer run in one kernel, one ray per thread, storing no
@@ -34,7 +34,7 @@ changes fluxes at the percent level. Returns a Stokes $I$ image.
 
 *File:* `src/gpu_image.jl`
 
-### `render_gpu_amr(cfg, snapshot; devices=select_devices())`
+### `render_gpu_amr(cfg, snapshot; devices=default_pool())`
 
 As above, but samples the AthenaK meshblock hierarchy natively on device: a
 dense finest-level leaf-index grid gives an $O(1)$ block locate, followed by
@@ -43,7 +43,7 @@ identical to the host sampler. **Prefer this for production.**
 
 *File:* `src/gpu_amr.jl`
 
-### `render_gpu_amr_polarized(cfg, snapshot; devices=select_devices())`
+### `render_gpu_amr_polarized(cfg, snapshot; devices=default_pool())`
 
 Full IQUV on device with native AMR sampling. Accumulates the segment couplings
 in reverse with a running transmission, so per-ray state is $O(1)$ regardless
@@ -51,6 +51,15 @@ of path length. Reproduces the CPU coherency march bit-for-bit on identical
 trajectories. Returns a Stokes `NamedTuple`.
 
 *File:* `src/gpu_pol.jl`
+
+### `AMRStokes(cfg, snapshot; polarized=false, devices=default_pool())`
+
+Native-AMR device marcher for the `stokes` argument of `render_amr`: refinement blocks
+are streamed through the device pool, rays are made on the device from each block's
+origin and pixel size, and children are queued as soon as their parent is tested, with
+no barrier between levels. Also callable as `stokes(coords)`.
+
+*File:* `src/gpu_amr.jl`
 
 ### `render_analytic_gpu(cfg; source=...)`
 
@@ -79,18 +88,28 @@ construction of Jipole [NaetheMotta2025](@citep).
 
 Monte Carlo spectral synthesis on device. Multi-order scattering is layered,
 not recursive: the host relaunches once per scattering generation. Devices
-take contiguous ranges of global photon ids. Streams are keyed by genealogy
-and bins are exact integer-limb sums, so the output is bitwise independent of
-the device count. `devices` accepts CUDA ordinals or `HostDevice`s (the
-KernelAbstractions CPU backend).
+run chunks of `chunk` (default 2²⁰) contiguous global photon ids on the device pool;
+the host tables are built once per call and uploaded once per device. Streams are
+keyed by genealogy and bins are exact integer-limb sums merged in chunk order, so the
+output is bitwise independent of the device count and the chunking. `devices` accepts
+CUDA ordinals, `HostDevice`s (the KernelAbstractions CPU backend) or a `DevicePool`.
 
 *File:* `src/montecarlo/mc_gpu.jl`
 
-## Device selection
+## Devices and the pool
 
 ### `select_devices()`
 
-Probes for idle CUDA devices and returns their indices. Override by passing
-`devices=[0,1]` to any driver, or by setting `CUDA_VISIBLE_DEVICES` before
-starting Julia. Rays are split across devices in interleaved order so that
-cheap and expensive rays balance.
+Probes for idle CUDA devices and returns their indices.
+
+### `default_pool()`, `device_pool(devices)`, `DevicePool(devices; lanes=2, chunk=65536)`
+
+Every driver takes `devices` as a list (CUDA ordinals or `HostDevice`s) or a
+`DevicePool`. `device_pool(devices)` returns the one persistent pool of a device list;
+`default_pool()` is the pool of `select_devices()`, probed once per session. A pool runs
+`lanes` worker tasks per device and queues the rays in `chunk`-ray chunks that the
+workers pull as they finish, writing each ray's output to its own pixel, so the result
+is bitwise independent of the device count. Snapshots and host grids passed to a driver
+are uploaded once per pool. `close(pool)` stops its workers.
+
+*File:* `src/gpu_pool.jl` (included by the driver files)

@@ -351,3 +351,22 @@ flowchart TD
 | `MG12`, `MG13` | implementation, CPU tolerance tests, register/spill guard (`MG02`) | the throughput non-regression check |
 | `MG14` | audit-guided candidates | the timing decision (keep or revert) |
 | `MG15` | none | fully blocked (needs `MG01` after-numbers) |
+
+## Landed commits and reverts (lane A, CPU-verified, speed unmeasured)
+
+Each node below passed its CPU acceptance on the KA CPU backend (`HostDevice`) and
+`bench/kernel_audit.jl --check`; its ledger row is `preliminary` until the GPU
+acceptance runs. Revert a node with `git revert <SHAs>` in reverse DAG order
+(later nodes build on MG07's pool and MG08's device rays).
+
+| node | commits (revert these) | CPU verification | GPU acceptance to run |
+|---|---|---|---|
+| `MG01` | `43bffa1` | `test/test_bench_lines.jl`; harness exits 0 with one `SKIP` per leg without CUDA; `BLP_BACKEND=cpu` smoke run bitwise 1-vs-2 equal | baseline capture from a `3736b32` worktree, `BLP_OUT=results/blp/multigpu/baseline_3736b32.json` |
+| `MG07` | `bd26470` | `test/test_device_pool.jl`, `test/test_device_invariance.jl` (1/2/3/5 devices, random pools, delays) | 768² unpolarized: non-kernel time ≤ 5% of T₂, S₂ ≥ 1.85, output == baseline |
+| `MG08` | `0610b31`, `d25e2e6` (audit rows) | `test/test_device_rays.jl` (device rays `isequal` host rays; images equal) | device rays ≤ 2 ulp; ray gen + upload ≤ 0.5% of frame; 768² S₂ ≥ 1.90 |
+| `MG09` | `41743a1` | `test/test_device_schedule.jl` (ρ = 0.95 / 0.80; order invariance; `:mixed` == splice) | kernel-busy ≥ 97%; `:mixed` 768² S₂ ≥ 1.90; tail < 3% of T₂ |
+| `MG10` | `4f5f1e3` | `test/test_device_amr.jl` (bitwise == level-synchronous driver); `bench/bench_amr_host.jl` 9.3–9.6× at 16 threads | production AMR deck S₂ ≥ 1.85 (`amr_driver_pol` leg, streamed) |
+| `MG11` | `c4895d2` | MC-on-pool set in `test/test_device_invariance.jl`; `test/test_mc_exact.jl` | Ns = 1e7: thin S₂ ≥ 1.90, scatter S₂ ≥ 1.85, 1-vs-2 GPU equal |
+
+Kernel signatures are unchanged by these nodes; the only new kernel is
+`_camray_kernel!` (MG08).

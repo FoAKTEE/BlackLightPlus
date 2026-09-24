@@ -26,7 +26,7 @@ using BlackLightPlus: MCRng, mc_uniform, sample_direction,
                     HotcrossTable, scatter_superphoton, bias_func, ScatterResult
 using BlackLightPlus.Constants: ME, CL, HPL
 
-# Device handle seam (HostDevice, _device!, _backend, _upload) lives in gpu_image.jl.
+# Device handles, select_devices and the DevicePool runtime (gpu_pool.jl) come with gpu_image.jl.
 @isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "gpu_image.jl"))
 
 # CPU-side constants, referenced (not re-typed) so the kernels can never drift
@@ -34,16 +34,19 @@ using BlackLightPlus.Constants: ME, CL, HPL
 const _MCM = BlackLightPlus.MonteCarlo
 const _XSLOT = _MCM.XSUM_NSLOT
 
-# ---------------------------------------------------------------- multi-device split
-# Device `di` of `ndev` launches the contiguous global primary ids
-# `first:first+n-1`; the ranges tile `1:N_gen`. A photon's stream depends on its
-# global id only, so the union of streams is the same for every `ndev`.
-_mc_device_shares(N_gen::Integer, ndev::Integer) =
-    [(first = div((di - 1) * N_gen, ndev) + 1,
-      n = div(di * N_gen, ndev) - div((di - 1) * N_gen, ndev)) for di in 1:ndev]
+# ---------------------------------------------------------------- pool split
+# Share `k` of `nparts` is the contiguous global primary ids `first:first+n-1`; the
+# shares tile `1:N_gen`. A photon's stream depends on its global id only, so the union of
+# streams, and the exact-sum output, is the same for every split.
+_mc_shares(N_gen::Integer, nparts::Integer) =
+    [(first = div((k - 1) * N_gen, nparts) + 1,
+      n = div(k * N_gen, nparts) - div((k - 1) * N_gen, nparts)) for k in 1:nparts]
 
-# Device handles of a driver call: `devices` (CUDA ordinals or HostDevices) or `[device]`.
-_mc_devlist(device, devices) = devices === nothing ? Any[device] : collect(Any, devices)
+# The work items of a run on the device pool: shares of at most `chunk` global ids.
+_mc_chunks(N_gen::Integer, chunk::Integer) = _mc_shares(N_gen, cld(N_gen, chunk))
+
+# The device pool of a driver call: `devices` (a list or a DevicePool) or `[device]`.
+_mc_pool(device, devices) = device_pool(devices === nothing ? Any[device] : devices)
 
 # Launch `kern` over `n` items with an optional workgroup size.
 function _mc_launch(kern, wgs, n::Int, args...)
@@ -71,43 +74,6 @@ end
     end
     return nothing
 end
-
-# ---------------------------------------------------------------- device selection
-if !@isdefined(select_devices)
-"""
-    select_devices(candidates=[0,1]; util_threshold=15, min_free_gb=8) -> Vector{Int}
-
-Probe each visible CUDA device in `candidates` and return the subset that is
-idle enough: free memory >= `min_free_gb` GB and (when NVML is available)
-compute utilization <= `util_threshold` %. Always returns at least one device.
-Definition is guarded so this file stays self-contained alongside gpu_image.jl.
-"""
-function select_devices(candidates = [0, 1]; util_threshold::Real = 15, min_free_gb::Real = 8)
-    vis = try
-        filter(d -> 0 <= d < CUDA.ndevices(), candidates)
-    catch
-        return collect(candidates)
-    end
-    isempty(vis) && return collect(candidates)
-    idle = Int[]
-    for d in vis
-        ok = try
-            CUDA.device!(d)
-            free, _ = CUDA.memory_info()
-            u = try
-                Float64(CUDA.NVML.utilization_rates(CUDA.NVML.Device(CUDA.uuid(CUDA.CuDevice(d)))).compute) * 100.0
-            catch
-                -1.0
-            end
-            (free / 1024^3 >= min_free_gb) && (u < 0 || u <= util_threshold)
-        catch
-            false
-        end
-        ok && push!(idle, d)
-    end
-    return isempty(idle) ? vis[1:1] : idle
-end
-end # @isdefined select_devices
 
 # ---------------------------------------------------------------- device absorption rate
 # Device twin of track.jl `_nu_alpha` for the uniform flat sphere (static fluid,
@@ -254,9 +220,11 @@ end
 # One-zone weight table, launch count and generation envelope of the sphere
 # run — identical to `mc_spectrum` / `mc_spectrum_scatter` — plus the
 # position-independent emission tetrad. Built once per driver call and shared
-# read-only by every device.
+# read-only by every device; `_MC_TABLE_BUILDS` counts the builds.
+const _MC_TABLE_BUILDS = Threads.Atomic{Int}(0)
 function _mc_sphere_tables(model::SphereModel, Ns::Real, nu_min::Real, nu_max::Real,
                            n_esamp::Integer, tabulated_gen::Bool)
+    Threads.atomic_add!(_MC_TABLE_BUILDS, 1)
     band = log(nu_max) - log(nu_min)
     zone = sphere_zone(model, SVector(0.0, 0.0, 0.0, 0.0))
     wgt = build_weight_table([zone], Float64(Ns) / band;
@@ -295,65 +263,75 @@ _mc_dev_bins(backend, nth::Int, neb::Int) =
      w = KernelAbstractions.zeros(backend, Int64, _XSLOT, nth, neb),
      wE = KernelAbstractions.zeros(backend, Int64, _XSLOT, nth, neb))
 
-# Download device bins and add them into the host `ExactSpectrum` (integer adds).
+# Host copy of device bins (on the worker that ran the chunk).
+_mc_host_bins(bins) = (cnt = Array(bins.cnt), w = Array(bins.w), wE = Array(bins.wE))
+
+# Add host bins into the `ExactSpectrum` (integer adds).
 function _mc_add_bins!(xs, bins)
-    xs.count .+= Array(bins.cnt)
-    xs.sumw .+= Array(bins.w)
-    xs.sumwE .+= Array(bins.wE)
+    xs.count .+= bins.cnt
+    xs.sumw .+= bins.w
+    xs.sumwE .+= bins.wE
     return xs
+end
+
+# The host tables on every device of the pool, uploaded once per call, concurrently:
+# device => (lwgt, lint, logsig) (`nothing` for an absent table).
+function _mc_upload_tables(pool, tabs, logsigma = nothing)
+    up(backend, x) = x === nothing ? nothing : _upload(backend, x)
+    ups = foreach_device(pool) do lane
+        (lwgt = up(lane.backend, tabs.wgt.lwgt),
+         lint = up(lane.backend, tabs.gt === nothing ? nothing : tabs.gt.ljnu),
+         logsig = up(lane.backend, logsigma))
+    end
+    return Dict(zip(pool.devices, ups))
 end
 
 # ---------------------------------------------------------------- host driver
 """
     mc_spectrum_gpu(model::SphereModel, Ns; device=0, devices=nothing, workgroupsize=nothing,
-                    seed=0x5eed5eed, nu_min=1e8, nu_max=1e16, n_esamp=400,
+                    chunk=2^20, seed=0x5eed5eed, nu_min=1e8, nu_max=1e16, n_esamp=400,
                     n_ebins=200, n_thbins=6) -> Spectrum
 
 Device thin-sphere Monte Carlo, the twin of `mc_spectrum` (mc_cpu.jl): builds
 the same one-zone weight table and target count `N_gen` once on the host, so
 packet count and Philox streams match the CPU path photon-for-photon, launches
 `_mc_thin_kernel!` and rounds the exact bins into the returned `Spectrum`.
-`devices` (CUDA ordinals or `HostDevice`s) splits the global ids `1:N_gen` into
-contiguous ranges, one per device; the output is bitwise independent of the
-device count and equals the single-device run.
+`devices` (a list of CUDA ordinals or `HostDevice`s, or a `DevicePool`; default
+`[device]`) runs the global ids `1:N_gen` as `chunk`-id work items on the device pool;
+each chunk's exact partial bins are merged in chunk order, so the output is bitwise
+independent of the device count and the chunking and equals the single-device run.
 """
 function mc_spectrum_gpu(model::SphereModel, Ns::Real;
                          device = 0, devices = nothing, workgroupsize = nothing,
-                         seed::Integer = 0x5eed5eed,
+                         chunk::Integer = 2^20, seed::Integer = 0x5eed5eed,
                          nu_min::Real = _MCM._MC_NU_MIN_DEFAULT,
                          nu_max::Real = _MCM._MC_NU_MAX_DEFAULT,
                          n_esamp::Integer = _MCM._MC_N_ESAMP_DEFAULT,
                          n_ebins::Integer = 200, n_thbins::Integer = 6,
                          tabulated_gen::Bool = false)
-    devs = _mc_devlist(device, devices)
+    pool = _mc_pool(device, devices)
     tabs = _mc_sphere_tables(model, Ns, nu_min, nu_max, n_esamp, tabulated_gen)
     xs = _MCM.ExactSpectrum(; nu_min = nu_min, nu_max = nu_max,
                             n_ebins = n_ebins, n_thbins = n_thbins)
     p = _mc_thin_params(model, tabs, xs, seed)
-    shares = _mc_device_shares(tabs.N_gen, length(devs))
-    parts = Vector{Any}(undef, length(devs))
-    @sync for di in eachindex(devs)
-        @async parts[di] = _mc_thin_part(devs[di], tabs, p, shares[di],
-                                         Int(n_thbins), Int(n_ebins), workgroupsize)
+    dtabs = _mc_upload_tables(pool, tabs)
+    chunks = _mc_chunks(tabs.N_gen, chunk)
+    parts = Vector{Any}(undef, length(chunks))
+    foreach_chunk(pool, eachindex(chunks)) do lane, c
+        parts[c] = _mc_thin_chunk(lane, dtabs[lane.dev], p, chunks[c], Int(n_thbins),
+                                  Int(n_ebins), workgroupsize)
     end
-    for part in parts
-        part === nothing || _mc_add_bins!(xs, part)
-    end
+    foreach(part -> _mc_add_bins!(xs, part), parts)
     return Spectrum(xs)
 end
 
-# One device's share of the thin run; returns its device bins (or `nothing`).
-function _mc_thin_part(dev, tabs, p, share, nth::Int, neb::Int, wgs)
-    share.n > 0 || return nothing
-    _device!(dev)
-    backend = _backend(dev)
-    lwgt_d = _upload(backend, tabs.wgt.lwgt)
-    lint_d = tabs.gt === nothing ? nothing : _upload(backend, tabs.gt.ljnu)
-    bins = _mc_dev_bins(backend, nth, neb)
-    _mc_launch(_mc_thin_kernel!(backend), wgs, share.n,
-               bins.w, bins.wE, bins.cnt, lwgt_d, lint_d, p, share.first - 1, share.n)
-    KernelAbstractions.synchronize(backend)
-    return bins
+# One chunk of the thin run on `lane`: its global ids `share`; returns host bins.
+function _mc_thin_chunk(lane, dt, p, share, nth::Int, neb::Int, wgs)
+    bins = _mc_dev_bins(lane.backend, nth, neb)
+    _mc_launch(_mc_thin_kernel!(lane.backend), wgs, share.n,
+               bins.w, bins.wE, bins.cnt, dt.lwgt, dt.lint, p, share.first - 1, share.n)
+    KernelAbstractions.synchronize(lane.backend)
+    return _mc_host_bins(bins)
 end
 
 # ======================================================================================
@@ -518,7 +496,7 @@ end
 
 """
     mc_spectrum_gpu(model::SphereModel, table::HotcrossTable, Ns; device=0, devices=nothing,
-                    workgroupsize=nothing, seed=0x5ca77e5,
+                    workgroupsize=nothing, chunk=2^20, seed=0x5ca77e5,
                     gen_nu_min=1e8, gen_nu_max=1e13, spec_nu_min=1e8, spec_nu_max=1e17,
                     n_esamp=400, n_ebins=140, n_thbins=6, max_scatt=3,
                     capacity_factor=0.5) -> ScatterResult
@@ -530,9 +508,10 @@ scatter loop (primary kernel over the seeds, `_mc_scatter_layer_kernel!` over
 each layer's buffered children for orders 1..max_scatt), returning a
 `ScatterResult` directly comparable to the CPU result. `capacity_factor` sizes
 the initial child buffer (at least `min_capacity`); a launch that overflows it
-is rerun with the exact size. `devices` (CUDA ordinals or `HostDevice`s) splits the seeds into
-contiguous global-id ranges; spectra, children and diagnostics are bitwise
-independent of the device count.
+is rerun with the exact size. `devices` (a list or a `DevicePool`) runs the seeds as
+`chunk`-id work items on the device pool, each chunk through all its scattering layers;
+spectra, children and diagnostics are merged exactly in chunk order and are bitwise
+independent of the device count and the chunking.
 """
 function mc_spectrum_gpu(model::SphereModel, table::HotcrossTable, Ns::Real; kw...)
     res, _ = _mc_scatter_gpu(model, table, Ns; kw...)
@@ -548,7 +527,7 @@ stream identity `id` (for invariance tests); otherwise `children === nothing`.
 """
 function _mc_scatter_gpu(model::SphereModel, table::HotcrossTable, Ns::Real;
                          device = 0, devices = nothing, workgroupsize = nothing,
-                         seed::Integer = 0x5ca77e5,
+                         chunk::Integer = 2^20, seed::Integer = 0x5ca77e5,
                          gen_nu_min::Real = 1.0e8, gen_nu_max::Real = 1.0e13,
                          spec_nu_min::Real = 1.0e8, spec_nu_max::Real = 1.0e17,
                          n_esamp::Integer = _MCM._MC_N_ESAMP_DEFAULT,
@@ -556,7 +535,7 @@ function _mc_scatter_gpu(model::SphereModel, table::HotcrossTable, Ns::Real;
                          max_scatt::Integer = 3, capacity_factor::Real = 0.5,
                          min_capacity::Integer = 4096,
                          tabulated_gen::Bool = false, collect_children::Bool = false)
-    devs = _mc_devlist(device, devices)
+    pool = _mc_pool(device, devices)
     tabs = _mc_sphere_tables(model, Ns, gen_nu_min, gen_nu_max, n_esamp, tabulated_gen)
     K = Int(max_scatt)
     layout = _MCM.MCStreamLayout(tabs.N_gen, _MCM._MC_TRACK_MAX_STEPS, K)
@@ -564,20 +543,20 @@ function _mc_scatter_gpu(model::SphereModel, table::HotcrossTable, Ns::Real;
                                n_ebins = n_ebins, n_thbins = n_thbins)
     xorders = [mkx() for _ in 0:K]
     p = _mc_scatter_params(model, tabs, xorders[1], seed, K, layout)
-    shares = _mc_device_shares(tabs.N_gen, length(devs))
-    parts = Vector{Any}(undef, length(devs))
-    @sync for di in eachindex(devs)
-        @async parts[di] = _mc_scatter_part(devs[di], tabs, table, p, shares[di], K,
-                                            Int(n_thbins), Int(n_ebins), capacity_factor,
-                                            Int(min_capacity), workgroupsize, collect_children)
+    dtabs = _mc_upload_tables(pool, tabs, table.logsigma)
+    chunks = _mc_chunks(tabs.N_gen, chunk)
+    parts = Vector{Any}(undef, length(chunks))
+    foreach_chunk(pool, eachindex(chunks)) do lane, c
+        parts[c] = _mc_scatter_chunk(lane, dtabs[lane.dev], p, chunks[c], K, Int(n_thbins),
+                                     Int(n_ebins), capacity_factor, Int(min_capacity),
+                                     workgroupsize, collect_children)
     end
 
-    # exact merge over devices: per-order bins, layer diagnostics, child counts
+    # exact merge in chunk order: per-order bins, layer diagnostics, child counts
     diag = _MCM.xsum_zeros(3, K + 1)         # rows: child w, scatter loss, primary w
     nphot = zeros(Int, K + 1)                # photons marched per layer (addend counts)
     children = collect_children ? [Any[] for _ in 1:K] : nothing
     for part in parts
-        part === nothing && continue
         for n in 1:(K + 1)
             _mc_add_bins!(xorders[n], part.bins[n])
         end
@@ -598,19 +577,14 @@ function _mc_scatter_gpu(model::SphereModel, table::HotcrossTable, Ns::Real;
     return res, children
 end
 
-# One device's share of the scattering run: all layers of the seeds
-# `share.first : share.first + share.n - 1`. Returns per-order exact device bins,
-# per-layer exact diagnostics (limbs x 3 x layers, stripes summed), per-layer
-# photon counts and (optionally) the children of every layer.
-function _mc_scatter_part(dev, tabs, table::HotcrossTable, p, share, K::Int,
-                          nth::Int, neb::Int, capacity_factor, min_capacity::Int, wgs,
-                          collect_children::Bool)
-    share.n > 0 || return nothing
-    _device!(dev)
-    backend = _backend(dev)
-    lwgt_d = _upload(backend, tabs.wgt.lwgt)
-    lint_d = tabs.gt === nothing ? nothing : _upload(backend, tabs.gt.ljnu)
-    logsig_d = _upload(backend, table.logsigma)
+# One chunk of the scattering run on `lane`: all layers of the seeds
+# `share.first : share.first + share.n - 1`, with the device tables `dt`. Returns
+# per-order exact host bins, per-layer exact diagnostics (limbs x 3 x layers, stripes
+# summed), per-layer photon counts and (optionally) the children of every layer.
+function _mc_scatter_chunk(lane, dt, p, share, K::Int, nth::Int, neb::Int, capacity_factor,
+                           min_capacity::Int, wgs, collect_children::Bool)
+    backend = lane.backend
+    lwgt_d = dt.lwgt; lint_d = dt.lint; logsig_d = dt.logsig
     bins = [_mc_dev_bins(backend, nth, neb) for _ in 0:K]
     ddiag = [KernelAbstractions.zeros(backend, Int64, _XSLOT, 3, _MC_DIAG_STRIPE) for _ in 0:K]
     ctr = KernelAbstractions.zeros(backend, Int64, 1)
@@ -663,5 +637,5 @@ function _mc_scatter_part(dev, tabs, table::HotcrossTable, p, share, K::Int,
     for n in 1:(K + 1)
         diag[:, :, n] .= dropdims(sum(Array(ddiag[n]); dims = 3); dims = 3)
     end
-    return (bins = bins, diag = diag, nphot = nphot, children = children)
+    return (bins = map(_mc_host_bins, bins), diag = diag, nphot = nphot, children = children)
 end

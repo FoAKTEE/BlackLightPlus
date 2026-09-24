@@ -547,9 +547,11 @@ end
 # ------------------------------------------------------------------------------------
 # (k) DRIVER-THROUGHPUT ENABLERS (KA CPU backend; checks the invariants the drivers
 # rely on). Three host/driver knobs added to the render_gpu_* drivers:
-#  * `order` — march rays in a caller-supplied permutation (e.g. `march_sort_order` by
-#    predicted trip count, so a warp's lanes march similar-length rays). Each ray's march is
-#    independent + deterministic, so gather-in / unpermute-out is BIT-EXACT per ray.
+#  * `order` — queue rays in a caller-supplied permutation (`queue_items`; e.g.
+#    `march_sort_order` by predicted trip count, so a warp's lanes march similar-length
+#    rays). Each ray's march is independent + deterministic and its output lands at its own
+#    index, so any order is BIT-EXACT per ray; below, rays are permuted before a launch
+#    and the outputs unpermuted after it.
 #  * `wg`    — override the kernel workgroupsize. Block size does not enter the march math
 #    (one independent ray per thread, no cross-lane reductions), so the image is bitwise-
 #    invariant to it — a sanity check that the plumbing changed nothing.
@@ -559,13 +561,14 @@ end
 # All drivers hardcode CUDABackend(), so we exercise the SAME kernels + host helpers on the
 # KA CPU backend directly (the pattern of slabs h/j).
 @testset "k: order / wg / rolling-window enablers are bit-exact (KA CPU)" begin
-    # permutation algebra (the exact gather/scatter the drivers apply)
-    v = collect(1:12) .* 1.0; ord = [3, 1, 2, 5, 4, 6, 10, 9, 8, 7, 12, 11]
-    @test _undo_order(_apply_order(v, ord), ord) == v                 # round-trip identity
-    @test _apply_order(v, nothing) === v && _undo_order(v, nothing) === v
-    @test march_sort_order([5, 2, 8, 1]) == [4, 2, 1, 3]              # ascending trip-count sort
-    @test_throws ErrorException _apply_order(v, vcat([1, 1], collect(3:12)))  # not a permutation
-    @test_throws ErrorException _apply_order(v, collect(1:11))                # wrong length
+    # queue order validation (the drivers' `order` argument)
+    ord = [3, 1, 2, 5, 4, 6, 10, 9, 8, 7, 12, 11]
+    @test queue_items(nothing, 12) == 1:12 && queue_items(ord, 12) === ord
+    @test march_sort_order([5, 2, 8, 1]) == [3, 1, 2, 4]              # longest trip count first
+    @test_throws ErrorException queue_items(vcat([1, 1], collect(3:12)), 12)  # not a permutation
+    @test_throws ErrorException queue_items(collect(1:11), 12)                # wrong length
+    permute(v, o) = v[o]                                         # rays in queue order
+    unpermute(v, o) = (w = similar(v); w[o] = v; w)              # outputs back per ray
 
     m_bh = 6.2e9 * 1.989e33; L = BlackLightPlus.Constants.GNEWT * m_bh / BlackLightPlus.Constants.CL^2
     cfgk = RunConfig(bh_a = 0.9375, m_bh_cgs = m_bh, mass_scale_cgs = 1.0e-21 * L^3,
@@ -609,10 +612,10 @@ end
     @test ruf(64, raysk) == ubase && ruf(128, raysk) == ubase    # wg bitwise-invariant (unpol)
     @test rpf(64, raysk) == pbase                                # wg bitwise-invariant (pol, vs pin 96)
     for order in twoperms(nrk)                                   # arbitrary-permutation reassembly
-        @test _undo_order(ruf(nothing, _apply_order(raysk, order)), order) == ubase
-        @test _undo_order(rpf(96,      _apply_order(raysk, order)), order) == pbase
+        @test unpermute(ruf(nothing, permute(raysk, order)), order) == ubase
+        @test unpermute(rpf(96,      permute(raysk, order)), order) == pbase
     end
-    @test _undo_order(ruf(64, _apply_order(raysk, reverse(1:nrk))), reverse(1:nrk)) == ubase  # order+wg combined
+    @test unpermute(ruf(64, permute(raysk, reverse(1:nrk))), reverse(1:nrk)) == ubase  # order+wg combined
 
     # ---- native-AMR deck (tiny one-block snapshot): _famr_kernel! + _gpol_amr_kernel!
     snapk = tiny_snap()
@@ -633,8 +636,8 @@ end
     @test any(!=(0.0), abase)                                    # AMR deck emits
     @test rfa(64, raysA) == abase && rpa(64, raysA) == apbase    # wg bitwise-invariant (AMR)
     for order in (reverse(1:nrA), sortperm([cos(2.0 * i) for i in 1:nrA]))
-        @test _undo_order(rfa(nothing, _apply_order(raysA, order)), order) == abase
-        @test _undo_order(rpa(96,      _apply_order(raysA, order)), order) == apbase
+        @test unpermute(rfa(nothing, permute(raysA, order)), order) == abase
+        @test unpermute(rpa(96,      permute(raysA, order)), order) == apbase
     end
 
     # ---- rolling window advance: promote the uploaded upper frame (device-buffer identity;
