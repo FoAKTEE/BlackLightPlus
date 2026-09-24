@@ -105,13 +105,19 @@ end
 end
 
 """
-    AthenaKSnapshot(filename)
+    AthenaKSnapshot(filename; gamma=nothing)
 
 Load an AthenaK `.athdf` snapshot: reads `uov`/`B` primitives, cell centres
 (`x1v`,`x2v`,`x3v`), cell faces (`x1f`,`x2f`,`x3f`), `Levels`, and
 `LogicalLocations` via HDF5.jl. Stores the `(ni,nj,nk,nmb,8)` primitive block,
 per-meshblock face-extent bounding boxes, and per-block first cell centre +
 spacing for the clamped-trilinear sampler.
+
+Two `uov` layouts are read: `dens velx vely velz eint` (stored as is) and the
+`mhd_w_bcc` layout `dens velx vely velz press [temperature]`, for which `gamma` is
+required: `eint = press/(gamma-1)` in Float64, rounded once to Float32, the
+temperature column is dropped and non-finite cells are zeroed, as in
+[`athenak_bin_snapshot`](@ref).
 """
 struct AthenaKSnapshot
     data::Array{Float32,5}                 # (ni, nj, nk, nmb, 8) == [i,j,k,mb,prim]
@@ -136,7 +142,7 @@ AthenaKSnapshot(data, ext_lo, ext_hi, x_left, dx, levels, logical_locations,
     AthenaKSnapshot(data, ext_lo, ext_hi, x_left, dx, levels, logical_locations,
                     variable_names, ni, nj, nk, nmb, LeafCache())
 
-function AthenaKSnapshot(filename::AbstractString)
+function AthenaKSnapshot(filename::AbstractString; gamma::Union{Nothing,Real}=nothing)
     uov, B, x1v, x2v, x3v, x1f, x2f, x3f, levels, loclocs, varnames =
         h5open(filename, "r") do h
             (read(h["uov"]), read(h["B"]),
@@ -146,12 +152,15 @@ function AthenaKSnapshot(filename::AbstractString)
              read_attribute(h, "VariableNames"))
         end
 
-    data = cat(uov, B; dims=5)             # (ni,nj,nk,nmb,8), prim axis == VariableNames
-    ni, nj, nk, nmb, _ = size(data)
-
     names = String.(varnames)
-    Tuple(names) == _PRIM_NAMES ||
-        error("unexpected AthenaK primitive order $names (expected $(collect(_PRIM_NAMES)))")
+    if Tuple(names) == _PRIM_NAMES
+        data = cat(uov, B; dims=5)         # (ni,nj,nk,nmb,8), prim axis == VariableNames
+    else
+        data = _athdf_press_layout(uov, B, names, gamma, filename)
+    end
+    uov = B = nothing
+    ni, nj, nk, nmb, _ = size(data)
+    names = collect(String, _PRIM_NAMES)
 
     ext_lo = [SVector(x1f[1, m],   x2f[1, m],   x3f[1, m])   for m in 1:nmb]
     ext_hi = [SVector(x1f[end, m], x2f[end, m], x3f[end, m]) for m in 1:nmb]
@@ -162,6 +171,37 @@ function AthenaKSnapshot(filename::AbstractString)
 
     return AthenaKSnapshot(data, ext_lo, ext_hi, x_left, dx,
                            Int.(levels), Int.(loclocs), names, ni, nj, nk, nmb)
+end
+
+# mhd_w_bcc athdf layout (`use_e = true` dumps): uov = dens velx vely velz press
+# [temperature], B = bcc1..3. Returns the (ni,nj,nk,nmb,8) `_PRIM_NAMES` block with
+# eint = press/(gamma-1) (Float64, one Float32 rounding) and non-finite cells zeroed.
+function _athdf_press_layout(uov, B, names, gamma, filename)
+    want = ("dens", "velx", "vely", "velz", "press")
+    (length(names) >= 8 && Tuple(names[1:5]) == want &&
+     Tuple(names[end-2:end]) == ("bcc1", "bcc2", "bcc3") &&
+     all(==("temperature"), names[6:end-3])) ||
+        error("unexpected AthenaK primitive order $names (expected " *
+              "$(collect(_PRIM_NAMES)) or dens velx vely velz press [temperature] bcc1 bcc2 bcc3)")
+    gamma === nothing &&
+        error("AthenaKSnapshot($filename): uov stores press, so the adiabatic index is " *
+              "needed for eint = press/(gamma-1); pass gamma=...")
+    gm1 = Float64(gamma) - 1.0
+    ni, nj, nk, nmb, _ = size(uov)
+    data = Array{Float32,5}(undef, ni, nj, nk, nmb, 8)
+    nbad = Threads.Atomic{Int}(0)
+    Threads.@threads for m in 1:nmb
+        bad = 0
+        @inbounds for prim in 1:8, k in 1:nk, j in 1:nj, i in 1:ni
+            val = prim <= 5 ? uov[i, j, k, m, prim] : B[i, j, k, m, prim - 5]
+            isfinite(val) || (val = 0.0f0; bad += 1)
+            data[i, j, k, m, prim] = prim == 5 ? Float32(Float64(val) / gm1) : val
+        end
+        bad > 0 && Threads.atomic_add!(nbad, bad)
+    end
+    nbad[] > 0 && @warn "AthenaKSnapshot: zeroed $(nbad[]) non-finite cell values in " *
+                        "$filename (zeroed cells emit nothing)" maxlog=1
+    return data
 end
 
 # Owning meshblock for CKS position (x,y,z), linear-scan reference: strict `<` low

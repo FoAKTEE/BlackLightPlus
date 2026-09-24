@@ -12,9 +12,9 @@ function _camera_up(cam::PlaneParallelCamera)
     return SVector(0.0, -cos(i), 0.0, sin(i))
 end
 
-"Load an AthenaK snapshot by extension: `.bin` via `athenak_bin_snapshot` (needs γ for press→eint), else the HDF5 `.athdf` loader."
+"Load an AthenaK snapshot by extension: `.bin` via `athenak_bin_snapshot`, else the HDF5 `.athdf` loader; γ converts a stored press to eint in either."
 _load_athenak(path::AbstractString, γ) =
-    endswith(path, ".bin") ? athenak_bin_snapshot(path; gamma=γ) : AthenaKSnapshot(path)
+    endswith(path, ".bin") ? athenak_bin_snapshot(path; gamma=γ) : AthenaKSnapshot(path; gamma=γ)
 
 """
 Shared phase-1 setup: spacetime → camera → threaded geodesics → snapshot →
