@@ -56,20 +56,15 @@ BlackLightPlus.Geodesics.inverse_metric(sp::DevADMParams, X::SVector{4}) = inv(_
 
 """
     upload_adm(st::ADMGridSpacetime, devices; alpha_min=st.alpha_min)
-        -> Dict{Int,DevADMParams}
+        -> Dict{device,DevADMParams}
 
-One `DevADMParams` per CUDA device (the (10,nx,ny,nz) field array uploaded per device).
-`alpha_min` overrides the capture lapse (e.g. the z4c shadow figure uses 0.65 on a
-grid built with 0.15).
+One `DevADMParams` per device of `devices` (a list or a `DevicePool`; the (10,nx,ny,nz)
+field array uploaded concurrently, once per device). `alpha_min` overrides the capture
+lapse (e.g. the z4c shadow figure uses 0.65 on a grid built with 0.15).
 """
-function upload_adm(st::ADMGridSpacetime, devices; alpha_min::Real = st.alpha_min)
-    d = Dict{eltype(devices),Any}()
-    for dev in devices
-        _device!(dev)
-        d[dev] = DevADMParams(st, _upload(_backend(dev), st.data); alpha_min = alpha_min)
-    end
-    return d
-end
+upload_adm(st::ADMGridSpacetime, devices; alpha_min::Real = st.alpha_min) =
+    Dict{Any,Any}(dev => DevADMParams(st, d; alpha_min = alpha_min)
+                  for (dev, d) in upload_per_device(st.data, devices))
 
 # ---------------------------------------------------------------- march control
 # Per-spacetime fixed-control march control: (captured, step h, escape-test radius);
@@ -329,8 +324,9 @@ end
     upload_amr_scan(snap::AthenaKSnapshot, devices) -> DeviceAMRScanGrid
 
 Permute the reader's primitives to the coalesced `(8,ni,nj,nk,nmb)` layout and upload
-fluid + per-block geometry (face bounds for the scan locate) to each device. Works for
-ANY mesh (no leaf-table requirement); reuse across renders.
+fluid + per-block geometry (face bounds for the scan locate) to each device of `devices`
+(a list or a `DevicePool`). Works for ANY mesh (no leaf-table requirement); reuse across
+renders.
 """
 function upload_amr_scan(snap::AthenaKSnapshot, devices)
     blk_host  = permutedims(snap.data, (5, 1, 2, 3, 4))    # (8, ni, nj, nk, nmb)
@@ -338,11 +334,11 @@ function upload_amr_scan(snap::AthenaKSnapshot, devices)
     dxb_host  = reduce(hcat, snap.dx)
     lo_host   = reduce(hcat, snap.ext_lo)
     hi_host   = reduce(hcat, snap.ext_hi)
-    dblk = _upload_per_device(blk_host, devices)
-    dxl  = _upload_per_device(xlft_host, devices)
-    ddx  = _upload_per_device(dxb_host, devices)
-    dlo  = _upload_per_device(lo_host, devices)
-    dhi  = _upload_per_device(hi_host, devices)
+    dblk = upload_per_device(blk_host, devices)
+    dxl  = upload_per_device(xlft_host, devices)
+    ddx  = upload_per_device(dxb_host, devices)
+    dlo  = upload_per_device(lo_host, devices)
+    dhi  = upload_per_device(hi_host, devices)
     return DeviceAMRScanGrid(dblk, dxl, ddx, dlo, dhi, snap.ni, snap.nj, snap.nk, snap.nmb)
 end
 
@@ -415,44 +411,27 @@ end
 
 # ---------------------------------------------------------------- host drivers
 # The per-device spacetime parameter: isbits spacetimes are shared as-is; an
-# ADMGridSpacetime is uploaded per device (or pass the `upload_adm` Dict directly).
-_gsp_per_device(st, devices) = Dict{eltype(devices),Any}(dev => st for dev in devices)
-_gsp_per_device(st::ADMGridSpacetime, devices) = upload_adm(st, devices)
-_gsp_per_device(d::Dict, devices) = d
+# ADMGridSpacetime is uploaded once per pool (or pass the `upload_adm` Dict directly).
+_gsp_per_device(st, pool) = Dict{Any,Any}(dev => st for dev in pool.devices)
+_gsp_per_device(st::ADMGridSpacetime, pool) =
+    resident(() -> upload_adm(st, pool), pool, st.data, :adm)
+_gsp_per_device(d::Dict, pool) = d
 
-function _gsp_part!(img, rays, rng, sg::DeviceAMRScanGrid, dev, sp, gp, C, escape,
-                    R_em, nmax, wg)
-    backend = KernelAbstractions.get_backend(sg.dev_blk[dev])
-    kern = _gsp_amr_kernel!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, Float64, cnt)
-    _kern_launch!(kern, wg, cnt, outd, y0d, sg.dev_blk[dev], sg.dev_xlft[dev],
-                  sg.dev_dxb[dev], sg.dev_lo[dev], sg.dev_hi[dev], sp, gp, C, escape,
-                  R_em, Int(nmax), sg.ni, sg.nj, sg.nk, sg.nmb, cnt)
-    KernelAbstractions.synchronize(backend)
-    img[rng] .= Array(outd)
-    return nothing
-end
+# The scan-locate fluid of a driver call: as given, or uploaded once per pool.
+_resident_scan(pool, sg::DeviceAMRScanGrid) = sg
+_resident_scan(pool, snap::AthenaKSnapshot) =
+    resident(() -> upload_amr_scan(snap, pool), pool, snap.data, :scan)
 
-function _gsp_pol_part!(out, rays, rng, sg::DeviceAMRScanGrid, dev, sp, gp, C, escape,
-                        R_em, nmax, wg)
-    backend = KernelAbstractions.get_backend(sg.dev_blk[dev])
-    kern = _gsp_pol_amr_kernel!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-    _kern_launch!(kern, wg, cnt, outd, y0d, sg.dev_blk[dev], sg.dev_xlft[dev],
-                  sg.dev_dxb[dev], sg.dev_lo[dev], sg.dev_hi[dev], sp, gp, C, escape,
-                  R_em, Int(nmax), sg.ni, sg.nj, sg.nk, sg.nmb, cnt)
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
-end
+# Launch of a generic-spacetime scan-locate kernel (unpolarized or polarized) for a chunk.
+_gsp_launch(kern, sg, sps, gp, C, escape, R_em, nmax, wg) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(kern(lane.backend), wg, n, outd, y0d, sg.dev_blk[lane.dev],
+                  sg.dev_xlft[lane.dev], sg.dev_dxb[lane.dev], sg.dev_lo[lane.dev],
+                  sg.dev_hi[lane.dev], sps[lane.dev], gp, C, escape, R_em, Int(nmax),
+                  sg.ni, sg.nj, sg.nk, sg.nmb, n)
 
 """
     march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays; polarized=false,
-                             devices=select_devices(), nmax=cfg.max_steps, C=80,
+                             devices=default_pool(), nmax=cfg.max_steps, C=80,
                              R_em=Inf, wg=<pol _GPOL_WG / unpol nothing>)
         -> Vector{Float64} (unpol)  |  Matrix{Float64}(4, length(rays)) (polarized)
 
@@ -462,33 +441,25 @@ spacetime `st` (`SuperposedKerrSchild`, `ADMGridSpacetime`, or a pre-uploaded
 geodesic step is the CPU engine in-kernel (bit-compatible with `trace_rays_sampled`).
 `polarized=false` returns Stokes I as a flat `Vector{Float64}`; `polarized=true` runs
 the full-IQUV reverse-Mueller march and returns the `4 × length(rays)` Stokes matrix
-(rows I,Q,U,V). `snap_or_scangrid`: `AthenaKSnapshot` (uploaded internally) or
-`DeviceAMRScanGrid` (reused). Float64 only.
+(rows I,Q,U,V). `snap_or_scangrid`: `AthenaKSnapshot` (uploaded once per device pool)
+or `DeviceAMRScanGrid` (reused). Float64 only.
 """
 function march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays::Vector{SVector{8,Float64}};
                                   polarized::Bool = false,
-                                  devices = select_devices(), nmax::Int = cfg.max_steps,
+                                  devices = default_pool(), nmax::Int = cfg.max_steps,
                                   C::Real = 80, R_em::Real = Inf, wg = :default)
     wg === :default && (wg = polarized ? _GPOL_WG : nothing)
-    sg = snap_or_scangrid isa DeviceAMRScanGrid ? snap_or_scangrid :
-         upload_amr_scan(snap_or_scangrid, devices)
-    sps = _gsp_per_device(st, devices)
+    pool = device_pool(devices)
+    sg = _resident_scan(pool, snap_or_scangrid)
+    sps = _gsp_per_device(st, pool)
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     nrays = length(rays)
-    nd = length(devices)
     if polarized
-        gp = _gpol_params(cfg)
         out = Vector{SVector{4,Float64}}(undef, nrays)
-        @sync for di in 1:nd
-            idx = di:nd:nrays; dev = devices[di]
-            isempty(idx) && continue
-            @async begin
-                _device!(dev)
-                _gsp_pol_part!(out, rays, idx, sg, dev, sps[dev], gp, Cf, escape,
-                               Float64(R_em), nmax, wg)
-            end
-        end
+        march!((out,), pool, [MarchPart(1:nrays, HostRays(rays),
+            _gsp_launch(_gsp_pol_amr_kernel!, sg, sps, _gpol_params(cfg), Cf, escape,
+                        Float64(R_em), nmax, wg))])
         M = Matrix{Float64}(undef, 4, nrays)
         @inbounds for j in 1:nrays
             o = out[j]
@@ -496,23 +467,16 @@ function march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays::Vector{SVecto
         end
         return M
     end
-    gp = _gimg_params(cfg)
     img = Vector{Float64}(undef, nrays)
-    @sync for di in 1:nd
-        idx = di:nd:nrays; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _gsp_part!(img, rays, idx, sg, dev, sps[dev], gp, Cf, escape,
-                       Float64(R_em), nmax, wg)
-        end
-    end
+    march!((img,), pool, [MarchPart(1:nrays, HostRays(rays),
+        _gsp_launch(_gsp_amr_kernel!, sg, sps, _gimg_params(cfg), Cf, escape, Float64(R_em),
+                    nmax, wg))])
     return img
 end
 
 """
     render_gpu_spacetime(cfg, st, snap_or_scangrid; polarized=false,
-                         devices=select_devices(), nmax=cfg.max_steps, C=80,
+                         devices=default_pool(), nmax=cfg.max_steps, C=80,
                          R_em=Inf, wg=<pol _GPOL_WG / unpol nothing>)
         -> Matrix{Float64} (unpol)  |  NamedTuple (I,Q,U,V) (polarized)
 
@@ -524,7 +488,7 @@ layout; `polarized=true` returns the `(I, Q, U, V)` NamedTuple of npix×npix mat
 (full-IQUV reverse-Mueller march, parallel-transported camera frame).
 """
 function render_gpu_spacetime(cfg, st, snap_or_scangrid; polarized::Bool = false,
-                              devices = select_devices(),
+                              devices = default_pool(),
                               nmax::Int = cfg.max_steps, C::Real = 80, R_em::Real = Inf,
                               wg = :default)
     st_host = st isa Dict ? error("pass the ADMGridSpacetime itself to render_gpu_spacetime") : st
@@ -546,7 +510,7 @@ end
 
 """
     trace_shadow_gpu(st, rays; C=60.0, escape=95.0, nmax=6000,
-                     devices=select_devices(), wg=nothing)
+                     devices=default_pool(), wg=nothing)
         -> (status::Vector{Float64}, nsteps, maxnull, rfinal, yfinal)
 
 No-fluid GPU shadow/capture tracer for an arbitrary stationary spacetime (device twin
@@ -556,30 +520,16 @@ max |g^{μν}p_μp_ν| (CPU `null_error`) over the march.
 """
 function trace_shadow_gpu(st, rays::Vector{SVector{8,Float64}};
                           C::Real = 60.0, escape::Real = 95.0, nmax::Int = 6000,
-                          devices = select_devices(), wg = nothing)
-    sps = _gsp_per_device(st, devices)
+                          devices = default_pool(), wg = nothing)
+    pool = device_pool(devices)
+    sps = _gsp_per_device(st, pool)
     n = length(rays)
     ys = Vector{SVector{8,Float64}}(undef, n)
     ms = Vector{SVector{4,Float64}}(undef, n)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = di:nd:n; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            backend = _backend(dev)
-            kern = _gsp_shadow_kernel!(backend)
-            cnt = length(idx)
-            y0d = _upload(backend, rays[idx])
-            oyd = KernelAbstractions.allocate(backend, SVector{8,Float64}, cnt)
-            omd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-            _kern_launch!(kern, wg, cnt, oyd, omd, y0d, sps[dev], Float64(C),
-                          Float64(escape), Int(nmax), cnt)
-            KernelAbstractions.synchronize(backend)
-            ys[idx] .= Array(oyd)
-            ms[idx] .= Array(omd)
-        end
-    end
+    launch = (lane, (oyd, omd), y0d, cnt) ->
+        _kern_launch!(_gsp_shadow_kernel!(lane.backend), wg, cnt, oyd, omd, y0d,
+                      sps[lane.dev], Float64(C), Float64(escape), Int(nmax), cnt)
+    march!((ys, ms), pool, [MarchPart(1:n, HostRays(rays), launch)])
     return ([m[1] for m in ms], [m[2] for m in ms], [m[3] for m in ms],
             [m[4] for m in ms], ys)
 end

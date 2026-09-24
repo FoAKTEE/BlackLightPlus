@@ -43,7 +43,8 @@ EVPA on Faraday-thick decks. Prefer `render_gpu_amr` for production.
 
 ## Choosing devices
 
-Devices default to `select_devices()`, which probes for idle GPUs. To pin them:
+Devices default to `default_pool()`: the idle GPUs that `select_devices()` finds,
+probed once per session. To pin them:
 
 ```julia
 img = render_gpu_amr(cfg, snap; devices = [0, 1])
@@ -52,11 +53,31 @@ img = render_gpu_amr(cfg, snap; devices = [0, 1])
 or restrict visibility before starting Julia:
 
 ```sh
-CUDA_VISIBLE_DEVICES=0,1 julia --project=.
+CUDA_VISIBLE_DEVICES=0,1 julia --project=. -t 4
 ```
 
-Rays are split across devices in interleaved order so that cheap and expensive
-rays balance. Two-GPU scaling on full frames is 1.74–1.82×.
+Each device list gets one persistent `DevicePool`, created on first use: two worker
+tasks per device, each with its own stream and pinned staging buffers. Start Julia with
+at least one more thread than devices (`-t 3` for two GPUs) so the workers of different
+devices run in parallel. Rays are queued in chunks and each worker pulls the next chunk
+when it finishes the last, so a slower or shared device simply takes fewer. Every ray
+writes its own pixel, so the image is bitwise identical for any device count and
+chunking. [Benchmarks](@ref) lists the measured multi-GPU scaling.
+
+A snapshot or `UniformFluidGrid` passed to a driver is uploaded once per pool and reused
+by later calls with the same object; do not modify it in place between renders (upload
+a new object instead). Pre-uploaded grids (`upload_grid`, `upload_amr`) are used as
+given. For explicit control, build a pool and pass it as `devices`:
+
+```julia
+pool = DevicePool([0, 1]; lanes = 2, chunk = 65536)
+img  = render_gpu_amr(cfg, snap; devices = pool)
+close(pool)
+```
+
+`devices = [HostDevice(1), HostDevice(2)]` runs the same drivers on the
+KernelAbstractions CPU backend, one logical device per entry, which is how the
+multi-device tests run without a GPU.
 
 ## Other drivers
 

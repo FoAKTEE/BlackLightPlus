@@ -56,9 +56,10 @@ end
 
 Permute the reader's `(ni,nj,nk,nmb,8)` primitives to the coalesced `(8,ni,nj,nk,nmb)`
 layout, build the finest-block index grid, and upload fluid + per-block geometry to
-each CUDA device (one copy per device; reusable across renders). The render kernels use
-only the leaf table + `amrp`; `dev_lo/dev_hi` feed the probe/scan-oracle path, so pass
-`upload_bounds=false` for a render-only grid.
+each device of `devices` (a list or a `DevicePool`; one copy per device, made
+concurrently; reusable across renders). The render kernels use only the leaf table +
+`amrp`; `dev_lo/dev_hi` feed the probe/scan-oracle path, so pass `upload_bounds=false`
+for a render-only grid.
 """
 function upload_amr(snap::AthenaKSnapshot, devices; upload_bounds::Bool = true)
     blk_host  = permutedims(snap.data, (5, 1, 2, 3, 4))   # (8, ni, nj, nk, nmb)
@@ -66,14 +67,24 @@ function upload_amr(snap::AthenaKSnapshot, devices; upload_bounds::Bool = true)
     dxb_host  = reduce(hcat, snap.dx)
     leaf_host, amrp = _build_leaf_table(snap)
 
-    dblk = _upload_per_device(blk_host, devices)
-    dxl  = _upload_per_device(xlft_host, devices)
-    ddx  = _upload_per_device(dxb_host, devices)
-    dlf  = _upload_per_device(leaf_host, devices)
-    dlo  = upload_bounds ? _upload_per_device(reduce(hcat, snap.ext_lo), devices) : empty(dxl)
-    dhi  = upload_bounds ? _upload_per_device(reduce(hcat, snap.ext_hi), devices) : empty(dxl)
+    dblk = upload_per_device(blk_host, devices)
+    dxl  = upload_per_device(xlft_host, devices)
+    ddx  = upload_per_device(dxb_host, devices)
+    dlf  = upload_per_device(leaf_host, devices)
+    dlo  = upload_bounds ? upload_per_device(reduce(hcat, snap.ext_lo), devices) : empty(dxl)
+    dhi  = upload_bounds ? upload_per_device(reduce(hcat, snap.ext_hi), devices) : empty(dxl)
     return DeviceAMRGrid(dblk, dxl, ddx, dlo, dhi, dlf, amrp)
 end
+
+"""
+    resident_amr(pool, snap_or_amrgrid) -> DeviceAMRGrid
+
+The render grid of a driver call: a `DeviceAMRGrid` as given, or the snapshot uploaded
+(`upload_bounds=false`: the render kernels never read the face bounds) once per pool.
+"""
+resident_amr(pool, dg::DeviceAMRGrid) = dg
+resident_amr(pool, snap::AthenaKSnapshot) =
+    resident(() -> upload_amr(snap, pool; upload_bounds = false), pool, snap.data, :amr)
 
 # ---------------------------------------------------------------- device: locate
 # (a) EXACT port of _find_meshblock: linear scan, lo < xyz <= hi, later block wins,
@@ -238,79 +249,35 @@ function _gamr_domain_radius(p)
     return sqrt(max(p.x1min^2, x1hi^2) + max(p.x2min^2, x2hi^2) + max(p.x3min^2, x3hi^2))
 end
 
-function _famr_part!(img, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = KernelAbstractions.get_backend(dg.dev_blk[dev])
-    kern = _famr_kernel!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, Float64, cnt)
-    _kern_launch!(kern, wg, cnt, outd, y0d, dg.dev_blk[dev], dg.dev_xlft[dev], dg.dev_dxb[dev],
-                  dg.dev_leaf[dev], dg.amrp, gp, a, r_h, C, escape, R_em, Int(nmax), cnt)
-    KernelAbstractions.synchronize(backend)
-    img[rng] .= Array(outd)
-    return nothing
-end
-
-function _gpol_amr_part!(out, rays, rng, dg::DeviceAMRGrid, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = KernelAbstractions.get_backend(dg.dev_blk[dev])
-    kern = _gpol_amr_kernel!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-    _kern_launch!(kern, wg, cnt, outd, y0d, dg.dev_blk[dev], dg.dev_xlft[dev], dg.dev_dxb[dev],
-                  dg.dev_leaf[dev], dg.amrp, gp, a, r_h, C, escape, R_em, Int(nmax), cnt)
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
-end
-
-# Launch a fused AMR kernel over the ray-index `pool` (any index collection), pixels
-# INTERLEAVED across `devices` (the _fused_sweep!/_gpol_sweep! pattern — pool == 1:nrays
-# reproduces the pre-mixed-precision device split exactly). The geodesic(/frame)-lane
-# type is eltype(eltype(rays)); the caller passes the march scalars at that type.
-function _famr_sweep!(img, rays, pool, devices, dg, gp, a, r_h, C, escape, R_em, nmax, wg)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = pool[di:nd:end]; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _famr_part!(img, rays, idx, dg, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
-        end
-    end
-    return nothing
-end
-
-function _gpol_amr_sweep!(out, rays, pool, devices, dg, gp, a, r_h, C, escape, R_em, nmax, wg)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = pool[di:nd:end]; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _gpol_amr_part!(out, rays, idx, dg, dev, gp, a, r_h, C, escape, R_em, nmax, wg)
-        end
-    end
-    return nothing
-end
+# Launches of the native-AMR kernels (Stokes I / IQUV) for one chunk on the lane's device.
+# The geodesic(/frame)-lane type is eltype(eltype(y0d)); the caller passes the march
+# scalars at that type.
+_famr_launch(dg, gp, a, r_h, C, escape, R_em, nmax, wg) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(_famr_kernel!(lane.backend), wg, n, outd, y0d, dg.dev_blk[lane.dev],
+                  dg.dev_xlft[lane.dev], dg.dev_dxb[lane.dev], dg.dev_leaf[lane.dev], dg.amrp,
+                  gp, a, r_h, C, escape, R_em, Int(nmax), n)
+_gpol_amr_launch(dg, gp, a, r_h, C, escape, R_em, nmax, wg) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(_gpol_amr_kernel!(lane.backend), wg, n, outd, y0d, dg.dev_blk[lane.dev],
+                  dg.dev_xlft[lane.dev], dg.dev_dxb[lane.dev], dg.dev_leaf[lane.dev], dg.amrp,
+                  gp, a, r_h, C, escape, R_em, Int(nmax), n)
 
 """
     march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64}};
-                       polarized=false, devices=select_devices(), nmax=cfg.max_steps,
+                       polarized=false, devices=default_pool(), nmax=cfg.max_steps,
                        C=80, order=nothing, wg=<pol _GPOL_WG / unpol nothing>)
         -> Matrix{Float64}(4, length(rays))
 
 Fused single-pass GPU march of an arbitrary camera-ray list against the native-AMR
 meshblock hierarchy, returning a dense `4 × length(rays)` Stokes matrix (row 1 = I;
 rows 2-4 = Q,U,V, zero when `polarized=false`); column `j` corresponds to input ray `j`
-(`order` is applied and undone internally). This is the shared `:f64` core behind the
+(`order` sets the queue order only). This is the shared `:f64` core behind the
 full-frame `render_gpu_amr[_polarized]` entry points. `snap_or_amrgrid`:
-`AthenaKSnapshot` (uploaded internally) or pre-uploaded `DeviceAMRGrid`. `:f64`-only by
-design — the critical-curve rescue behind `:mixed`/`:f32_raw` is pixel-grid-coupled and
-lives only at the full-frame wrapper level.
+`AthenaKSnapshot` (uploaded once per device pool) or pre-uploaded `DeviceAMRGrid`.
+`:f64`-only by design — the critical-curve rescue behind `:mixed`/`:f32_raw` is
+pixel-grid-coupled and lives only at the full-frame wrapper level.
 """
 function march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64}};
-                            polarized::Bool = false, devices = select_devices(),
+                            polarized::Bool = false, devices = default_pool(),
                             nmax::Int = cfg.max_steps, C::Real = 80,
                             order = nothing, wg = :default, precision::Symbol = :f64)
     precision === :f64 ||
@@ -319,30 +286,28 @@ function march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64
               "at the full-frame wrapper level; got precision=:$precision. Use " *
               "render_gpu_amr[_polarized] for :mixed / :f32_raw.")
     wg === :default && (wg = polarized ? _GPOL_WG : nothing)
-    dg = snap_or_amrgrid isa DeviceAMRGrid ? snap_or_amrgrid :
-         upload_amr(snap_or_amrgrid, devices; upload_bounds = false)   # render never reads lo/hi
+    pool = device_pool(devices)
+    dg = resident_amr(pool, snap_or_amrgrid)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
     nrays = length(rays)
-    rr = _apply_order(rays, order)            # march in trip-count order (bit-exact per ray)
+    items = queue_items(order, nrays)
     M = zeros(Float64, 4, nrays)
     if polarized
-        gp = _gpol_params(cfg)
         out = Vector{SVector{4,Float64}}(undef, nrays)
-        _gpol_amr_sweep!(out, rr, 1:nrays, devices, dg, gp, a, r_h, Cf, escape, R_em, nmax, wg)
-        out = _undo_order(out, order)
+        march!((out,), pool, [MarchPart(items, HostRays(rays),
+            _gpol_amr_launch(dg, _gpol_params(cfg), a, r_h, Cf, escape, R_em, nmax, wg))])
         @inbounds for j in 1:nrays
             o = out[j]
             M[1, j] = o[1]; M[2, j] = o[2]; M[3, j] = o[3]; M[4, j] = o[4]
         end
     else
-        gp = _gimg_params(cfg)
         img = Vector{Float64}(undef, nrays)
-        _famr_sweep!(img, rr, 1:nrays, devices, dg, gp, a, r_h, Cf, escape, R_em, nmax, wg)
-        img = _undo_order(img, order)
+        march!((img,), pool, [MarchPart(items, HostRays(rays),
+            _famr_launch(dg, _gimg_params(cfg), a, r_h, Cf, escape, R_em, nmax, wg))])
         @inbounds for j in 1:nrays
             M[1, j] = img[j]
         end
@@ -350,20 +315,38 @@ function march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64
     return M
 end
 
+# :mixed / :f32_raw full-frame native-AMR render (the rescue is pixel-GRID-coupled, so it
+# lives only at this level): the fp32 lane over every pixel, then (:mixed) the fp64 lane
+# over the pixels within `rescue_px` of the critical curve. `launch(a, r_h, C, escape,
+# R_em)` builds the kernel launch at the scalars' type; writes `out`, returns the rescued
+# fraction.
+function _amr_mixed!(out, pool, cfg, cam, rays, items, launch, R_em, precision, rescue_px)
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    march!((out,), pool, [MarchPart(items, HostRays(rays, Float32),
+        launch(Float32(a), Float32(r_h), Float32(escape), Float32(R_em)))])
+    precision === :mixed || return 0.0
+    pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
+                         rescue_px = rescue_px)
+    march!((out,), pool, [MarchPart(pix, HostRays(rays), launch(a, r_h, escape, R_em))])
+    return length(pix) / length(rays)
+end
+
 """
-    render_gpu_amr(cfg, snap_or_amrgrid; devices=select_devices(), nmax=cfg.max_steps,
+    render_gpu_amr(cfg, snap_or_amrgrid; devices=default_pool(), nmax=cfg.max_steps,
                    C=80, precision=:f64, rescue_px=2) -> Matrix{Float64}
 
 Fused single-pass GPU render of the unpolarized (Stokes I) npix×npix image, sampling
 the AMR meshblock hierarchy directly on device (nothing is resampled — no `box_half`/
-`n`). `snap_or_amrgrid`: `AthenaKSnapshot` (uploaded internally) or pre-uploaded
-`DeviceAMRGrid`. Layout as `render(...;polarized=false).I`; `order` marches rays in
-trip-count order (bit-exact per pixel); `wg` overrides the block size. `precision`:
+`n`). `snap_or_amrgrid`: `AthenaKSnapshot` (uploaded once per device pool) or
+pre-uploaded `DeviceAMRGrid`. Layout as `render(...;polarized=false).I`; `order` sets
+the queue order (bit-exact per pixel); `wg` overrides the block size. `precision`:
 `:f64` (default, bitwise unchanged) · `:mixed` (fp32 march + fp64 RT + critical-curve
 rescue splice within `rescue_px` px; `rescued_frac::Ref{Float64}` receives the
 fraction) · `:f32_raw` (no rescue — DIAGNOSTIC only). See `render_gpu_fused`.
 """
-function render_gpu_amr(cfg, snap_or_amrgrid; devices = select_devices(),
+function render_gpu_amr(cfg, snap_or_amrgrid; devices = default_pool(),
                         nmax::Int = cfg.max_steps, C::Real = 80,
                         order = nothing, wg = nothing,
                         precision::Symbol = :f64, rescue_px::Int = 2,
@@ -381,52 +364,35 @@ function render_gpu_amr(cfg, snap_or_amrgrid; devices = select_devices(),
         rescued_frac === nothing || (rescued_frac[] = 0.0)
         return reshape(M[1, :], cam.npix, cam.npix)
     end
-    # :mixed / :f32_raw: fp32 geodesic lane + critical-curve rescue splice — the rescue is
-    # pixel-GRID-coupled (`_rescue_pixels`), so it lives ONLY here, at the full-frame level.
-    rays = _apply_order(camera_rays(st, cam), order)
-    dg = snap_or_amrgrid isa DeviceAMRGrid ? snap_or_amrgrid :
-         upload_amr(snap_or_amrgrid, devices; upload_bounds = false)   # render never reads lo/hi
+    pool = device_pool(devices)
+    rays = camera_rays(st, cam)
+    dg = resident_amr(pool, snap_or_amrgrid)
     gp = _gimg_params(cfg)
-    a = cfg.bh_a
-    r_h = 1 + sqrt(1 - a * a)
-    escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
-    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
-    nrays = length(rays)
-    img = Vector{Float64}(undef, nrays)
-    frac = 0.0
-    # fp32 geodesic lane (matched fp32 march scalars; gp stays Float64)
-    rays32 = [SVector{8,Float32}(r) for r in rays]
-    _famr_sweep!(img, rays32, 1:nrays, devices, dg, gp, Float32(a), Float32(r_h),
-                 Float32(Cf), Float32(escape), Float32(R_em), nmax, wg)
-    if precision === :mixed
-        pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
-                             rescue_px = rescue_px)
-        pos = order === nothing ? pix : invperm(order)[pix]
-        isempty(pos) ||
-            _famr_sweep!(img, rays, pos, devices, dg, gp, a, r_h, Cf, escape, R_em,
-                         nmax, wg)
-        frac = length(pos) / nrays
-    end
+    img = Vector{Float64}(undef, length(rays))
+    frac = _amr_mixed!(img, pool, cfg, cam, rays, queue_items(order, length(rays)),
+                       (a, r_h, escape, R_em) -> _famr_launch(dg, gp, a, r_h, typeof(a)(Cf),
+                                                              escape, R_em, nmax, wg),
+                       _gamr_domain_radius(dg.amrp), precision, rescue_px)
     rescued_frac === nothing || (rescued_frac[] = frac)
-    return reshape(_undo_order(img, order), cam.npix, cam.npix)
+    return reshape(img, cam.npix, cam.npix)
 end
 
 """
-    render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices=select_devices(),
+    render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices=default_pool(),
                              nmax=cfg.max_steps, C=80, precision=:f64, rescue_px=2)
         -> NamedTuple(I,Q,U,V)
 
 Full-Stokes fused GPU render sampling the AMR fluid directly on device (closes the
 uniform-resample EVPA caveat). Mirrors `render_gpu_polarized` but with the AMR sampler.
-`order` marches rays in trip-count order (bit-exact per pixel); `wg` overrides the
-register-heavy kernel's block size (defaults to `_GPOL_WG`). `precision`: `:f64`
-(default, bitwise unchanged) · `:mixed` (fp32 geodesic + frame transport, fp64
-Stokes/coefficients from converted state, critical-curve rescue splice within
-`rescue_px` px; `rescued_frac::Ref{Float64}` receives the fraction) · `:f32_raw`
-(no rescue — DIAGNOSTIC only). See `render_gpu_polarized` for the full contract.
+`order` sets the queue order (bit-exact per pixel); `wg` overrides the register-heavy
+kernel's block size (defaults to `_GPOL_WG`). `precision`: `:f64` (default, bitwise
+unchanged) · `:mixed` (fp32 geodesic + frame transport, fp64 Stokes/coefficients from
+converted state, critical-curve rescue splice within `rescue_px` px;
+`rescued_frac::Ref{Float64}` receives the fraction) · `:f32_raw` (no rescue — DIAGNOSTIC
+only). See `render_gpu_polarized` for the full contract.
 """
-function render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices = select_devices(),
+function render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices = default_pool(),
                                   nmax::Int = cfg.max_steps, C::Real = 80,
                                   order = nothing, wg = _GPOL_WG,
                                   precision::Symbol = :f64, rescue_px::Int = 2,
@@ -446,40 +412,18 @@ function render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices = select_devices
         return (I = reshape(M[1, :], npx, npx), Q = reshape(M[2, :], npx, npx),
                 U = reshape(M[3, :], npx, npx), V = reshape(M[4, :], npx, npx))
     end
-    # :mixed / :f32_raw: fp32 geodesic/frame lane + critical-curve rescue splice — the
-    # rescue is pixel-GRID-coupled (`_rescue_pixels`), so it lives ONLY here, full-frame.
-    rays = _apply_order(camera_rays(st, cam), order)
-    dg = snap_or_amrgrid isa DeviceAMRGrid ? snap_or_amrgrid :
-         upload_amr(snap_or_amrgrid, devices; upload_bounds = false)   # render never reads lo/hi
+    pool = device_pool(devices)
+    rays = camera_rays(st, cam)
+    dg = resident_amr(pool, snap_or_amrgrid)
     gp = _gpol_params(cfg)
-    a = cfg.bh_a
-    r_h = 1 + sqrt(1 - a * a)
-    escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
-    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
-    nrays = length(rays)
-    out = Vector{SVector{4,Float64}}(undef, nrays)
-    frac = 0.0
-    # fp32 geodesic/frame lane (matched fp32 march scalars; gp stays Float64)
-    rays32 = [SVector{8,Float32}(r) for r in rays]
-    _gpol_amr_sweep!(out, rays32, 1:nrays, devices, dg, gp, Float32(a), Float32(r_h),
-                     Float32(Cf), Float32(escape), Float32(R_em), nmax, wg)
-    if precision === :mixed
-        pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
-                             rescue_px = rescue_px)
-        pos = order === nothing ? pix : invperm(order)[pix]
-        isempty(pos) ||
-            _gpol_amr_sweep!(out, rays, pos, devices, dg, gp, a, r_h, Cf, escape,
-                             R_em, nmax, wg)
-        frac = length(pos) / nrays
-    end
+    out = Vector{SVector{4,Float64}}(undef, length(rays))
+    frac = _amr_mixed!(out, pool, cfg, cam, rays, queue_items(order, length(rays)),
+                       (a, r_h, escape, R_em) -> _gpol_amr_launch(dg, gp, a, r_h, typeof(a)(Cf),
+                                                                  escape, R_em, nmax, wg),
+                       _gamr_domain_radius(dg.amrp), precision, rescue_px)
     rescued_frac === nothing || (rescued_frac[] = frac)
-    out = _undo_order(out, order)
-    I = reshape([o[1] for o in out], npx, npx)
-    Q = reshape([o[2] for o in out], npx, npx)
-    U = reshape([o[3] for o in out], npx, npx)
-    V = reshape([o[4] for o in out], npx, npx)
-    return (I = I, Q = Q, U = U, V = V)
+    return _stokes_planes(out, npx)
 end
 
 # ================================================================ SLOW LIGHT (opt-in, direct AMR)
@@ -606,38 +550,18 @@ end
     end
 end
 
-function _famr_part_sl!(img, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = KernelAbstractions.get_backend(win.a.dev_blk[dev])
-    kern = _famr_kernel_sl!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, Float64, cnt)
+# Launches of the slow-light native-AMR kernels for one chunk (frame A's mesh geometry).
+function _amr_launch_sl(kern, win::DeviceAMRWindow, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
     ga = win.a; gb = win.b
-    _kern_launch!(kern, wg, cnt, outd, y0d, ga.dev_blk[dev], gb.dev_blk[dev], ga.dev_xlft[dev],
-                  ga.dev_dxb[dev], ga.dev_leaf[dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C,
-                  escape, R_em, Int(nmax), cnt)
-    KernelAbstractions.synchronize(backend)
-    img[rng] .= Array(outd)
-    return nothing
-end
-
-function _gpol_amr_part_sl!(out, rays, rng, win::DeviceAMRWindow, dev, t0, gp, a, r_h, C, escape, R_em, nmax, wg)
-    backend = KernelAbstractions.get_backend(win.a.dev_blk[dev])
-    kern = _gpol_amr_kernel_sl!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-    ga = win.a; gb = win.b
-    _kern_launch!(kern, wg, cnt, outd, y0d, ga.dev_blk[dev], gb.dev_blk[dev], ga.dev_xlft[dev],
-                  ga.dev_dxb[dev], ga.dev_leaf[dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C,
-                  escape, R_em, Int(nmax), cnt)
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
+    return (lane, (outd,), y0d, n) ->
+        _kern_launch!(kern(lane.backend), wg, n, outd, y0d, ga.dev_blk[lane.dev],
+                      gb.dev_blk[lane.dev], ga.dev_xlft[lane.dev], ga.dev_dxb[lane.dev],
+                      ga.dev_leaf[lane.dev], ga.amrp, t0, win.inv_dt, gp, a, r_h, C, escape,
+                      R_em, Int(nmax), n)
 end
 
 """
-    render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices=select_devices(),
+    render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices=default_pool(),
                         nmax=cfg.max_steps, C=80, t_obs=_win_t_obs(win),
                         time_offset=0.0) -> Matrix{Float64}
 
@@ -647,37 +571,17 @@ t_emit = t_obs + X⁰ (physical dump-time axis; `t_obs` defaults to the window's
 upper end, `time_offset` advances it — movie frame time). `win.inv_dt == 0`
 reproduces `render_gpu_amr(cfg, win.a)` bit-for-bit. Accepts `order`/`wg` as `render_gpu_amr`.
 """
-function render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices = select_devices(),
+function render_gpu_amr_slow(cfg, win::DeviceAMRWindow; devices = default_pool(),
                              nmax::Int = cfg.max_steps, C::Real = 80,
                              t_obs::Real = _win_t_obs(win), time_offset::Real = 0.0,
                              order = nothing, wg = nothing)
-    st = KerrSchildCartesian(cfg.bh_a)
-    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
-                              cfg.camera.fov, cfg.camera.resolution)
-    rays = _apply_order(camera_rays(st, cam), order)
-    gp = _gimg_params(cfg)
-    a = cfg.bh_a
-    r_h = 1 + sqrt(1 - a * a)
-    escape = 1.1 * cfg.camera.distance
-    Cf = Float64(C)
-    R_em = _gamr_domain_radius(win.a.amrp)
-    t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
-    nrays = length(rays)
-    img = Vector{Float64}(undef, nrays)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = di:nd:nrays; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _famr_part_sl!(img, rays, idx, win, dev, t0, gp, a, r_h, Cf, escape, R_em, nmax, wg)
-        end
-    end
-    return reshape(_undo_order(img, order), cam.npix, cam.npix)
+    img = _amr_slow(cfg, win, devices, _famr_kernel_sl!, _gimg_params(cfg), Float64,
+                    nmax, C, t_obs, time_offset, order, wg)
+    return reshape(img, cfg.camera.resolution, cfg.camera.resolution)
 end
 
 """
-    render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices=select_devices(),
+    render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices=default_pool(),
                                   nmax=cfg.max_steps, C=80, t_obs=_win_t_obs(win),
                                   time_offset=0.0) -> NamedTuple(I,Q,U,V)
 
@@ -686,37 +590,30 @@ blended at the emission time t_obs + X⁰, as `render_gpu_amr_slow`).
 `win.inv_dt == 0` reproduces `render_gpu_amr_polarized(cfg, win.a)`.
 Accepts `order`/`wg` as `render_gpu_amr_polarized`.
 """
-function render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices = select_devices(),
+function render_gpu_amr_polarized_slow(cfg, win::DeviceAMRWindow; devices = default_pool(),
                                        nmax::Int = cfg.max_steps, C::Real = 80,
                                        t_obs::Real = _win_t_obs(win), time_offset::Real = 0.0,
                                        order = nothing, wg = _GPOL_WG)
+    out = _amr_slow(cfg, win, devices, _gpol_amr_kernel_sl!, _gpol_params(cfg),
+                    SVector{4,Float64}, nmax, C, t_obs, time_offset, order, wg)
+    return _stokes_planes(out, cfg.camera.resolution)
+end
+
+# Shared body of the two slow-light native-AMR drivers: per-pixel outputs of eltype `T`.
+function _amr_slow(cfg, win, devices, kern, gp, ::Type{T}, nmax, C, t_obs, time_offset,
+                   order, wg) where {T}
+    pool = device_pool(devices)
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = _apply_order(camera_rays(st, cam), order)
-    gp = _gpol_params(cfg)
+    rays = camera_rays(st, cam)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance
-    Cf = Float64(C)
     R_em = _gamr_domain_radius(win.a.amrp)
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
-    nrays = length(rays)
-    out = Vector{SVector{4,Float64}}(undef, nrays)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = di:nd:nrays; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _gpol_amr_part_sl!(out, rays, idx, win, dev, t0, gp, a, r_h, Cf, escape, R_em, nmax, wg)
-        end
-    end
-    out = _undo_order(out, order)
-    npx = cam.npix
-    I = reshape([o[1] for o in out], npx, npx)
-    Q = reshape([o[2] for o in out], npx, npx)
-    U = reshape([o[3] for o in out], npx, npx)
-    V = reshape([o[4] for o in out], npx, npx)
-    return (I = I, Q = Q, U = U, V = V)
+    out = Vector{T}(undef, length(rays))
+    march!((out,), pool, [MarchPart(queue_items(order, length(rays)), HostRays(rays),
+        _amr_launch_sl(kern, win, t0, gp, a, r_h, Float64(C), escape, R_em, nmax, wg))])
+    return out
 end

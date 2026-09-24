@@ -26,7 +26,7 @@ using BlackLightPlus: MCRng, mc_uniform, sample_direction,
                     HotcrossTable, scatter_superphoton, bias_func, ScatterResult
 using BlackLightPlus.Constants: ME, CL, HPL
 
-# Device handle seam (HostDevice, _device!, _backend, _upload) lives in gpu_image.jl.
+# Device handles, select_devices and the DevicePool runtime (gpu_pool.jl) come with gpu_image.jl.
 @isdefined(_gimg_thermal) || include(joinpath(@__DIR__, "..", "gpu_image.jl"))
 
 # CPU-side constants, referenced (not re-typed) so the kernels can never drift
@@ -42,8 +42,8 @@ _mc_device_shares(N_gen::Integer, ndev::Integer) =
     [(first = div((di - 1) * N_gen, ndev) + 1,
       n = div(di * N_gen, ndev) - div((di - 1) * N_gen, ndev)) for di in 1:ndev]
 
-# Device handles of a driver call: `devices` (CUDA ordinals or HostDevices) or `[device]`.
-_mc_devlist(device, devices) = devices === nothing ? Any[device] : collect(Any, devices)
+# Device handles of a driver call: `devices` (a list or a DevicePool) or `[device]`.
+_mc_devlist(device, devices) = devices === nothing ? Any[device] : device_list(devices)
 
 # Launch `kern` over `n` items with an optional workgroup size.
 function _mc_launch(kern, wgs, n::Int, args...)
@@ -71,43 +71,6 @@ end
     end
     return nothing
 end
-
-# ---------------------------------------------------------------- device selection
-if !@isdefined(select_devices)
-"""
-    select_devices(candidates=[0,1]; util_threshold=15, min_free_gb=8) -> Vector{Int}
-
-Probe each visible CUDA device in `candidates` and return the subset that is
-idle enough: free memory >= `min_free_gb` GB and (when NVML is available)
-compute utilization <= `util_threshold` %. Always returns at least one device.
-Definition is guarded so this file stays self-contained alongside gpu_image.jl.
-"""
-function select_devices(candidates = [0, 1]; util_threshold::Real = 15, min_free_gb::Real = 8)
-    vis = try
-        filter(d -> 0 <= d < CUDA.ndevices(), candidates)
-    catch
-        return collect(candidates)
-    end
-    isempty(vis) && return collect(candidates)
-    idle = Int[]
-    for d in vis
-        ok = try
-            CUDA.device!(d)
-            free, _ = CUDA.memory_info()
-            u = try
-                Float64(CUDA.NVML.utilization_rates(CUDA.NVML.Device(CUDA.uuid(CUDA.CuDevice(d)))).compute) * 100.0
-            catch
-                -1.0
-            end
-            (free / 1024^3 >= min_free_gb) && (u < 0 || u <= util_threshold)
-        catch
-            false
-        end
-        ok && push!(idle, d)
-    end
-    return isempty(idle) ? vis[1:1] : idle
-end
-end # @isdefined select_devices
 
 # ---------------------------------------------------------------- device absorption rate
 # Device twin of track.jl `_nu_alpha` for the uniform flat sphere (static fluid,

@@ -5,13 +5,16 @@
 # elliptic machinery (`_emission_prep`) runs once per pixel and every band finishes
 # in-register (`_emission_band`), so one launch + one DtoH copy per device covers all
 # bands. Every stage is the same Float64 closed form the CPU evaluates, so the image
-# agrees with `render_analytic` per pixel to round-off. CUDA is an optional dependency:
-# this file is NOT included from BlackLightPlus.jl — callers include it explicitly.
+# agrees with `render_analytic` per pixel to round-off. Contiguous pixel chunks run on the
+# device pool (gpu_pool.jl). CUDA is an optional dependency: this file is NOT included
+# from BlackLightPlus.jl — callers include it explicitly.
 
 using KernelAbstractions
 using CUDA
 using BlackLightPlus: equatorial_disk_intensity, EquatorialDisk
 using BlackLightPlus.Geodesics: _emission_prep, _emission_band
+
+isdefined(@__MODULE__, :DevicePool) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_pool.jl"))
 
 # ---------------------------------------------------------------- fused kernel
 # One thread per pixel in the contiguous global-pixel range [pix_lo+1, pix_lo+count],
@@ -63,7 +66,7 @@ GPU twin of `render_analytic`: for every camera pixel and every photon-ring laye
 equatorial source. Returns the same layered NamedTuple as `render_analytic` (per-band
 `Ib`, layered `I = Σ_n Ib[n]`, and per-band observables, NaN off the disk). `source` is
 `nothing` (the 1/rs^2 placeholder) or an `EquatorialDisk`. One kernel launch per device
-covers all bands; pixels are split contiguously across `devices`.
+covers all bands; contiguous pixel chunks are queued over the device pool of `devices`.
 """
 function render_analytic_gpu(cfg; devices = [0], bands = (0, 1, 2),
                              ro::Real = cfg.camera.distance, source = nothing,
@@ -89,47 +92,25 @@ function render_analytic_gpu(cfg; devices = [0], bands = (0, 1, 2),
     phis = [Matrix{Float64}(undef, npix, npix) for _ in 1:nb]
     rsign = [Matrix{Float64}(undef, npix, npix) for _ in 1:nb]
 
-    nd = length(devices)
-    # contiguous per-device pixel split
-    ranges = [(div((di - 1) * np2, nd) + 1):(div(di * np2, nd)) for di in 1:nd]
-
-    # Per-device setup. The kernel fully inlines the quartic-root + elliptic machinery
-    # into one large device frame; CUDA's default 1 KB per-thread stack overflows it at
-    # runtime (ERROR_ILLEGAL_ADDRESS) even though it compiles cleanly, so raise
-    # LIMIT_STACK_SIZE. Then upload centres and allocate the 5 output arrays — each
-    # cnt*nb long, one contiguous cnt-slice per band.
-    centres_d = Dict{Int,CuArray{Float64,1}}()
-    outbufs = Dict{Int,NTuple{5,CuArray{Float64,1}}}()
-    for (di, dev) in enumerate(devices)
-        CUDA.device!(dev)
-        CUDA.limit!(CUDA.LIMIT_STACK_SIZE, Int(stack_bytes))
-        centres_d[dev] = CuArray(centres)
-        cnt = length(ranges[di])
-        outbufs[dev] = ntuple(_ -> CuArray{Float64}(undef, cnt * nb), 5)
-    end
-
-    @sync for di in 1:nd
-        rng = ranges[di]
-        isempty(rng) && continue
-        dev = devices[di]
-        @async begin
-            CUDA.device!(dev)
-            backend = CUDABackend()
-            cnt = length(rng)
-            Ibd, rsd, tsd, phd, rgd = outbufs[dev]
-            _ganalytic_kernel!(backend)(Ibd, rsd, tsd, phd, rgd, centres_d[dev],
-                                        theta_o, a, bandsT, rof, disk, has_source,
-                                        npix, first(rng) - 1, cnt; ndrange = cnt)
-            KernelAbstractions.synchronize(backend)
-            # direct DtoH into the contiguous linear slice (no intermediate Array)
-            o = first(rng)
+    pool = device_pool(devices)
+    foreach_chunk(pool, collect(Iterators.partition(1:np2, pool.chunk))) do lane, rng
+        # The kernel fully inlines the quartic-root + elliptic machinery into one large
+        # device frame; CUDA's default 1 KB per-thread stack overflows it at runtime
+        # (ERROR_ILLEGAL_ADDRESS) even though it compiles cleanly, so raise the limit.
+        _ensure_stack!(lane.backend, Int(stack_bytes))
+        cnt = length(rng); m = cnt * nb
+        cd = lane_buffer(lane, :centres, Float64, npix)
+        copyto!(cd, 1, centres, 1, npix)
+        outs = ntuple(k -> lane_buffer(lane, (:analytic, k), Float64, m), 5)
+        _ganalytic_kernel!(lane.backend)(outs..., cd, theta_o, a, bandsT, rof, disk,
+                                         has_source, npix, first(rng) - 1, cnt; ndrange = cnt)
+        KernelAbstractions.synchronize(lane.backend)
+        # one pinned DtoH copy per map, then each band's contiguous cnt-slice into place
+        for (k, maps) in enumerate((Ib, rs, ts, phis, rsign))
+            st = lane_stage(lane, (:analytic, k), Float64, m)
+            copyto!(st, 1, outs[k], 1, m)
             for bi in 1:nb
-                off = (bi - 1) * cnt + 1
-                copyto!(Ib[bi], o, Ibd, off, cnt)
-                copyto!(rs[bi], o, rsd, off, cnt)
-                copyto!(ts[bi], o, tsd, off, cnt)
-                copyto!(phis[bi], o, phd, off, cnt)
-                copyto!(rsign[bi], o, rgd, off, cnt)
+                copyto!(maps[bi], first(rng), st, (bi - 1) * cnt + 1, cnt)
             end
         end
     end
@@ -141,3 +122,9 @@ function render_analytic_gpu(cfg; devices = [0], bands = (0, 1, 2),
     return (I = I, Ib = Ib, rs = rs, ts = ts, phis = phis, redshift_sign = rsign,
             bands = collect(bandsT))
 end
+
+# Raise the per-thread device stack to at least `bytes` (the CUDA context limit; the KA
+# CPU backend needs none).
+_ensure_stack!(backend, bytes) = nothing
+_ensure_stack!(::CUDABackend, bytes) =
+    CUDA.limit(CUDA.LIMIT_STACK_SIZE) < bytes && CUDA.limit!(CUDA.LIMIT_STACK_SIZE, bytes)

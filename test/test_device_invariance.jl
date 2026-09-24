@@ -1,10 +1,10 @@
 # Device-count invariance of the multi-device drivers (results/blp/multigpu/dag.md,
-# MG03). Every imaging driver renders with `devices = [HostDevice(1), …, HostDevice(nd)]`
-# for nd = 1, 2, 3: one logical device per entry on the KernelAbstractions CPU backend,
-# through the production interleaved split, per-device upload and per-part launch. Each
-# ray is one thread with no cross-ray reduction, so every image is bitwise identical
-# across nd. The ray count (10² = 100) is not a multiple of 2 or 3, so the parts are
-# uneven.
+# MG03, MG07). Every imaging driver renders on nd = 1, 2, 3, 5 logical devices on the
+# KernelAbstractions CPU backend (HostDevice): nd = 1 through the plain `devices` list,
+# nd > 1 through a DevicePool with 2 workers per device and 7-ray chunks, so the 100 rays
+# (10²) form 15 chunks that the workers pull in whatever order they free up. Each ray is
+# one thread with no cross-ray reduction and lands at its own index, so every image is
+# bitwise identical across nd, queue order, chunk size and worker timing.
 #
 # Monte Carlo: the superphoton streams and the reduced spectrum are independent of the
 # device (partition) count, and a scattering run is reproducible run to run (findings
@@ -17,9 +17,9 @@
 #       child keys do not depend on the chunk: bitwise independent of the chunk count.
 # The device scatter driver runs on HostDevices (KA CPU backend) always, and on CUDA
 # devices when CUDA is functional.
-using Test, StaticArrays, KernelAbstractions
+using Test, StaticArrays, KernelAbstractions, Random
 using BlackLightPlus
-using BlackLightPlus: KerrSchildCartesian, SuperposedKerrSchild
+using BlackLightPlus: KerrSchildCartesian, SuperposedKerrSchild, PlaneParallelCamera, camera_rays
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 using BlackLightPlus.Simulation: AthenaKSnapshot
 using BlackLightPlus: SphereModel, ScatteringSphere, mc_spectrum, mc_spectrum_scatter
@@ -34,9 +34,13 @@ const _DI_SRC = joinpath(@__DIR__, "..", "src")
 @isdefined(_gsp_ctl)       || include(joinpath(_DI_SRC, "gpu_spacetime.jl"))
 @isdefined(_fused_kernel_ad!) || include(joinpath(_DI_SRC, "gpu_image_ad.jl"))
 @isdefined(_mc_device_shares) || include(joinpath(_DI_SRC, "montecarlo", "mc_gpu.jl"))
+@isdefined(_ganalytic_kernel!) || include(joinpath(_DI_SRC, "gpu_analytic.jl"))
+@isdefined(_trace_kernel!) || include(joinpath(_DI_SRC, "geodesics", "gpu_tracer.jl"))
 
-const DI_NDEV = (1, 2, 3)
-di_devices(nd) = [HostDevice(k) for k in 1:nd]
+const DI_NDEV = (1, 2, 3, 5)
+di_hosts(nd) = [HostDevice(k) for k in 1:nd]
+const DI_POOLS = Dict(nd => DevicePool(di_hosts(nd); lanes = 2, chunk = 7) for nd in DI_NDEV[2:end])
+di_devices(nd) = nd == 1 ? di_hosts(1) : DI_POOLS[nd]
 
 # Bit pattern of every Float64 in an image (Matrix, Vector{SVector}, or NamedTuple of
 # matrices): equal bit patterns <=> bitwise-identical output, NaN and -0.0 included.
@@ -45,7 +49,7 @@ di_bits(x::AbstractArray{<:SVector}) = reduce(vcat, (di_bits(collect(v)) for v i
 di_bits(x::NamedTuple) = reduce(vcat, (di_bits(v) for v in values(x)))
 di_bits(x::Tuple) = reduce(vcat, (di_bits(v) for v in x))
 di_bits(x::Real) = [reinterpret(UInt64, Float64(x))]
-di_bits(x::AbstractVector{<:AbstractMatrix}) = reduce(vcat, (di_bits(m) for m in x))
+di_bits(x::AbstractVector{<:AbstractArray}) = reduce(vcat, (di_bits(m) for m in x))
 
 # ------------------------------------------------------------------ imaging decks
 const DI_M_BH = 6.2e9 * 1.989e33
@@ -75,8 +79,9 @@ function di_uniform(; n = 24, bh = 12.0)
     UniformFluidGrid(host, n, bh, -bh, (n - 1) / (2bh))
 end
 
-# 2×2×2 meshblocks of 6³ cells on [-12, 12]^3 (one level, finest-aligned).
-function di_amr(; nc = 6, half = 12.0)
+# 2×2×2 meshblocks of 6³ cells on [-12, 12]^3 (one level, finest-aligned); `scale`
+# multiplies the density (a second slow-light frame on the same mesh).
+function di_amr(; nc = 6, half = 12.0, scale = 1.0f0)
     lo_all = -half; w = half                     # block width
     dx = w / nc
     nmb = 8
@@ -92,7 +97,7 @@ function di_amr(; nc = 6, half = 12.0)
         for k in 1:nc, j in 1:nc, i in 1:nc
             p = di_prim(xl[m][1] + (i - 1) * dx, xl[m][2] + (j - 1) * dx, xl[m][3] + (k - 1) * dx)
             for q in 1:8
-                data[i, j, k, m, q] = p[q]
+                data[i, j, k, m, q] = q == 1 ? scale * p[q] : p[q]
             end
         end
     end
@@ -101,14 +106,15 @@ function di_amr(; nc = 6, half = 12.0)
                     nc, nc, nc, nmb)
 end
 
-# Render with nd = 1, 2, 3 logical devices; assert nonzero finite output and bitwise
-# equality of every nd > 1 image with the nd = 1 image.
-function di_check(render)
+# Render with nd = 1, 2, 3, 5 logical devices; assert nonzero (and, unless the output
+# carries NaN sentinels, finite) output and bitwise equality of every nd > 1 image with
+# the nd = 1 image.
+function di_check(render; finite = true)
     ref = render(di_devices(1))
     b1 = di_bits(ref)
     fl = reinterpret(Float64, b1)
-    @test all(isfinite, fl)
-    @test count(!iszero, fl) > 0
+    finite && @test all(isfinite, fl)
+    @test count(x -> isfinite(x) && !iszero(x), fl) > 0
     for nd in DI_NDEV[2:end]
         @test di_bits(render(di_devices(nd))) == b1
     end
@@ -117,7 +123,7 @@ end
 
 @testset "device-count invariance (KA CPU backend, HostDevice)" begin
 
-@testset "imaging: bitwise identical for 1, 2, 3 devices" begin
+@testset "imaging: bitwise identical for 1, 2, 3, 5 devices" begin
     cfg = di_cfg()
     fg = di_uniform()
     snap = di_amr()
@@ -151,6 +157,61 @@ end
         st = SuperposedKerrSchild([0.5, 0.5], [0.0, 0.0], [(3.0, 0.0, 0.0), (-3.0, 0.0, 0.0)])
         di_check(d -> render_gpu_spacetime(cfg, st, snap; devices = d))
         di_check(d -> render_gpu_spacetime(cfg, st, snap; devices = d, polarized = true))
+        cam = PlaneParallelCamera(60.0, 1000.0, 24.0, 10)
+        di_check(d -> trace_shadow_gpu(st, camera_rays(st, cam); C = 40.0, escape = 1100.0,
+                                       nmax = 3000, devices = d))
+    end
+    @testset "slow light (uniform and native AMR, I and IQUV)" begin
+        fgB = scale_grid_density(fg, 1.3)
+        win(d) = upload_window(fg, fgB, 0.0, 30.0, d)
+        di_check(d -> render_gpu_fused_slow(cfg, win(d); devices = d, t_obs = 15.0))
+        di_check(d -> render_gpu_polarized_slow(cfg, win(d); devices = d, t_obs = 15.0))
+        snapB = di_amr(scale = 1.3f0)
+        awin(d) = DeviceAMRWindow(upload_amr(snap, d; upload_bounds = false),
+                                  upload_amr(snapB, d; upload_bounds = false), 0.0, 1 / 30)
+        di_check(d -> render_gpu_amr_slow(cfg, awin(d); devices = d, t_obs = 15.0))
+        di_check(d -> render_gpu_amr_polarized_slow(cfg, awin(d); devices = d, t_obs = 15.0))
+    end
+    @testset "stiffness telemetry, two-phase tracer, analytic" begin
+        di_check(d -> stiffness_telemetry(cfg, fg; devices = d))
+        cam = PlaneParallelCamera(60.0, 1000.0, 24.0, 10)
+        rays = camera_rays(KerrSchildCartesian(0.9), cam)
+        di_check(d -> trace_rays_gpu(KerrSchildCartesian(0.9), rays; devices = d, chunk = 9))
+        di_check(d -> render_analytic_gpu(di_cfg(res = 8); devices = d); finite = false)
+    end
+end
+
+@testset "pool: queue order, chunking and worker timing leave images bitwise unchanged" begin
+    cfg = di_cfg()
+    fg = di_uniform()
+    snap = di_amr()
+    ref = render_gpu_fused(cfg, fg; devices = di_hosts(1))
+    refp = render_gpu_amr_polarized(cfg, snap; devices = di_hosts(1))
+    rev = collect(100:-1:1)
+    @test render_gpu_fused(cfg, fg; devices = DI_POOLS[3], order = rev) == ref
+    @test di_bits(render_gpu_amr_polarized(cfg, snap; devices = DI_POOLS[2], order = rev)) ==
+          di_bits(refp)
+    # random pools (1-5 devices, 1-3 workers each, 1-40 rays per chunk), random queue
+    # order, and a random delay before every chunk launch
+    rng = Random.Xoshiro(20260923)
+    st = KerrSchildCartesian(cfg.bh_a)
+    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
+                              cfg.camera.fov, cfg.camera.resolution)
+    rays = camera_rays(st, cam)
+    a = cfg.bh_a; r_h = 1 + sqrt(1 - a * a)
+    for trial in 1:6
+        pool = DevicePool(di_hosts(rand(rng, 1:5)); lanes = rand(rng, 1:3),
+                          chunk = rand(rng, 1:40))
+        dg = upload_grid(fg, pool)
+        launch = _fused_launch(dg, _gimg_params(cfg), a, r_h, 80.0, 1100.0,
+                               sqrt(3.0) * abs(dg.xo), cfg.max_steps, nothing)
+        delays = rand(rng, 100) .* 0.004
+        delayed = (lane, outs, y0d, n) -> (sleep(delays[n]); launch(lane, outs, y0d, n))
+        img = Vector{Float64}(undef, length(rays))
+        march!((img,), pool, [MarchPart(Random.randperm(rng, length(rays)), HostRays(rays),
+                                        delayed)])
+        @test reshape(img, size(ref)) == ref
+        close(pool)
     end
 end
 

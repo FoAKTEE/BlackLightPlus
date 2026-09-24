@@ -48,22 +48,14 @@ function _giad_params(cfg, param::Symbol)
     end
 end
 
-# Render ray range `rng` on the CURRENTLY active device, output Dual per pixel.
-function _giad_part!(out, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C, escape, R_em, nmax, DT)
-    backend = KernelAbstractions.get_backend(grid_d)
-    kern = _fused_kernel_ad!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, DT, cnt)
-    kern(outd, y0d, grid_d, gp, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx, cnt;
-         ndrange = cnt)
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
-end
+# Launch of the Dual-accumulating fused kernel for one chunk (output Dual per pixel).
+_giad_launch(dgrid, gp, a, r_h, C, escape, R_em, nmax) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(_fused_kernel_ad!(lane.backend), nothing, n, outd, y0d,
+                  dgrid.dev_data[lane.dev], gp, a, r_h, C, escape, R_em, Int(nmax),
+                  dgrid.n, dgrid.xo, dgrid.inv_dx, n)
 
 """
-    render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices=select_devices(),
+    render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices=default_pool(),
                           nmax=cfg.max_steps, C=80, box_half=40.0, n=256)
         -> (image::Matrix{Float64}, dimage_dparam::Matrix{Float64},
             flux::Float64, dflux_dparam::Float64)
@@ -73,18 +65,17 @@ GPU + forward-mode-AD fused render: one forward pass returns the npix×npix unpo
 scalar `param ∈ {:mass_scale, :rat_high}`, plus the total `flux` and `dflux_dparam`.
 The geodesic march is Float64; only the RT accumulation carries a single-partial Dual.
 `snap_or_grid` accepts an `AthenaKSnapshot`, `UniformFluidGrid`, or a pre-uploaded
-`DeviceFluidGrid`; pixels split across `devices`.
+`DeviceFluidGrid`; rays are queued over the device pool of `devices`.
 """
-function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = select_devices(),
+function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = default_pool(),
                                nmax::Int = cfg.max_steps, C::Real = 80, box_half::Real = 40.0,
                                n::Integer = 256)
+    pool = device_pool(devices)
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
     rays = camera_rays(st, cam)
-    dgrid = snap_or_grid isa DeviceFluidGrid ? snap_or_grid :
-            upload_grid(snap_or_grid isa UniformFluidGrid ? snap_or_grid :
-                        resample_fluid_uniform(snap_or_grid, box_half, n), devices)
+    dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
 
     gp = _giad_params(cfg, param)
     DT = promote_type(typeof(gp.d_unit), typeof(gp.e_unit), typeof(gp.b_unit),
@@ -96,16 +87,8 @@ function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = selec
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
     nrays = length(rays)
     out = Vector{DT}(undef, nrays)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = di:nd:nrays; dev = devices[di]     # interleaved: even cheap/expensive-ray mix per GPU
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _giad_part!(out, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
-                        dgrid.inv_dx, gp, a, r_h, Cf, escape, R_em, nmax, DT)
-        end
-    end
+    march!((out,), pool, [MarchPart(1:nrays, HostRays(rays),
+                                    _giad_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax))])
     outmat = reshape(out, cam.npix, cam.npix)
     image = value.(outmat)
     dimage = partials.(outmat, 1)

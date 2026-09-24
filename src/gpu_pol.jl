@@ -705,54 +705,34 @@ end
 # occupancy-only (results are bit-identical across wg).
 const _GPOL_WG = 64
 
-function _gpol_part!(out, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C, escape, R_em, nmax)
-    backend = KernelAbstractions.get_backend(grid_d)
-    kern = _gpol_kernel!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-    kern(outd, y0d, grid_d, gp, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx, cnt;
-         ndrange = cnt, workgroupsize = min(_GPOL_WG, cnt))
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
-end
+# Launch of the uniform-grid polarized kernel for one chunk. The geodesic/frame-lane type
+# is eltype(eltype(y0d)); the caller passes (a, r_h, C, escape, R_em) at that type.
+_gpol_launch(dgrid, gp, a, r_h, C, escape, R_em, nmax) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(_gpol_kernel!(lane.backend), _GPOL_WG, n, outd, y0d, dgrid.dev_data[lane.dev],
+                  gp, a, r_h, C, escape, R_em, Int(nmax), dgrid.n, dgrid.xo, dgrid.inv_dx, n)
 
-# Launch the polarized kernel over the ray-index `pool` (any index collection), pixels
-# INTERLEAVED across `devices` (the _fused_sweep! pattern — pool == 1:nrays reproduces
-# the pre-mixed-precision device split exactly). The geodesic/frame-lane type is
-# eltype(eltype(rays)); the caller passes (a, r_h, C, escape, R_em) at that type.
-function _gpol_sweep!(out, rays, pool, devices, dgrid, gp, a, r_h, C, escape, R_em, nmax)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = pool[di:nd:end]; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _gpol_part!(out, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
-                        dgrid.inv_dx, gp, a, r_h, C, escape, R_em, nmax)
-        end
-    end
-    return nothing
-end
+# Per-ray Stokes 4-vectors -> the (I, Q, U, V) npix×npix planes of `render(...; polarized=true)`.
+_stokes_planes(out::AbstractVector{<:SVector{4}}, npx) =
+    NamedTuple{(:I, :Q, :U, :V)}(ntuple(k -> reshape([o[k] for o in out], npx, npx), 4))
 
 """
-    render_gpu_polarized(cfg, snap_or_grid; devices=select_devices(), nmax=cfg.max_steps,
+    render_gpu_polarized(cfg, snap_or_grid; devices=default_pool(), nmax=cfg.max_steps,
                          C=80, box_half=40.0, n=256, precision=:f64, rescue_px=2)
         -> NamedTuple(I,Q,U,V)
 
 Fused single-pass GPU render of the full-Stokes npix×npix polarized image: one thread
 per ray marches the null geodesic camera->source, parallel-transports the polarization
 frame, and accumulates the observed Stokes with a running Mueller transmission (reverse
-RT). `snap_or_grid`: `AthenaKSnapshot`, `UniformFluidGrid`, or pre-uploaded
-`DeviceFluidGrid`. Each of I,Q,U,V is a `Matrix{Float64}` in `render(...;polarized=true)`
-layout; `order` marches rays in trip-count order (bit-exact per pixel). `precision`:
-`:f64` (default, bitwise unchanged) · `:mixed` (fp32 geodesic march + frame transport,
-Float64 Stokes/Mueller/coefficients from converted state; near-critical-curve pixels
-re-rendered in fp64 and spliced — `rescued_frac::Ref{Float64}` receives the fraction) ·
-`:f32_raw` (no rescue, DIAGNOSTIC only — near-critical pixels carry O(1) errors).
+RT). `snap_or_grid`: `AthenaKSnapshot`, `UniformFluidGrid` (each uploaded once per device
+pool), or pre-uploaded `DeviceFluidGrid`. Each of I,Q,U,V is a `Matrix{Float64}` in
+`render(...;polarized=true)` layout; `order` sets the queue order (bit-exact per pixel).
+`precision`: `:f64` (default, bitwise unchanged) · `:mixed` (fp32 geodesic march + frame
+transport, Float64 Stokes/Mueller/coefficients from converted state; near-critical-curve
+pixels re-rendered in fp64 and spliced — `rescued_frac::Ref{Float64}` receives the
+fraction) · `:f32_raw` (no rescue, DIAGNOSTIC only — near-critical pixels carry O(1)
+errors).
 """
-function render_gpu_polarized(cfg, snap_or_grid; devices = select_devices(),
+function render_gpu_polarized(cfg, snap_or_grid; devices = default_pool(),
                               nmax::Int = cfg.max_steps,   # step limit wired from RunConfig, as render()
                               C::Real = 80, box_half::Real = 40.0, n::Integer = 256,
                               order = nothing,
@@ -760,13 +740,12 @@ function render_gpu_polarized(cfg, snap_or_grid; devices = select_devices(),
                               rescued_frac = nothing)
     precision in (:f64, :mixed, :f32_raw) ||
         error("render_gpu_polarized: precision must be :f64, :mixed or :f32_raw, got :$precision")
+    pool = device_pool(devices)
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = _apply_order(camera_rays(st, cam), order)
-    dgrid = snap_or_grid isa DeviceFluidGrid ? snap_or_grid :
-            upload_grid(snap_or_grid isa UniformFluidGrid ? snap_or_grid :
-                        resample_fluid_uniform(snap_or_grid, box_half, n), devices)
+    rays = camera_rays(st, cam)
+    dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
 
     gp = _gpol_params(cfg)
     a = cfg.bh_a
@@ -775,36 +754,28 @@ function render_gpu_polarized(cfg, snap_or_grid; devices = select_devices(),
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
     nrays = length(rays)
+    items = queue_items(order, nrays)
     out = Vector{SVector{4,Float64}}(undef, nrays)
+    f64 = _gpol_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax)
     frac = 0.0
     if precision === :f64
-        _gpol_sweep!(out, rays, 1:nrays, devices, dgrid, gp, a, r_h, Cf, escape, R_em, nmax)
+        march!((out,), pool, [MarchPart(items, HostRays(rays), f64)])
     else
-        # fp32 geodesic/frame lane: narrow the fp64-built rays at upload; the host
-        # constructs every march scalar as Float32 (no in-kernel widening), while gp
+        # fp32 geodesic/frame lane: the fp64-built rays are narrowed as they are staged; the
+        # host constructs every march scalar as Float32 (no in-kernel widening), while gp
         # (units, frequency, fp64 spin gp.bh_a for the RT lane) stays Float64.
-        rays32 = [SVector{8,Float32}(r) for r in rays]
-        _gpol_sweep!(out, rays32, 1:nrays, devices, dgrid, gp, Float32(a), Float32(r_h),
-                     Float32(Cf), Float32(escape), Float32(R_em), nmax)
+        f32 = _gpol_launch(dgrid, gp, Float32(a), Float32(r_h), Float32(Cf),
+                           Float32(escape), Float32(R_em), nmax)
+        march!((out,), pool, [MarchPart(items, HostRays(rays, Float32), f32)])
         if precision === :mixed
             pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
                                  rescue_px = rescue_px)
-            # pixel -> ordered-ray position (out/rays live in `order`ed space until _undo_order)
-            pos = order === nothing ? pix : invperm(order)[pix]
-            isempty(pos) ||
-                _gpol_sweep!(out, rays, pos, devices, dgrid, gp, a, r_h, Cf, escape,
-                             R_em, nmax)
-            frac = length(pos) / nrays
+            march!((out,), pool, [MarchPart(pix, HostRays(rays), f64)])
+            frac = length(pix) / nrays
         end
     end
     rescued_frac === nothing || (rescued_frac[] = frac)
-    out = _undo_order(out, order)
-    npx = cam.npix
-    I = reshape([o[1] for o in out], npx, npx)
-    Q = reshape([o[2] for o in out], npx, npx)
-    U = reshape([o[3] for o in out], npx, npx)
-    V = reshape([o[4] for o in out], npx, npx)
-    return (I = I, Q = Q, U = U, V = V)
+    return _stokes_planes(out, cam.npix)
 end
 
 # ================================================================ SLOW LIGHT (opt-in, polarized)
@@ -832,22 +803,14 @@ end
     end
 end
 
-function _gpol_part_sl!(out, rays, rng, gA, gB, ng, xo, inv_dx, t0, inv_dt,
-                        gp, a, r_h, C, escape, R_em, nmax)
-    backend = KernelAbstractions.get_backend(gA)
-    kern = _gpol_kernel_sl!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-    kern(outd, y0d, gA, gB, t0, inv_dt, gp, a, r_h, C, escape, R_em, Int(nmax),
-         ng, xo, inv_dx, cnt; ndrange = cnt, workgroupsize = min(_GPOL_WG, cnt))
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
-end
+# Launch of the slow-light polarized kernel for one chunk.
+_gpol_launch_sl(win, t0, gp, a, r_h, C, escape, R_em, nmax) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(_gpol_kernel_sl!(lane.backend), _GPOL_WG, n, outd, y0d,
+                  win.a.dev_data[lane.dev], win.b.dev_data[lane.dev], t0, win.inv_dt, gp,
+                  a, r_h, C, escape, R_em, Int(nmax), win.a.n, win.a.xo, win.a.inv_dx, n)
 
 """
-    render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices=select_devices(),
+    render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices=default_pool(),
                               nmax=cfg.max_steps, C=80, t_obs=_win_t_obs(win),
                               time_offset=0.0) -> NamedTuple(I,Q,U,V)
 
@@ -858,42 +821,27 @@ the window's upper end, `time_offset` advances it — movie frame time).
 `win.inv_dt == 0` reproduces `render_gpu_polarized(cfg, win.a)` bit-for-bit
 (fast-light limit). Accepts `order` as `render_gpu_polarized`.
 """
-function render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices = select_devices(),
+function render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices = default_pool(),
                                    nmax::Int = cfg.max_steps, C::Real = 80,
                                    t_obs::Real = _win_t_obs(win), time_offset::Real = 0.0,
                                    order = nothing)
+    pool = device_pool(devices)
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = _apply_order(camera_rays(st, cam), order)
-    ga = win.a; gb = win.b
+    rays = camera_rays(st, cam)
     gp = _gpol_params(cfg)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
-    R_em = sqrt(3.0) * abs(ga.xo)
+    R_em = sqrt(3.0) * abs(win.a.xo)
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
     nrays = length(rays)
     out = Vector{SVector{4,Float64}}(undef, nrays)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = di:nd:nrays; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _gpol_part_sl!(out, rays, idx, ga.dev_data[dev], gb.dev_data[dev], ga.n,
-                           ga.xo, ga.inv_dx, t0, win.inv_dt, gp, a, r_h, Cf,
-                           escape, R_em, nmax)
-        end
-    end
-    out = _undo_order(out, order)
-    npx = cam.npix
-    I = reshape([o[1] for o in out], npx, npx)
-    Q = reshape([o[2] for o in out], npx, npx)
-    U = reshape([o[3] for o in out], npx, npx)
-    V = reshape([o[4] for o in out], npx, npx)
-    return (I = I, Q = Q, U = U, V = V)
+    march!((out,), pool, [MarchPart(queue_items(order, nrays), HostRays(rays),
+                                    _gpol_launch_sl(win, t0, gp, a, r_h, Cf, escape, R_em, nmax))])
+    return _stokes_planes(out, cam.npix)
 end
 
 # ---------------------------------------------------------------- stiffness telemetry kernel
@@ -940,19 +888,11 @@ end
     end
 end
 
-function _gpol_stiff_part!(out, rays, rng, grid_d, ng, xo, inv_dx, gp, a, r_h, C,
-                           escape, R_em, nmax, thresh)
-    backend = KernelAbstractions.get_backend(grid_d)
-    kern = _gpol_stiff_kernel!(backend)
-    cnt = length(rng)
-    y0d = _upload(backend, rays[rng])
-    outd = KernelAbstractions.allocate(backend, SVector{4,Float64}, cnt)
-    kern(outd, y0d, grid_d, gp, a, r_h, C, escape, R_em, Int(nmax), ng, xo, inv_dx,
-         Float64(thresh), cnt; ndrange = cnt, workgroupsize = min(_GPOL_WG, cnt))
-    KernelAbstractions.synchronize(backend)
-    out[rng] .= Array(outd)
-    return nothing
-end
+# Launch of the stiffness telemetry kernel for one chunk.
+_gpol_launch_stiff(dgrid, gp, a, r_h, C, escape, R_em, nmax, thresh) = (lane, (outd,), y0d, n) ->
+    _kern_launch!(_gpol_stiff_kernel!(lane.backend), _GPOL_WG, n, outd, y0d,
+                  dgrid.dev_data[lane.dev], gp, a, r_h, C, escape, R_em, Int(nmax), dgrid.n,
+                  dgrid.xo, dgrid.inv_dx, Float64(thresh), n)
 
 """
     stiffness_telemetry(cfg, snap_or_grid; devices, nmax, C, box_half, n,
@@ -965,17 +905,16 @@ the transfer-matrix stiffness distribution (RAPTOR check_stiffness telemetry). R
 max(|λ|)·ds exceeds `thresh` (default the RAPTOR |e^{τλ}|>0.99 gate). Telemetry only — the
 polarized transport is unchanged (our analytic coupling is exact in stiff cells).
 """
-function stiffness_telemetry(cfg, snap_or_grid; devices = select_devices(),
+function stiffness_telemetry(cfg, snap_or_grid; devices = default_pool(),
                              nmax::Int = cfg.max_steps,
                              C::Real = 80, box_half::Real = 40.0, n::Integer = 256,
                              thresh::Real = _STIFF_METRIC_THRESH)
+    pool = device_pool(devices)
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
     rays = camera_rays(st, cam)
-    dgrid = snap_or_grid isa DeviceFluidGrid ? snap_or_grid :
-            upload_grid(snap_or_grid isa UniformFluidGrid ? snap_or_grid :
-                        resample_fluid_uniform(snap_or_grid, box_half, n), devices)
+    dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
     gp = _gpol_params(cfg)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
@@ -984,16 +923,9 @@ function stiffness_telemetry(cfg, snap_or_grid; devices = select_devices(),
     R_em = sqrt(3.0) * abs(dgrid.xo)
     nrays = length(rays)
     out = Vector{SVector{4,Float64}}(undef, nrays)
-    nd = length(devices)
-    @sync for di in 1:nd
-        idx = di:nd:nrays; dev = devices[di]
-        isempty(idx) && continue
-        @async begin
-            _device!(dev)
-            _gpol_stiff_part!(out, rays, idx, dgrid.dev_data[dev], dgrid.n, dgrid.xo,
-                              dgrid.inv_dx, gp, a, r_h, Cf, escape, R_em, nmax, thresh)
-        end
-    end
+    march!((out,), pool, [MarchPart(1:nrays, HostRays(rays),
+                                    _gpol_launch_stiff(dgrid, gp, a, r_h, Cf, escape, R_em,
+                                                       nmax, thresh))])
     nv = sum(o[1] for o in out)
     ns = sum(o[2] for o in out)
     mx = maximum(o[3] for o in out)
