@@ -43,16 +43,36 @@ struct LeafTable
     nmb::Int
 end
 
+"""
+    LevelHash
+
+Per-level hash of AthenaK leaf blocks: `dict[(L, lx1, lx2, lx3)]` is the 1-based block
+at level `L` and logical location `(lx1, lx2, lx3)`; `levels` lists the levels present
+(ascending); `inv_w0` is the inverse root-block width per axis.
+"""
+struct LevelHash
+    dict::Dict{NTuple{4,Int},Int32}
+    levels::Vector{Int}
+    x1min::Float64
+    x2min::Float64
+    x3min::Float64
+    x1max::Float64
+    x2max::Float64
+    x3max::Float64
+    inv_w0::SVector{3,Float64}
+end
+
 # Lazy, thread-safe holder for a snapshot's leaf table. `state` (0 = not attempted,
 # 1 = attempted) uses release/acquire ordering to publish the `tbl` write made under
 # `lk` to the lock-free fast path. `tbl === nothing` after `state == 1` means the
-# grid was too large / degenerate and the scan fallback is used permanently.
+# grid was too large / degenerate; locates then use `hash` (or the scan without one).
 mutable struct LeafCache
     @atomic state::Int8
     tbl::Union{Nothing,LeafTable}
+    hash::Union{Nothing,LevelHash}   # hashed fallback when `tbl === nothing`
     lk::ReentrantLock
 end
-LeafCache() = LeafCache(Int8(0), nothing, ReentrantLock())
+LeafCache() = LeafCache(Int8(0), nothing, nothing, ReentrantLock())
 
 # Max finest-index cells; larger meshes fall back to the linear scan.
 const _LEAF_MAX_CELLS = 8_000_000
@@ -102,6 +122,49 @@ end
     (f1 < 0.0 || f1 >= t.N1 || f2 < 0.0 || f2 >= t.N2 || f3 < 0.0 || f3 >= t.N3) && return 0
     i1 = unsafe_trunc(Int, f1); i2 = unsafe_trunc(Int, f2); i3 = unsafe_trunc(Int, f3)
     return Int(@inbounds t.leaf[i1 + 1, i2 + 1, i3 + 1])
+end
+
+# ------------------------------------------------------------ hashed leaf-block locate
+#
+# Fallback for meshes whose finest-block grid exceeds `_LEAF_MAX_CELLS` (nested-box
+# AMR around a binary reaches 1024³-2048³ finest blocks): one hash entry per block,
+# keyed by (level, logical location). A point's candidate logical index at level L is
+# floor((x - xmin) 2^L / w0) with w0 the root-block width; probing levels coarse to
+# fine returns the unique leaf that contains it (lo <= x < hi, equal to the scan off
+# block faces). Cost: at most one probe per level present.
+
+function _build_level_hash(ext_lo, ext_hi, levels, logical_locations, nmb)
+    nmb >= 1 || return nothing
+    w0 = (ext_hi[1] - ext_lo[1]) .* 2.0^levels[1]
+    dict = Dict{NTuple{4,Int},Int32}()
+    sizehint!(dict, nmb)
+    for m in 1:nmb
+        L = levels[m]
+        wm = (ext_hi[m] - ext_lo[m]) .* 2.0^L
+        all(abs.(wm .- w0) .<= 1e-9 .* abs.(w0)) || return nothing   # mixed root widths
+        dict[(L, logical_locations[1, m], logical_locations[2, m],
+              logical_locations[3, m])] = Int32(m)
+    end
+    x1min = minimum(e[1] for e in ext_lo); x2min = minimum(e[2] for e in ext_lo)
+    x3min = minimum(e[3] for e in ext_lo)
+    x1max = maximum(e[1] for e in ext_hi); x2max = maximum(e[2] for e in ext_hi)
+    x3max = maximum(e[3] for e in ext_hi)
+    return LevelHash(dict, sort(unique(levels)), x1min, x2min, x3min, x1max, x2max, x3max,
+                     1.0 ./ w0)
+end
+
+@inline function _hash_locate(h::LevelHash, x, y, z)
+    (h.x1min <= x < h.x1max && h.x2min <= y < h.x2max && h.x3min <= z < h.x3max) || return 0
+    f1 = (x - h.x1min) * h.inv_w0[1]
+    f2 = (y - h.x2min) * h.inv_w0[2]
+    f3 = (z - h.x3min) * h.inv_w0[3]
+    @inbounds for L in h.levels
+        s = ldexp(1.0, L)
+        m = get(h.dict, (L, unsafe_trunc(Int, f1 * s), unsafe_trunc(Int, f2 * s),
+                         unsafe_trunc(Int, f3 * s)), Int32(0))
+        m != 0 && return Int(m)
+    end
+    return 0
 end
 
 """
@@ -239,6 +302,8 @@ end
         t = _build_leaf_table(snap.ext_lo, snap.ext_hi, snap.levels,
                               snap.logical_locations, snap.nmb)
         c.tbl = t
+        t === nothing && (c.hash = _build_level_hash(snap.ext_lo, snap.ext_hi, snap.levels,
+                                                     snap.logical_locations, snap.nmb))
         @atomic :release c.state = Int8(1)
         return t
     finally
@@ -261,14 +326,20 @@ end
     meshblock_index(snap, x, y, z) -> Int
 
 Finest owning meshblock (1-based; 0 = vacuum) of CKS position `(x,y,z)`, via the
-O(1) leaf table when available and the linear scan otherwise. The single locate
+O(1) leaf table when available, else the per-level hash (`LevelHash`), else the linear
+scan. The single locate
 entry point for sampling.
 """
 @inline function meshblock_index(snap::AthenaKSnapshot, x, y, z)
     t = leaf_table(snap)
-    t === nothing && return _find_meshblock_scan(snap, x, y, z)
-    return _leaf_locate(t, x, y, z)
+    t === nothing || return _leaf_locate(t, x, y, z)
+    h = snap.leafcache.hash
+    h === nothing && return _find_meshblock_scan(snap, x, y, z)
+    return _hash_locate(h, x, y, z)
 end
+
+"The snapshot's hashed leaf locate (built with the leaf table when the dense grid is over the cap), or `nothing`."
+_leaf_hash(snap::AthenaKSnapshot) = (leaf_table(snap); snap.leafcache.hash)
 
 # Internal alias for meshblock_index.
 @inline _find_meshblock(snap::AthenaKSnapshot, x, y, z) = meshblock_index(snap, x, y, z)
