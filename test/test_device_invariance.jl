@@ -133,19 +133,19 @@ end
 end
 
 # ------------------------------------------------------------------ Monte Carlo
-@testset "MC: GPU driver stream assignment (_mc_device_shares)" begin
+@testset "MC: GPU driver stream assignment (_mc_shares)" begin
     seed = 0x5ca77e5
     N = 1001
     # the Philox (key, counter-word) identity of every launched primary stream
-    streams(nd) = Set((r.key, r.sid) for s in _mc_device_shares(N, nd)
+    streams(nd) = Set((r.key, r.sid) for s in _mc_shares(N, nd)
                       for r in (BlackLightPlus.MonteCarlo.mc_primary_rng(seed, g)
                                 for g in s.first:(s.first + s.n - 1)))
     for nd in 1:5
-        sh = _mc_device_shares(N, nd)
+        sh = _mc_shares(N, nd)
         @test sum(s.n for s in sh) == N           # every superphoton launched once
         @test length(streams(nd)) <= N
     end
-    @test _mc_device_shares(N, 1)[1] == (first = 1, n = N)   # devices=[d] == single device
+    @test _mc_shares(N, 1)[1] == (first = 1, n = N)   # devices=[d] == single device
     # the primary stream set does not depend on the device count
     @test streams(2) == streams(1)                # C2
     @test streams(3) == streams(1)                # C2
@@ -181,6 +181,32 @@ end
         # identical children and spectrum for any chunk count
         @test di_bits(scat(k).total.sumw) == di_bits(s1.total.sumw)   # C3
     end
+end
+
+@testset "MC on the pool: 1-5 devices, global-id chunks, one table build per call" begin
+    tbl = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
+    sph = SphereModel()
+    ssph = ScatteringSphere(n_e = 5.0e18)
+    thin(d, ch) = mc_spectrum_gpu(sph, 20_000; devices = d, chunk = ch, seed = 0xC0FFEE,
+                                  n_ebins = 60)
+    scat(d, ch) = mc_spectrum_gpu(ssph, tbl, 2_000; devices = d, chunk = ch, seed = 0xBEEF,
+                                  n_ebins = 60, max_scatt = 3)
+    t1 = thin(di_hosts(1), 2^20); s1 = scat(di_hosts(1), 2^20)    # one chunk, one device
+    @test s1.n_children > 2_000
+    builds = _MC_TABLE_BUILDS[]
+    for nd in 1:5
+        pool = DevicePool(di_hosts(nd); lanes = 2)
+        t = thin(pool, 997)                                # ~15 chunks over 2nd workers
+        @test t.count == t1.count && di_bits(t.sumw) == di_bits(t1.sumw) &&
+              di_bits(t.sumwE) == di_bits(t1.sumwE)
+        s = scat(pool, 97)                                  # ~20 chunks, all layers each
+        @test di_bits(s.total.sumw) == di_bits(s1.total.sumw) &&
+              di_bits(s.total.sumwE) == di_bits(s1.total.sumwE)
+        @test s.n_children == s1.n_children && s.w_children == s1.w_children &&
+              s.scatter_loss == s1.scatter_loss
+        close(pool)
+    end
+    @test _MC_TABLE_BUILDS[] - builds == 10                # exactly one build per call
 end
 
 @testset "MC: GPU scatter reproducibility and device split" begin

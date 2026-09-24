@@ -16,7 +16,7 @@ const XM = BlackLightPlus.MonteCarlo
 
 const _XE_SRC = joinpath(@__DIR__, "..", "src")
 @isdefined(_gimg_thermal) || include(joinpath(_XE_SRC, "gpu_image.jl"))
-@isdefined(_mc_device_shares) || include(joinpath(_XE_SRC, "montecarlo", "mc_gpu.jl"))
+@isdefined(_mc_shares) || include(joinpath(_XE_SRC, "montecarlo", "mc_gpu.jl"))
 
 xe_bits(x::AbstractArray{<:Real}) = reinterpret(UInt64, Float64.(vec(x)))
 xe_bits(x::Real) = reinterpret(UInt64, Float64(x))
@@ -129,9 +129,9 @@ end
     # device split: every global id launched once, same stream set for 1..5 devices
     N = 1001
     streams(nd) = Set(XM.mc_stream_id(XM.mc_primary_rng(0x5ca77e5, g))
-                      for s in _mc_device_shares(N, nd) for g in s.first:(s.first + s.n - 1))
+                      for s in _mc_shares(N, nd) for g in s.first:(s.first + s.n - 1))
     for nd in 1:5
-        @test sum(s.n for s in _mc_device_shares(N, nd)) == N
+        @test sum(s.n for s in _mc_shares(N, nd)) == N
         @test streams(nd) == streams(1)
         @test length(streams(nd)) == N
     end

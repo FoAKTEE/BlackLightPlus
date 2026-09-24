@@ -13,7 +13,7 @@ const _DI_SRC = joinpath(@__DIR__, "..", "src")
 @isdefined(_gamr_sample)   || include(joinpath(_DI_SRC, "gpu_amr.jl"))
 @isdefined(_gsp_ctl)       || include(joinpath(_DI_SRC, "gpu_spacetime.jl"))
 @isdefined(_fused_kernel_ad!) || include(joinpath(_DI_SRC, "gpu_image_ad.jl"))
-@isdefined(_mc_device_shares) || include(joinpath(_DI_SRC, "montecarlo", "mc_gpu.jl"))
+@isdefined(_mc_shares) || include(joinpath(_DI_SRC, "montecarlo", "mc_gpu.jl"))
 @isdefined(_ganalytic_kernel!) || include(joinpath(_DI_SRC, "gpu_analytic.jl"))
 @isdefined(_trace_kernel!) || include(joinpath(_DI_SRC, "geodesics", "gpu_tracer.jl"))
 
