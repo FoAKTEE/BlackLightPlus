@@ -25,13 +25,14 @@ using BlackLightPlus: KerrSchildCartesian, SuperposedKerrSchild, PlaneParallelCa
                       rk4_step_fixed, ks_radius_hole, horizon_radius_hole
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 using BlackLightPlus.Radiation: polarized_march, unpolarized_march, SimCoeffConfig,
-                                eight_coefficients
+                                eight_coefficients, fluid_tetrad
+using BlackLightPlus.Geodesics: metric_and_inverse, geodesic_transport_rhs
 using BlackLightPlus.Simulation: pgas_from_eint, units, primitive_four_vectors
 const MT_GEO = BlackLightPlus.Geodesics
 
 const _MT_SRC = joinpath(@__DIR__, "..", "src")
-@isdefined(_gimg_thermal) || include(joinpath(_MT_SRC, "gpu_image.jl"))
-@isdefined(_gpol_thermal) || include(joinpath(_MT_SRC, "gpu_pol.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(_MT_SRC, "gpu_image.jl"))
+@isdefined(_gpol_kernel!) || include(joinpath(_MT_SRC, "gpu_pol.jl"))
 @isdefined(_gsp_ctl)      || include(joinpath(_MT_SRC, "gpu_spacetime.jl"))
 @isdefined(_trace_kernel!) || include(joinpath(_MT_SRC, "geodesics", "gpu_tracer.jl"))
 
@@ -246,12 +247,12 @@ end
 function mt_frame_drift(y0::SVector{8,Tg}, gp, a::Tg, r_h::Tg, escape::Tg, R_em::Tg) where {Tg}
     y64 = SVector{8,Float64}(y0)
     x0 = SVector(y64[1], y64[2], y64[3], y64[4]); kcov0 = -SVector(y64[5], y64[6], y64[7], y64[8])
-    gcov0, gcon0 = _gimg_metric(x0, gp.bh_a); kcon0 = gcon0 * kcov0
+    gcov0, gcon0 = metric_and_inverse(KerrSchildCartesian(gp.bh_a), x0); kcon0 = gcon0 * kcov0
     e0c = _gpol_normal_observer(gcon0); e0cov0 = gcov0 * e0c
     cu = SVector(gp.cu1, gp.cu2, gp.cu3, gp.cu4)
     upc0 = e0c[1]*cu[1] - (e0cov0[2]*cu[2] + e0cov0[3]*cu[3] + e0cov0[4]*cu[4]) / e0cov0[1]
     upcam = SVector(upc0, cu[2]+e0c[2]*cu[1], cu[3]+e0c[3]*cu[1], cu[4]+e0c[4]*cu[1])
-    Ecam = _gpol_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
+    Ecam = fluid_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
     eU = SVector{4,Tg}(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])
     eUu = SVector{4,Tg}(e0c); wcam = -dot(kcov0, e0c)
     y = y0; r_prev = Tg(Inf); worst = 0.0; C = Tg(MT_C)
@@ -261,13 +262,14 @@ function mt_frame_drift(y0::SVector{8,Tg}, gp, a::Tg, r_h::Tg, escape::Tg, R_em:
         r_prev = r; h = (r - r_h) / C
         kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])
         worst = max(worst, abs(-dot(kcov, SVector{4,Float64}(eUu)) - wcam) / wcam)
-        dy, de, du = _gpol_ext_rhs2(y, eU, eUu, a); ay = dy; ae = de; au = du
+        sa = KerrSchildCartesian(a)
+        dy, (de, du) = geodesic_transport_rhs(sa, y, (eU, eUu)); ay = dy; ae = de; au = du
         ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, de, du = _gpol_ext_rhs2(ys, es, us, a); ay += 2dy; ae += 2de; au += 2du
+        dy, (de, du) = geodesic_transport_rhs(sa, ys, (es, us)); ay += 2dy; ae += 2de; au += 2du
         ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, de, du = _gpol_ext_rhs2(ys, es, us, a); ay += 2dy; ae += 2de; au += 2du
+        dy, (de, du) = geodesic_transport_rhs(sa, ys, (es, us)); ay += 2dy; ae += 2de; au += 2du
         ys = y + h*dy; es = eU + h*de; us = eUu + h*du
-        dy, de, du = _gpol_ext_rhs2(ys, es, us, a); ay += dy; ae += de; au += du
+        dy, (de, du) = geodesic_transport_rhs(sa, ys, (es, us)); ay += dy; ae += de; au += du
         y += (h/6)*ay; eU += (h/6)*ae; eUu += (h/6)*au
     end
     return worst

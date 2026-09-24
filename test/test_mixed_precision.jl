@@ -12,10 +12,11 @@ using BlackLightPlus
 using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 using BlackLightPlus.Simulation: AthenaKSnapshot
+using BlackLightPlus.Geodesics: geodesic_rhs, geodesic_transport_rhs, rk4_step_fixed, ks_radius_energy
 
-@isdefined(_gimg_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
 @isdefined(_trace_kernel!) || include(joinpath(@__DIR__, "..", "src", "geodesics", "gpu_tracer.jl"))
-@isdefined(_gpol_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
+@isdefined(_gpol_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
 @isdefined(_gamr_sample) || include(joinpath(@__DIR__, "..", "src", "gpu_amr.jl"))
 
 # KA CPU kernels may surface an in-kernel error wrapped in task/composite layers.
@@ -65,22 +66,21 @@ end
     a32 = Float32(a64)
     y32 = SVector{8,Float32}(500.0, 5.0, 5.0, 5.0, -1.0, 0.1, 0.1, 0.1)
     y64 = SVector{8,Float64}(y32)
-    # state-lane types stay Float32 end to end (imager + tracer device helpers)
-    @test eltype(_gimg_rhs(y32, a32)) === Float32
-    @test typeof(_gimg_rks(y32, a32)) === Float32
-    @test eltype(_gimg_rk4_step(y32, 0.01f0, a32)) === Float32
-    @test eltype(_rhs_gpu(y32, a32)) === Float32
-    @test typeof(_r_ks(y32, a32)) === Float32
+    # state-lane types stay Float32 end to end (the Geodesics RHS / RK4 step the imager
+    # and tracer kernels compile, on the lane-typed Kerr spacetime)
+    st32 = KerrSchildCartesian(a32); st64 = KerrSchildCartesian(a64)
+    @test eltype(geodesic_rhs(st32, y32)) === Float32
+    @test typeof(ks_radius_energy(y32, a32)[1]) === Float32
+    @test eltype(rk4_step_fixed(st32, y32, 0.01f0)) === Float32
     # fp64 lane types unchanged
-    @test eltype(_gimg_rhs(y64, a64)) === Float64
-    @test eltype(_rhs_gpu(y64, a64)) === Float64
-    # G1: a Float64 scalar into an fp32 state is a MethodError (never silent fp64)
-    @test_throws MethodError _gimg_rhs(y32, a64)
-    @test_throws MethodError _gimg_rks(y32, a64)
-    @test_throws MethodError _gimg_rk4_step(y32, 0.01, a32)
+    @test eltype(geodesic_rhs(st64, y64)) === Float64
+    # G1: a Float64 scalar into an fp32 march is a MethodError (never silent fp64)
+    @test_throws MethodError rk4_step_fixed(st32, y32, 0.01)
     @test_throws MethodError _gimg_stop(y32, Inf32, Float32(1.35), 550.0, 52.0f0, a32)
-    @test_throws MethodError _rhs_gpu(y32, a64)
-    @test_throws MethodError _r_ks(y32, a64)
+    @test_throws MethodError _gimg_stop(y32, Inf32, Float32(1.35), 550.0f0, 52.0f0, a64)
+    @test_throws MethodError _gimg_march(y32, _ -> zero(SVector{8,Float64}), Float64,
+                                         (nu_obs = 2.3e11, L_unit = 1.0), a64,
+                                         Float32(1.35), 80.0f0, 550.0f0, Float32(Inf), 16)
     # G4: the march accumulator comes from the OUTPUT type, never Tgeo — an fp32
     # state with a Float64 accumulator returns Float64 (the AD twin relies on this)
     vac = _ -> zero(SVector{8,Float64})
@@ -218,7 +218,7 @@ end
     # trip counts and capture classification agree on this (non-critical) deck
     # (measured: max|Δcnt| = 0, zero flips, escaped-position rel dev median 4.9e-6)
     @test maximum(abs.(Int.(c32) .- Int.(c64))) <= 2
-    cls(t, c, aT) = [_r_ks(t[i, Int(c[i]) + 1], aT) < (1 + sqrt(1 - a^2)) + 2e-3
+    cls(t, c, aT) = [ks_radius_energy(t[i, Int(c[i]) + 1], aT)[1] < (1 + sqrt(1 - a^2)) + 2e-3
                      for i in 1:nr]
     m64 = cls(t64, c64, a); m32 = cls(t32, c32, Float32(a))
     @test m64 == m32
@@ -256,7 +256,7 @@ end
 # ================================================ polarized + AMR two-type kernels
 # Fused polarized (gpu_pol.jl) + native-AMR (gpu_amr.jl) two-type kernels: the
 # polarization-frame parallel transport rides the Tgeo lane with the geodesic
-# (types-only genericization of the single-connection-eval _gpol_ext_rhs2);
+# (`geodesic_transport_rhs` runs in the state's number type);
 # the Stokes/Mueller coupling and every coefficient stay Float64 from converted state.
 
 # physical units for the polarized decks (the test_transfer.jl parity constants)
@@ -332,17 +332,20 @@ end
     y64 = SVector{8,Float64}(y32)
     e32 = SVector{4,Float32}(0.0, 0.0, 1.0, 0.0); u32 = SVector{4,Float32}(1.0, 0.0, 0.0, 0.0)
     e64 = SVector{4,Float64}(e32); u64 = SVector{4,Float64}(u32)
-    dy, de, du = _gpol_ext_rhs2(y32, e32, u32, a32)
+    st32 = KerrSchildCartesian(a32); st64 = KerrSchildCartesian(a64)
+    dy, (de, du) = geodesic_transport_rhs(st32, y32, (e32, u32))
     @test eltype(dy) === Float32 && eltype(de) === Float32 && eltype(du) === Float32
-    dy4, de4, du4 = _gpol_ext_rhs2(y64, e64, u64, a64)          # fp64 lane unchanged
+    dy4, (de4, du4) = geodesic_transport_rhs(st64, y64, (e64, u64))   # fp64 lane unchanged
     @test eltype(dy4) === Float64 && eltype(de4) === Float64
     # the fp32 transport tracks the fp64 one to fp32 tolerance at the same input
     @test maximum(abs.(SVector{4,Float64}(de) .- de4)) <
           1e-4 * max(1.0, maximum(abs.(de4)))
     # G1: any mismatched lane member is a MethodError, never a silent promotion
-    @test_throws MethodError _gpol_ext_rhs2(y32, e32, u32, a64)
-    @test_throws MethodError _gpol_ext_rhs2(y32, e64, u64, a32)
-    @test_throws MethodError _gpol_ext_rhs2(y64, e32, u32, a64)
+    @test_throws MethodError geodesic_transport_rhs(st32, y32, (e64, u64))
+    @test_throws MethodError geodesic_transport_rhs(st64, y64, (e32, u32))
+    @test_throws MethodError _gpol_march(y32, _ -> zero(SVector{8,Float64}),
+                                         _gpol_params(_mp_pol_cfg(2)), a64,
+                                         Float32(1.35), 80.0f0, 550.0f0, Float32(Inf), 16)
     # the march: fp32 state + matched fp32 scalars — Stokes accumulator stays Float64
     gp = _gpol_params(_mp_pol_cfg(2))
     vac = _ -> zero(SVector{8,Float64})

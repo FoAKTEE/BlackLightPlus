@@ -15,7 +15,7 @@ using BlackLightPlus.MonteCarlo: NW, NT
 const XM = BlackLightPlus.MonteCarlo
 
 const _XE_SRC = joinpath(@__DIR__, "..", "src")
-@isdefined(_gimg_thermal) || include(joinpath(_XE_SRC, "gpu_image.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(_XE_SRC, "gpu_image.jl"))
 @isdefined(_mc_device_shares) || include(joinpath(_XE_SRC, "montecarlo", "mc_gpu.jl"))
 
 xe_bits(x::AbstractArray{<:Real}) = reinterpret(UInt64, Float64.(vec(x)))

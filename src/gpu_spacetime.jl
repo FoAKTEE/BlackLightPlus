@@ -15,10 +15,12 @@ using CUDA
 using Adapt
 using LinearAlgebra: dot
 using BlackLightPlus: SuperposedKerrSchild, PlaneParallelCamera, camera_rays
-using BlackLightPlus.Geodesics: metric, inverse_metric, geodesic_rhs, rk4_step_fixed,
-      ks_radius_hole, horizon_radius_hole, HORIZON_EPS_SAMPLED, ADMGridSpacetime,
-      superposed_control, march_captured, march_escaped, normal_frame_energy,
-      StationarySpacetime, _adm_gcov
+using BlackLightPlus.Geodesics: metric, inverse_metric, metric_and_inverse, geodesic_rhs,
+      geodesic_transport_rhs,
+      rk4_step_fixed, ks_radius_hole, horizon_radius_hole, HORIZON_EPS_SAMPLED,
+      ADMGridSpacetime, superposed_control, march_captured, march_escaped,
+      normal_frame_energy, StationarySpacetime, _adm_gcov, _adm_gcon, _adm_pair,
+      _adm_lower_index, _adm_raise_index, _adm_raise_and_norm
 using BlackLightPlus.Simulation: AthenaKSnapshot
 
 isdefined(@__MODULE__, :_gimg_coeffs) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_image.jl"))
@@ -50,9 +52,18 @@ Adapt.adapt_structure(to, p::DevADMParams) =
     DevADMParams(p.x0, p.y0, p.z0, p.dx, p.dy, p.dz, p.nx, p.ny, p.nz,
                  Adapt.adapt(to, p.data), p.alpha_min, p.offgrid_eta)
 
-# The SAME ADM assembly body as the CPU spacetime (single source, numerical_spacetime.jl).
-BlackLightPlus.Geodesics.metric(sp::DevADMParams, X::SVector{4}) = _adm_gcov(sp, X)
-BlackLightPlus.Geodesics.inverse_metric(sp::DevADMParams, X::SVector{4}) = inv(_adm_gcov(sp, X))
+# The SAME ADM assembly bodies as the CPU spacetime (single source, numerical_spacetime.jl).
+@inline BlackLightPlus.Geodesics.metric(sp::DevADMParams, X::SVector{4}) = _adm_gcov(sp, X)
+@inline BlackLightPlus.Geodesics.inverse_metric(sp::DevADMParams, X::SVector{4}) =
+    _adm_gcon(sp, X)
+@inline BlackLightPlus.Geodesics.metric_and_inverse(sp::DevADMParams, X::SVector{4}) =
+    _adm_pair(sp, X)
+@inline BlackLightPlus.Geodesics.lower_index(sp::DevADMParams, X::SVector{4}, v::SVector{4}) =
+    _adm_lower_index(sp, X, v)
+@inline BlackLightPlus.Geodesics.raise_index(sp::DevADMParams, X::SVector{4}, p::SVector{4}) =
+    _adm_raise_index(sp, X, p)
+@inline BlackLightPlus.Geodesics.raise_and_norm(sp::DevADMParams, X::SVector{4},
+                                                p::SVector{4}) = _adm_raise_and_norm(sp, X, p)
 
 """
     upload_adm(st::ADMGridSpacetime, devices; alpha_min=st.alpha_min)
@@ -97,49 +108,6 @@ end
     return march_captured(d, En, 0.0), max(r, 1.0) / C, r
 end
 
-# ---------------------------------------------------------------- generic coeffs
-# One sample -> (j_inv, α_inv) for an arbitrary metric: the `_gimg_coeffs` physics with
-# (gcov, gcon) passed in instead of the Kerr closed form. Deliberately a sibling of
-# `_gimg_coeffs`, not a refactor — the Kerr body is pinned bit-exact against
-# fmuladd-contraction drift (see its NOTE).
-@inline function _gimg_coeffs_st(prim::SVector{8,Float64}, kcov::SVector{4,Float64},
-                                 gcov::SMatrix{4,4}, gcon::SMatrix{4,4}, gp)
-    z = zero(promote_type(typeof(gp.d_unit), typeof(gp.e_unit), typeof(gp.b_unit),
-                          typeof(gp.rat_high), typeof(gp.rat_low)))
-    rho = prim[1]; eint = prim[5]
-    (rho <= 0.0 || eint <= 0.0) && return (z, z)
-    pgas = (gp.gamma - 1.0) * eint
-    ucon, ucov, bcon, b_sq = _gimg_pfv(prim[2], prim[3], prim[4],
-                                       prim[6], prim[7], prim[8], gcov, gcon)
-    b_sq <= 0.0 && return (z, z)
-    rho_cgs = rho * gp.d_unit
-    pgas_cgs = pgas * gp.e_unit
-    n_cgs = rho_cgs / (gp.mu * _MP)
-    n_e = n_cgs / (1.0 + 1.0 / gp.ne_ni)
-    bb_cgs = sqrt(b_sq) * gp.b_unit
-    sigma = b_sq / rho
-    beta_inv = b_sq / (2.0 * pgas)
-    theta_e = _gimg_theta_e(rho_cgs, pgas_cgs, beta_inv, gp)
-    (gp.sigma_cut >= 0.0 && sigma > gp.sigma_cut) && return (z, z)
-    (gp.theta_e_min >= 0.0 && theta_e < gp.theta_e_min) && return (z, z)
-    minus_ku = -dot(kcov, ucon)                 # = ν_local / ν_obs (k_t = -1)
-    kb = dot(kcov, bcon)
-    cos2 = min(kb * kb / (minus_ku * minus_ku * b_sq), 1.0)
-    sin_tb = sqrt(1.0 - cos2)
-    nu_local = minus_ku * gp.nu_obs
-    th = _gimg_thermal(gp.thermal_frac, n_e, theta_e, bb_cgs, nu_local, sin_tb)
-    j = th[1]; a = th[2]
-    if hasfield(typeof(gp), :power_frac)
-        jp, ap = _gimg_powerlaw(gp, n_e, bb_cgs, nu_local, sin_tb)
-        j += jp; a += ap
-    end
-    if hasfield(typeof(gp), :kappa_frac)
-        jk, ak = _gimg_kappa(gp, n_e, bb_cgs, nu_local, sin_tb)
-        j += jk; a += ak
-    end
-    return (j, a)
-end
-
 # ---------------------------------------------------------------- generic unpol march
 # The generic-spacetime fused unpolarized march for one ray, camera->source: the
 # `_gimg_march` reverse-accumulation scheme (gpu_image.jl header) with the geodesic
@@ -159,11 +127,10 @@ end
         prim = @inline sample(y)
         if prim[1] > 0.0
             kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
-            gcov = metric(sp, SVector(y[1], y[2], y[3], y[4]))
-            gcon = inv(gcov)          # == inverse_metric(sp, x) (both generic spacetimes)
-            j_inv, a_inv = _gimg_coeffs_st(prim, kcov, gcov, gcon, gp)
+            gcov, gcon = metric_and_inverse(sp, SVector(y[1], y[2], y[3], y[4]))
+            j_inv, a_inv = _prim_coeffs(prim, kcov, gcov, gcon, gp)
             ds = h * gp.L_unit / gp.nu_obs
-            A, B = _gimg_ab(j_inv, a_inv, ds)
+            A, B = unpolarized_segment(j_inv, a_inv, ds)
             Iinv += trans * B
             trans *= A
         end
@@ -172,87 +139,26 @@ end
     return Iinv * gp.nu_obs^3
 end
 
-# ---------------------------------------------------------------- generic pol frame
-# Renormalizing tetrad for arbitrary metrics: the pinned Kerr device body `_gpol_tetrad`
-# (gpu_pol.jl) + the explicit e_(1) renormalization of the CPU `fluid_tetrad(...;
-# renorm_e1 = true)` — e_(1) is raised from the metric cross product with norm
-# 1/|det g|, unit only on single CKS (|det g| = 1), so every spacetime marched here
-# needs the renorm, keyed as the CPU marches on `!(st isa KerrSchildCartesian)`.
-@inline function _gsp_tetrad(ucon::SVector{4}, ucov::SVector{4}, kcon::SVector{4},
-                             kcov::SVector{4}, up::SVector{4},
-                             gcov::SMatrix{4,4}, gcon::SMatrix{4,4})
-    tet = _gpol_tetrad(ucon, ucov, kcon, kcov, up, gcov, gcon)
-    e1 = SVector(tet[2, 1], tet[2, 2], tet[2, 3], tet[2, 4])
-    e1_norm = sqrt(dot(e1, gcov * e1))
-    if e1_norm > 0.0
-        e1 = e1 ./ e1_norm
-    end
-    return @inbounds SMatrix{4,4}(tet[1, 1], e1[1], tet[3, 1], tet[4, 1],
-                                  tet[1, 2], e1[2], tet[3, 2], tet[4, 2],
-                                  tet[1, 3], e1[3], tet[3, 3], tet[4, 3],
-                                  tet[1, 4], e1[4], tet[3, 4], tet[4, 4])
-end
-
-# ---------------------------------------------------------------- generic extended RHS
-# Geodesic RHS + parallel transport of TWO frame legs from ONE shared 3-lane AD pass
-# through the spacetime's covariant metric — the `_gpol_ext_rhs2` structure (gpu_pol.jl)
-# with `metric(sp, ·)` in place of the Kerr closed form. The value lane of `inv` on a
-# Dual matrix performs the identical scalar ops as `inv` on the value matrix, and the
-# CPU `inverse_metric` of both generic spacetimes IS `inv(metric)`, so the geodesic lane
-# below is bit-identical to the CPU engine stepping used by `_gsp_march`. The partials
-# of gcovd give ∂_c g_{ab} (c = 2,3,4; ∂_t g = 0, stationary slice) for the transport
-# deV^μ/dλ = -Γ^μ_{αβ} k^α V^β. Float64-only.
-@inline function _gsp_ext_rhs2(sp, y::SVector{8,Float64}, eU::SVector{4,Float64},
-                               eV::SVector{4,Float64})
-    x = SVector(y[1], y[2], y[3], y[4]); p = SVector(y[5], y[6], y[7], y[8])
-    z = 0.0; o = 1.0
-    xd = SVector(Dual(x[1], (z, z, z)), Dual(x[2], (o, z, z)),
-                 Dual(x[3], (z, o, z)), Dual(x[4], (z, z, o)))
-    gcovd = metric(sp, xd)
-    gcond = inv(gcovd)
-    gcon = SMatrix{4,4,Float64}(ntuple(k -> value(gcond[k]), Val(16)))
-    kcon = gcon * p
-    dp1 = z; dp2 = z; dp3 = z
-    @inbounds for μ in 1:4, ν in 1:4
-        pp = p[μ] * p[ν]; prt = partials(gcond[μ, ν])
-        dp1 -= pp * prt[1]; dp2 -= pp * prt[2]; dp3 -= pp * prt[3]
-    end
-    dy = SVector(kcon[1], kcon[2], kcon[3], kcon[4], z, dp1 / 2, dp2 / 2, dp3 / 2)
-    dg2 = SMatrix{4,4,Float64}(ntuple(k -> partials(gcovd[k])[1], Val(16)))
-    dg3 = SMatrix{4,4,Float64}(ntuple(k -> partials(gcovd[k])[2], Val(16)))
-    dg4 = SMatrix{4,4,Float64}(ntuple(k -> partials(gcovd[k])[3], Val(16)))
-    Dk = kcon[2] .* dg2 .+ kcon[3] .* dg3 .+ kcon[4] .* dg4
-    @inline function _transport(v)
-        Dv = v[2] .* dg2 .+ v[3] .* dg3 .+ v[4] .* dg4
-        t1 = Dk * v; t2 = Dv * kcon
-        t3 = SVector(z, dot(kcon, dg2 * v), dot(kcon, dg3 * v), dot(kcon, dg4 * v))
-        return -(0.5 .* (gcon * (t1 .+ t2 .- t3)))
-    end
-    return dy, _transport(eU), _transport(eV)
-end
-
 # ---------------------------------------------------------------- generic pol march
 # The generic-spacetime fused POLARIZED march for one ray, camera->source: the Kerr
 # reverse-Mueller scheme `_gpol_march` (gpu_pol.jl) with (i) march control/termination
-# from the spacetime (`_gsp_ctl`), (ii) the RT-lane metric from `metric(sp, ·)` + `inv`,
+# from the spacetime (`_gsp_ctl`), (ii) the RT-lane metric from `metric_and_inverse(sp,·)`,
 # (iii) geodesic + two-leg frame transport stepped by the fused low-storage RK4 over
-# `_gsp_ext_rhs2` (same combine ops as `rk4_step_fixed`, so the trajectory is
-# bit-compatible with the unpol march / CPU tracer), and (iv) the renormalizing
-# `_gsp_tetrad` in both the fluid tetrad and the readout frame. The metric-independent
-# pieces (`_gpol_coeffs`/`_gpol_segMB`/`_gpol_R`/`_gpol_admissible`) are the gpu_pol.jl
-# originals — no duplicated formula bodies.
+# `geodesic_transport_rhs` (same combine ops as `rk4_step_fixed`, so the trajectory is the
+# unpol march's / CPU tracer's), and (iv) the e_(1)-renormalizing `fluid_tetrad` in both
+# the fluid tetrad and the readout frame (|det g| ≠ 1 off single CKS).
 @inline function _gsp_pol_march(y0::SVector{8,Float64}, sample::F, gp, sp,
                                 C::Float64, escape::Float64, R_em::Float64,
                                 nmax) where {F}
     y = y0
     x0 = SVector(y0[1], y0[2], y0[3], y0[4]); kcov0 = -SVector(y0[5], y0[6], y0[7], y0[8])
-    gcov0 = metric(sp, x0); gcon0 = inv(gcov0); kcon0 = gcon0 * kcov0
+    gcov0, gcon0 = metric_and_inverse(sp, x0); kcon0 = gcon0 * kcov0
     e0c = _gpol_normal_observer(gcon0)
     e0cov0 = gcov0 * e0c
     cu = SVector(gp.cu1, gp.cu2, gp.cu3, gp.cu4)
     upc0 = e0c[1]*cu[1] - (e0cov0[2]*cu[2] + e0cov0[3]*cu[3] + e0cov0[4]*cu[4]) / e0cov0[1]
     upcam = SVector(upc0, cu[2]+e0c[2]*cu[1], cu[3]+e0c[3]*cu[1], cu[4]+e0c[4]*cu[1])
-    Ecam = _gsp_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
+    Ecam = fluid_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0; renorm_e1 = true)
     eU  = SVector(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])   # camera e_(2) (up)
     eUu = e0c                    # camera 4-velocity, parallel-transported alongside eU
     S = _gpz4; G = _gpI4
@@ -264,31 +170,30 @@ end
         prim = @inline sample(y)
         if prim[1] > 0.0
             x = SVector(y[1], y[2], y[3], y[4])
-            gcov = metric(sp, x); gcon = inv(gcov)
+            gcov, gcon = metric_and_inverse(sp, x)
             kcov = -SVector(y[5], y[6], y[7], y[8]); kcon = gcon * kcov   # photon k = -p
-            j, al, ro, tet_fl, valid = _gpol_coeffs(prim, x, kcov, gcov, gcon, gp,
-                                                    _gsp_tetrad)
+            j, al, ro, tet_fl, valid = _gpol_coeffs(prim, kcov, kcon, gcov, gcon, gp, true)
             if valid
-                E = _gsp_tetrad(eUu, gcov * eUu, kcon, kcov, eU, gcov, gcon)
+                E = fluid_tetrad(eUu, gcov * eUu, kcon, kcov, eU, gcov, gcon; renorm_e1 = true)
                 ds = h * gp.L_unit / gp.nu_obs
-                M, b = _gpol_segMB(j, al, ro, ds)
-                R = _gpol_R(tet_fl, E, gcov)
-                S = _gpol_admissible(S + G * (R * b))   # CPU stokes_couple clamp mirror
-                G = G * (R * M * transpose(R))
+                M, b = stokes_segment(j, al, ro, ds)
+                c2, s2 = _gpol_R(tet_fl, E, gcov)
+                S = stokes_admissible(S + G * _gpol_rot(c2, s2, b))   # the stokes_couple clamp
+                G = G * _gpol_rot(c2, s2, M)
             end
         end
         # low-storage streaming RK4 of {y, eU, eUu} (the _gpol_march scheme; same
         # ops/associativity as rk4_step_fixed's 4-stage combine)
-        dy, de, du = _gsp_ext_rhs2(sp, y, eU, eUu)
+        dy, (de, du) = geodesic_transport_rhs(sp, y, (eU, eUu))
         ay = dy; ae = de; au = du
         ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, de, du = _gsp_ext_rhs2(sp, ys, es, us)
+        dy, (de, du) = geodesic_transport_rhs(sp, ys, (es, us))
         ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
         ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, de, du = _gsp_ext_rhs2(sp, ys, es, us)
+        dy, (de, du) = geodesic_transport_rhs(sp, ys, (es, us))
         ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
         ys = y + h*dy; es = eU + h*de; us = eUu + h*du
-        dy, de, du = _gsp_ext_rhs2(sp, ys, es, us)
+        dy, (de, du) = geodesic_transport_rhs(sp, ys, (es, us))
         ay = ay + dy; ae = ae + de; au = au + du
         y   = y   + (h/6)*ay
         eU  = eU  + (h/6)*ae

@@ -3,9 +3,9 @@
 # `trace_rays_sampled` (integrator.jl): one ray per thread, fixed-control RK4 of
 # the Hamiltonian covariant-momentum RHS, step h = (r - r_h)/C, termination by the
 # shared `march_stop` rule (`_gimg_stop`, gpu_metric.jl: horizon backstop, redshift
-# cut, outbound-only escape/R_em) — the CPU tracer's own predicate. ∂_c g^{ab} is
-# ForwardDiff.Dual seeded in-kernel — same closed form as the CPU RHS, agreeing to
-# fp roundoff (~1 ulp/RHS, ~1e-8 max pixel rel), not bit-for-bit. NOT included from
+# cut, outbound-only escape/R_em) — the CPU tracer's own predicate. The RK4 step is the
+# CPU `rk4_step_fixed` compiled in-kernel; CPU and device agree to the device's
+# floating-point contraction (~1 ulp/RHS, ~1e-8 max pixel rel). NOT included from
 # geodesics.jl (CUDA optional). Step-density accuracy: NOTE on `trace_rays_sampled`.
 
 using StaticArrays
@@ -53,13 +53,11 @@ end
 end # @isdefined select_devices
 
 # ---------------------------------------------------------------- device kernels
-# The KS inverse metric, 3-lane-AD Hamiltonian RHS and KS radius come from the one
-# shared device-metric layer (../gpu_metric.jl); the local names are aliases of the
-# shared bodies (see the gpu_metric.jl header).
-isdefined(@__MODULE__, :_gimg_gi) || include(joinpath(@__DIR__, "..", "gpu_metric.jl"))
-const _gi_cks = _gimg_gi
-const _rhs_gpu = _gimg_rhs
-const _r_ks = _gimg_rks
+# The RK4 step is the Geodesics `rk4_step_fixed` on `KerrSchildCartesian` (the CPU
+# tracer's step, compiled in-kernel); the stop rule is `_gimg_stop` (../gpu_metric.jl).
+using BlackLightPlus: KerrSchildCartesian
+using BlackLightPlus.Geodesics: rk4_step_fixed
+isdefined(@__MODULE__, :_gimg_stop) || include(joinpath(@__DIR__, "..", "gpu_metric.jl"))
 
 # One ray per thread. Marches until termination or nmax steps, logging every
 # state (traj[i, 1] = y0, traj[i, s+1] = state after step s) and step (hlog[i, s]);
@@ -82,12 +80,7 @@ const _r_ks = _gimg_rks
             stop && break
             r_prev = r
             h = (r - r_h) / C
-            # low-storage streaming RK4 (bit-identical ops to k1+2k2+2k3+k4)
-            d = _rhs_gpu(y, a);  acc = d;         ys = y + (h / 2) * d
-            d = _rhs_gpu(ys, a); acc = acc + 2*d; ys = y + (h / 2) * d
-            d = _rhs_gpu(ys, a); acc = acc + 2*d; ys = y + h * d
-            d = _rhs_gpu(ys, a); acc = acc + d
-            y = y + (h / 6) * acc
+            y = rk4_step_fixed(KerrSchildCartesian(a), y, h)
             n += 1
             traj[i, n + 1] = y
             hlog[i, n] = h

@@ -335,7 +335,7 @@ end
 # one-arg `include` a `module` block defines; the qualified form works there AND in
 # the standalone (Main) invocation.
 @isdefined(_gimg_sample_t) || Base.include(@__MODULE__, joinpath(REPO, "src", "gpu_image.jl"))
-@isdefined(_gpol_thermal)  || Base.include(@__MODULE__, joinpath(REPO, "src", "gpu_pol.jl"))
+@isdefined(_gpol_kernel!)  || Base.include(@__MODULE__, joinpath(REPO, "src", "gpu_pol.jl"))
 @isdefined(_gamr_sample_t) || Base.include(@__MODULE__, joinpath(REPO, "src", "gpu_amr.jl"))
 using KernelAbstractions
 using BlackLightPlus.Radiation: unpolarized_march

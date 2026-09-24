@@ -123,25 +123,26 @@ end
 # coefficient path silently IGNORED PlasmaConfig.thermal_frac (the fused non-AD kernel
 # was fixed separately; the AD twin still rendered the thermal_frac==1 image and
 # gradient for any fraction). Guarded, idempotent includes as in test_transfer.jl.
-@isdefined(_gimg_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
-@isdefined(_giad_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_image_ad.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
+@isdefined(_giad_params) || include(joinpath(@__DIR__, "..", "src", "gpu_image_ad.jl"))
 
 using KernelAbstractions
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 
 @testset "gpu AD kernel honors thermal_frac (was silently dropped)" begin
+    # the kernels call the Radiation `thermal_synchrotron` (one body, Dual-generic)
+    ts = BlackLightPlus.Radiation.thermal_synchrotron
     n_e = 1.0e6; θe = 12.0; bb = 30.0; ν = 2.3e11; s = 0.7
-    j1, a1 = _giad_thermal(1.0, n_e, θe, bb, ν, s)
-    j5, a5 = _giad_thermal(0.5, n_e, θe, bb, ν, s)
+    j1, a1 = ts(1.0, n_e, θe, bb, ν, s)
+    j5, a5 = ts(0.5, n_e, θe, bb, ν, s)
     @test j5 ≈ 0.5 * j1 rtol = 1e-12               # was: j5 == j1 (fraction ignored)
     @test a5 ≈ 0.5 * a1 rtol = 1e-12
-    @test _giad_thermal(0.0, n_e, θe, bb, ν, s) == (0.0, 0.0)
-    # exact twin of the (already fixed) non-AD device helper at any fraction
-    for f in (1.0, 0.5, 0.25)
-        @test _giad_thermal(f, n_e, θe, bb, ν, s) == _gimg_thermal(f, n_e, θe, bb, ν, s)
-    end
-    # Dual argument still flows: seeding theta_e propagates a finite nonzero derivative
-    jd, ad = _giad_thermal(0.5, n_e, ForwardDiff.Dual{Nothing}(θe, 1.0), bb, ν, s)
+    @test ts(0.0, n_e, θe, bb, ν, s) == (0.0, 0.0)
+    # Dual argument flows: seeding theta_e propagates a finite nonzero derivative, and
+    # the degenerate early exit returns zeros of the Dual type (type-stable)
+    jd, ad = ts(0.5, n_e, ForwardDiff.Dual{Nothing}(θe, 1.0), bb, ν, s)
+    @test ts(0.0, n_e, ForwardDiff.Dual{Nothing}(θe, 1.0), bb, ν, s) isa
+          NTuple{2,ForwardDiff.Dual{Nothing,Float64,1}}
     @test isfinite(ForwardDiff.partials(jd, 1)) && ForwardDiff.partials(jd, 1) != 0.0
 
     # kernel level: value lane reproduces the fused image at thermal_frac = 0.5 and the
@@ -175,7 +176,7 @@ using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
     function run_ad(cfg)
         gp = _giad_params(cfg, :rat_high)
         DT = promote_type(typeof(gp.d_unit), typeof(gp.e_unit), typeof(gp.b_unit),
-                          typeof(gp.rat_high), typeof(gp.rat_low))
+                          typeof(gp.plasma_rat_high), typeof(gp.plasma_rat_low))
         out = Vector{DT}(undef, nrays)
         _fused_kernel_ad!(backend)(out, rays, host, gp, a, r_h, C, escape, R_em, nmax,
                                    n, xo, inv_dx, nrays; ndrange = nrays)

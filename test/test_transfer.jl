@@ -136,92 +136,141 @@ end
 # silently ignored PlasmaConfig.thermal_frac and dropped power_frac/kappa_frac, producing
 # the thermal_frac==1 image for any nonthermal mix. Guarded, idempotent includes (gpu_*
 # `using CUDA` loads without a device; the kernels run on the KernelAbstractions CPU backend).
-@isdefined(_gimg_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
-@isdefined(_gpol_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
+@isdefined(_gpol_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
 
 using KernelAbstractions
 using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays
 using BlackLightPlus.Radiation: thermal_synchrotron, thermal_synchrotron_polarized
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 
-@testset "gpu thermal_frac honored: device coeffs == CPU coeffs, scale linearly" begin
-    n_e = 1.0e6; theta_e = 12.0; bb = 30.0; nu = 2.3e11; sin_tb = 0.7; cos_tb = 0.5
-    # device unpolarized thermal now matches the CPU thermal_synchrotron at ANY fraction
-    for f in (1.0, 0.5, 0.25)
-        jg, ag = _gimg_thermal(f, n_e, theta_e, bb, nu, sin_tb)
-        jc, ac = thermal_synchrotron(f, n_e, theta_e, bb, nu, sin_tb)
-        @test jg ≈ jc rtol = 1e-12
-        @test ag ≈ ac rtol = 1e-12
-    end
-    j1, a1 = _gimg_thermal(1.0, n_e, theta_e, bb, nu, sin_tb)
-    j5, a5 = _gimg_thermal(0.5, n_e, theta_e, bb, nu, sin_tb)
-    @test j5 ≈ 0.5 * j1 rtol = 1e-12          # was: 0.5 == 1.0 (fraction dropped)
-    @test a5 ≈ 0.5 * a1 rtol = 1e-12
-    @test _gimg_thermal(0.0, n_e, theta_e, bb, nu, sin_tb) == (0.0, 0.0)
-    # polarized: all 8 coeffs scale by thermal_frac and match the CPU port bit-for-bit
-    pg = _gpol_thermal(0.5, n_e, theta_e, bb, nu, sin_tb, cos_tb)
-    pc = thermal_synchrotron_polarized(0.5, n_e, theta_e, bb, nu, sin_tb, cos_tb)
-    @test all(isapprox.(pg, pc; rtol = 1e-12))
-    p1 = _gpol_thermal(1.0, n_e, theta_e, bb, nu, sin_tb, cos_tb)
-    @test all(isapprox.(collect(pg), 0.5 .* collect(p1); rtol = 1e-12))
-end
+# Coefficient physics, pinned. The fused kernels and the CPU marches call these same
+# Radiation functions (no device copies), so the reference values below guard both
+# against drift. Values recorded from the implementation that the device copies were
+# validated against (thermal: Marszewski et al. 2021 fits; nonthermal: precomputed
+# power-law / kappa constants).
+using BlackLightPlus
+using BlackLightPlus.Simulation: units
+using BlackLightPlus.Radiation: power_law_synchrotron_polarized, kappa_synchrotron_polarized,
+      precompute_power_law!, precompute_kappa!, coefficient_params
+const _Rad = BlackLightPlus.Radiation
 
-@testset "gpu _gpol_thermal mirrors the rho_Q blend (CPU parity in (0.005, 0.01))" begin
-    # The CPU thermal rho_Q C1 smoothstep bridge (coefficients.jl :: _theta_e_blend)
-    # previously had no device twin: _gpol_thermal kept the hard 0.01 switch, so CPU/GPU
-    # diverged for Theta_e in (0.005, 0.01). Device coeffs now match the CPU across the
-    # window (below it both trap rho_Q to 0; at/above 0.01 both are unchanged).
-    n_e = 1.0e6; bb = 30.0; nu = 2.3e11; sin_tb = 0.7; cos_tb = 0.5
-    for te in (0.004, 0.0055, 0.007, 0.0099, 0.0100001, 0.02)
-        pg = _gpol_thermal(1.0, n_e, te, bb, nu, sin_tb, cos_tb)
-        pc = thermal_synchrotron_polarized(1.0, n_e, te, bb, nu, sin_tb, cos_tb)
-        @test all(isapprox.(pg, pc; rtol = 1e-12))
+@testset "synchrotron coefficients: pinned reference values" begin
+    n_e = 1.0e6; bb = 30.0; nu = 2.3e11; s = 0.7; c = 0.5
+    th_unpol = [(1.8037425164911681e-59, 7.59034221207488e-21),
+                (1.349755370014262e-41, 0.0005679915530470241),
+                (2.2913473952407873e-39, 0.024105589690606073),
+                (5.2532325823844156e-39, 0.008289812542281)]
+    for (te, ref) in zip((0.3, 3.0, 12.0, 80.0), th_unpol)
+        @test all(isapprox.(thermal_synchrotron(1.0, n_e, te, bb, nu, s), ref; rtol = 1e-14))
     end
-    # mid-window rho_Q is genuinely nonzero on the device now (0.0 pre-mirror)
-    @test _gpol_thermal(1.0, n_e, 0.007, bb, nu, sin_tb, cos_tb)[7] != 0.0
-    # and the device switch at 0.01 is continuous (mirrors the CPU continuity check)
-    lo = _gpol_thermal(1.0, n_e, 0.0099999, bb, nu, sin_tb, cos_tb)[7]
-    hi = _gpol_thermal(1.0, n_e, 0.0100001, bb, nu, sin_tb, cos_tb)[7]
+    th_pol = [(0.0, -0.0, -0.0, 0.0, 0.0, 0.0, -0.0, -3.0844988371583857),
+              (0.0, -0.0, -0.0, 0.0, 0.0, 0.0, -0.0002001910318425074, -3.0844988371583857),
+              (2.855876997400009e-185, -2.8397216436240363e-185, -5.801651797701869e-186,
+               1.8026756426593645e-145, -1.7924781226761843e-145, -3.6620962290846177e-146,
+               -0.0006003702825492607, -3.0844988371583857),
+              (1.8037425164911681e-59, -1.7447065475227951e-59, -1.475648729926927e-60,
+               7.59034221207488e-21, -7.341912514823477e-21, -6.209688324444328e-22,
+               -0.001337544262341298, -1.8261289794457995),
+              (2.2913473952407873e-39, -1.819388036437651e-39, -5.146467354296298e-41,
+               0.024105589690606073, -0.019140450542530975, -0.0005414221809248125,
+               -0.015765164606405622, -0.0278032601912245)]
+    for (te, ref) in zip((0.004, 0.007, 0.02, 0.3, 12.0), th_pol)
+        @test all(isapprox.(thermal_synchrotron_polarized(1.0, n_e, te, bb, nu, s, -c), ref;
+                            rtol = 1e-14))
+    end
+    pw = Dict(3.5 => (7.46027059890174e-40, -5.7550658905813415e-40, 1.8646722524550488e-41,
+                      0.011768761595628839, -0.009516661377446336, 0.00047920198039646785,
+                      -0.011224194634741605, 0.014561974150186173),
+              2.0 => (1.132351228122282e-39, -7.83935465623118e-40, 2.1514954867878364e-41,
+                      0.00866832925309803, -0.00647441564487873, 0.0002842820138707917,
+                      -0.009269626113669174, 0.006354331878638145))
+    for (p, ref) in pw
+        scc = SimCoeffConfig(; plasma_p = p, plasma_power_frac = 0.3)
+        precompute_power_law!(scc, 25.0, 1.0e7)
+        @test all(isapprox.(power_law_synchrotron_polarized(scc, n_e, bb, nu, s, c), ref; rtol = 1e-14))
+        @test all(isapprox.(_Rad.power_law_synchrotron(scc, n_e, bb, nu, s), (ref[1], ref[4]); rtol = 1e-14))
+        # the isbits device parameter set gives the same coefficients
+        gp = coefficient_params(scc)
+        @test power_law_synchrotron_polarized(gp, n_e, bb, nu, s, c) ===
+              power_law_synchrotron_polarized(scc, n_e, bb, nu, s, c)
+    end
+    kp = Dict(3.6 => (5.819808847945793e-41, -4.2240291989113396e-41, -1.7720310205247482e-42,
+                      0.0005095095510620858, -0.0004189503555023219, -1.544511590627413e-5,
+                      -0.001124330396693988, -0.25169892111415154),
+              4.2 => (1.8984084331842757e-41, -1.40308643400436e-41, -6.31898092792001e-43,
+                      0.00020764836724335929, -0.00017777736666517584, -6.789495224045051e-6,
+                      -0.001081901421851477, -0.27999170750502694),
+              5.0 => (4.7003409674580456e-42, -3.542533270867788e-42, -1.7324857428288726e-43,
+                      6.57137302282038e-5, -5.9090261752622003e-5, -2.3068905758187354e-6,
+                      -0.0009656854151227171, -0.30699469517718214))
+    for (k, ref) in kp
+        scc = SimCoeffConfig(; plasma_kappa = k, plasma_w = 0.5, plasma_kappa_frac = 0.3)
+        precompute_kappa!(scc)
+        @test all(isapprox.(kappa_synchrotron_polarized(scc, n_e, bb, nu, s, -c), ref; rtol = 1e-14))
+        @test all(isapprox.(_Rad.kappa_synchrotron(scc, n_e, bb, nu, s), (ref[1], ref[4]); rtol = 1e-14))
+        gp = coefficient_params(scc)
+        @test kappa_synchrotron_polarized(gp, n_e, bb, nu, s, -c) ===
+              kappa_synchrotron_polarized(scc, n_e, bb, nu, s, -c)
+    end
+    # thermal_frac scales every coefficient linearly; 0 gives no emission
+    j1, a1 = thermal_synchrotron(1.0, n_e, 12.0, bb, nu, s)
+    j5, a5 = thermal_synchrotron(0.5, n_e, 12.0, bb, nu, s)
+    @test j5 ≈ 0.5 * j1 rtol = 1e-12
+    @test a5 ≈ 0.5 * a1 rtol = 1e-12
+    @test thermal_synchrotron(0.0, n_e, 12.0, bb, nu, s) == (0.0, 0.0)
+    # the rho_Q smoothstep blend is continuous at Theta_e = 0.01
+    lo = thermal_synchrotron_polarized(1.0, n_e, 0.0099999, bb, nu, s, c)[7]
+    hi = thermal_synchrotron_polarized(1.0, n_e, 0.0100001, bb, nu, s, c)[7]
     @test abs(hi - lo) < 1e-6
 end
 
 @testset "gpu params: carry thermal_frac + power-law + kappa eDFs" begin
-    @test _gimg_params(RunConfig()).thermal_frac == 1.0
-    @test _gimg_params(RunConfig(plasma = PlasmaConfig(thermal_frac = 0.4))).thermal_frac == 0.4
-    @test _gpol_params(RunConfig(plasma = PlasmaConfig(thermal_frac = 0.4))).thermal_frac == 0.4
-    # thermal deck (both fracs 0): the tuple carries NO nonthermal fields (byte-identical shape)
-    @test !hasproperty(_gimg_params(RunConfig()), :power_frac)
-    @test !hasproperty(_gpol_params(RunConfig()), :power_frac)
-    @test !hasproperty(_gimg_params(RunConfig()), :kappa_frac)
-    @test !hasproperty(_gpol_params(RunConfig()), :kappa_frac)
+    @test _gimg_params(RunConfig()).plasma_thermal_frac == 1.0
+    @test _gimg_params(RunConfig(plasma = PlasmaConfig(thermal_frac = 0.4))).plasma_thermal_frac == 0.4
+    @test _gpol_params(RunConfig(plasma = PlasmaConfig(thermal_frac = 0.4))).plasma_thermal_frac == 0.4
+    # the device parameter set IS coefficient_params of the CPU render's prepared config
+    let cfg = RunConfig(plasma = PlasmaConfig(thermal_frac = 0.4, power_frac = 0.3, kappa_frac = 0.3,
+                                              kappa = 4.0, w = 0.5))
+        u = units(cfg.m_bh_cgs, cfg.mass_scale_cgs)
+        cp = coefficient_params(BlackLightPlus._prepared_scc(cfg, u))
+        gp = _gimg_params(cfg)
+        @test all(getfield(gp, k) === getfield(cp, k) for k in keys(cp))
+        @test isbitstype(typeof(gp)) && isbitstype(typeof(_gpol_params(cfg)))
+    end
+    # thermal deck (both fracs 0): the tuple carries NO nonthermal fields (thermal path only)
+    @test !hasproperty(_gimg_params(RunConfig()), :plasma_power_frac)
+    @test !hasproperty(_gpol_params(RunConfig()), :plasma_power_frac)
+    @test !hasproperty(_gimg_params(RunConfig()), :plasma_kappa_frac)
+    @test !hasproperty(_gpol_params(RunConfig()), :plasma_kappa_frac)
     # power_frac>0 is SUPPORTED — the host-precomputed constants are merged in
     let cfg = RunConfig(plasma = PlasmaConfig(thermal_frac = 0.5, power_frac = 0.5))
         gpi = _gimg_params(cfg); gpp = _gpol_params(cfg)
-        @test gpi.power_frac == 0.5 && gpi.power_p == 3.5
-        @test gpp.power_frac == 0.5 && gpp.power_jj_v != 0.0 && gpp.power_rho_v != 0.0
+        @test gpi.plasma_power_frac == 0.5 && gpi.plasma_p == 3.5
+        @test gpp.plasma_power_frac == 0.5 && gpp.power_jj_v != 0.0 && gpp.power_rho_v != 0.0
         # power_jj/power_aa are the precompute_power_law! outputs (nonzero, finite)
         @test isfinite(gpi.power_jj) && gpi.power_jj != 0.0
         @test isfinite(gpi.power_aa) && gpi.power_aa != 0.0
         # a power-law-only deck carries NO kappa fields (single-eDF tuple)
-        @test !hasproperty(gpi, :kappa_frac) && !hasproperty(gpp, :kappa_frac)
+        @test !hasproperty(gpi, :plasma_kappa_frac) && !hasproperty(gpp, :plasma_kappa_frac)
     end
     # kappa_frac>0 is SUPPORTED — precompute_kappa! constants are merged in (no error)
     let cfg = RunConfig(plasma = PlasmaConfig(thermal_frac = 0.5, kappa_frac = 0.5, kappa = 4.0, w = 0.5))
         gpi = _gimg_params(cfg); gpp = _gpol_params(cfg)
-        @test gpi.kappa_frac == 0.5 && gpi.kappa == 4.0 && gpi.w == 0.5
+        @test gpi.plasma_kappa_frac == 0.5 && gpi.plasma_kappa == 4.0 && gpi.plasma_w == 0.5
         # unpol (kappa_jj/kappa_aa) + pol-only (kappa_rho_v besselk factor) constants filled
         @test isfinite(gpi.kappa_jj_low) && gpi.kappa_jj_low != 0.0
         @test isfinite(gpi.kappa_aa_low) && gpi.kappa_aa_low != 0.0
         @test isfinite(gpp.kappa_rho_v) && gpp.kappa_rho_v != 0.0
         # a kappa-only deck carries NO power-law fields
-        @test !hasproperty(gpi, :power_frac) && !hasproperty(gpp, :power_frac)
+        @test !hasproperty(gpi, :plasma_power_frac) && !hasproperty(gpp, :plasma_power_frac)
     end
     # mixed thermal+power-law+kappa deck: BOTH nonthermal field sets present
     let cfg = RunConfig(plasma = PlasmaConfig(thermal_frac = 0.34, power_frac = 0.33,
                                               kappa_frac = 0.33, kappa = 4.0, w = 0.5))
         gpi = _gimg_params(cfg); gpp = _gpol_params(cfg)
-        @test gpi.power_frac == 0.33 && gpi.kappa_frac == 0.33
-        @test gpp.power_frac == 0.33 && gpp.kappa_frac == 0.33
+        @test gpi.plasma_power_frac == 0.33 && gpi.plasma_kappa_frac == 0.33
+        @test gpp.plasma_power_frac == 0.33 && gpp.plasma_kappa_frac == 0.33
         @test isfinite(gpi.power_jj) && isfinite(gpi.kappa_jj_low)
     end
 end
@@ -359,63 +408,50 @@ end
 end
 
 # ---------------------------------------------------------------------------------------
-# GPU-parity mirrors of CPU fixes (KA CPU backend; no device):
-#  * _gpol_tetrad B ∥ k degeneracy guard (mirror of radiation/tetrads.jl — was NaN)
-#  * _gpol_normal_observer unit Eulerian observer (mirror of the camera shift-sign fix)
-#  * _gpol_admissible reverse-chain Stokes clamp (mirror of the stokes_couple clamp)
+# Frame and clamp physics shared by the CPU marches and the fused kernels (one source):
+#  * the camera normal observer is a unit Eulerian 4-velocity (shift-sign fix)
+#  * `stokes_admissible` (the per-segment Stokes clamp; the reverse-chain kernels apply
+#    it to the accumulated Stokes) and the affine segment operator `stokes_segment`
 #  * same-fluid polarized parity: fused GPU kernel (KA CPU) vs the CPU coherency march.
 using BlackLightPlus
-using BlackLightPlus.Radiation: polarized_march
+using BlackLightPlus.Radiation: polarized_march, stokes_admissible, stokes_segment
 using BlackLightPlus.Simulation: pgas_from_eint, units
+using BlackLightPlus.Geodesics: metric_and_inverse
 using BlackLightPlus: trace_rays_sampled
 
-@testset "gpu _gpol_tetrad: B ∥ k degeneracy guard (fluid_tetrad mirror)" begin
-    gflat = SMatrix{4,4}(Diagonal(SVector(-1.0, 1.0, 1.0, 1.0)))
-    u = SVector(1.0, 0.0, 0.0, 0.0); ucov = gflat * u
-    k = SVector(1.0, 1.0, 0.0, 0.0); kcov = gflat * k
-    b = SVector(0.0, 1.0, 0.0, 0.0)                      # b·u = 0, spatially ∥ k
-    tet = _gpol_tetrad(u, ucov, k, kcov, b, gflat, gflat)
-    @test all(isfinite, tet)                             # was e2 = 0/sqrt(0) -> NaN ray poison
-    η = SMatrix{4,4}(Diagonal(SVector(-1.0, 1.0, 1.0, 1.0)))
-    @test tet * gflat * transpose(tet) ≈ η atol = 1e-12  # still an orthonormal frame
-    # identical fallback as the CPU guard
-    @test tet ≈ fluid_tetrad(u, ucov, k, kcov, b, gflat, gflat) atol = 1e-14
-    # non-degenerate inputs are untouched: still the CPU tetrad, in curved space too
-    x = SVector(0.0, 3.0, 2.0, 1.5); a = 0.9375
-    gcov, gcon = _gimg_metric(x, a)
-    uc = _gpol_normal_observer(gcon); ucv = gcov * uc
-    kc2 = SVector(-1.0, 0.4, -0.2, 0.1); kn2 = gcon * kc2
-    b2 = SVector(0.0, 0.3, 0.8, -0.1)
-    @test _gpol_tetrad(uc, ucv, kn2, kc2, b2, gcov, gcon) ≈
-          fluid_tetrad(uc, ucv, kn2, kc2, b2, gcov, gcon) rtol = 1e-13
-end
-
-@testset "gpu camera observer: unit 4-velocity (shift-sign fix mirror)" begin
+@testset "camera observer: unit 4-velocity (shift-sign fix)" begin
     x = SVector(0.0, 3.0, 2.0, 1.5)                      # strong field (f ~ 0.5)
     a = 0.9375
-    gcov, gcon = _gimg_metric(x, a)
+    gcov, gcon = metric_and_inverse(KerrSchildCartesian(a), x)
     n = _gpol_normal_observer(gcon)
     @test dot(n, gcov * n) ≈ -1.0 atol = 1e-14           # unit timelike
-    @test n == BlackLightPlus.Radiation._normal_observer(gcon)  # exact device twin of the CPU fix
     # the old flipped-shift formula is measurably non-unit here — the regression
     lp = 1.0 / sqrt(-gcon[1, 1])
     old = SVector(1.0/lp, -gcon[1,2]/gcon[1,1]/lp, -gcon[1,3]/gcon[1,1]/lp, -gcon[1,4]/gcon[1,1]/lp)
     @test abs(dot(old, gcov * old) + 1.0) > 1e-3
 end
 
-@testset "gpu _gpol_admissible: reverse-chain Stokes clamp (stokes_couple mirror)" begin
+@testset "stokes_admissible clamp and affine segment operator" begin
     ok = SVector(1.0, 0.3, -0.2, 0.1)
-    @test _gpol_admissible(ok) == ok                      # admissible -> bit-identical no-op
-    c = _gpol_admissible(SVector(1.0, 2.0, 0.0, 0.0))     # |P| > I -> rescaled onto the cone
+    @test stokes_admissible(ok) == ok                     # admissible -> bit-identical no-op
+    c = stokes_admissible(SVector(1.0, 2.0, 0.0, 0.0))    # |P| > I -> rescaled onto the cone
     @test c[1] == 1.0 && norm(c[2:4]) <= c[1] * (1 + 1e-12)
     @test c[2] ≈ 1.0 rtol = 1e-12
-    @test _gpol_admissible(SVector(-0.5, 0.2, 0.1, 0.0)) == SVector(0.0, 0.0, 0.0, 0.0)
-    # exactly the CPU clamp: stokes_couple over a zero-coefficient ds=0 segment is
-    # identity + admissibility clamp, so the two must agree on any input
+    @test stokes_admissible(SVector(-0.5, 0.2, 0.1, 0.0)) == SVector(0.0, 0.0, 0.0, 0.0)
+    # stokes_couple over a zero-coefficient ds=0 segment is identity + clamp
     for S0 in (SVector(0.5, 0.6, 0.3, -0.2), SVector(2.0, 0.5, 0.3, 0.1),
                SVector(0.01, 0.5, 0.5, 0.5))
-        @test _gpol_admissible(S0) ≈ stokes_couple(S0, ZERO4, ZERO4, ZERO4, 0.0) rtol = 1e-15
+        @test stokes_admissible(S0) == stokes_couple(S0, ZERO4, ZERO4, ZERO4, 0.0)
     end
+    # the segment operator is affine: S -> M S + b, and chaining two segments matches
+    # sequential coupling (the reverse-chain identity the fused kernels use)
+    j = SVector(1.0, -0.3, 0.0, 0.02); α = SVector(2.0, -0.6, 0.0, 0.15)
+    ρ = SVector(0.0, 0.8, 0.0, -1.2)
+    M1, b1 = stokes_segment(j, α, ρ, 0.37); M2, b2 = stokes_segment(0.5j, α, 2ρ, 0.21)
+    S0 = SVector(0.4, 0.1, -0.05, 0.02)
+    @test M2 * (M1 * S0 + b1) + b2 ≈ (M2 * M1) * S0 + (M2 * b1 + b2) rtol = 1e-14
+    K = @SMatrix [α[1] α[2] 0.0 α[4]; α[2] α[1] ρ[4] 0.0; 0.0 -ρ[4] α[1] ρ[2]; α[4] 0.0 -ρ[2] α[1]]
+    @test M1 ≈ exp(-Matrix(K) * 0.37) rtol = 1e-10
 end
 
 @testset "gpu polarized kernel (KA CPU) vs CPU coherency march: same-fluid parity" begin
@@ -492,15 +528,12 @@ end
 end
 
 # ---------------------------------------------------------------------------------------
-# GPU consolidation pins. The AD device twins and the polarized camera observer are
-# ALIASES of the one shared implementation (hand-copies deleted), and the generic
-# _fused_kernel! reproduces its own Float64 image in the Dual value lane BIT-for-bit —
-# the invariant that let _giad_thermal/_giad_coeffs/_giad_ab and _fused_kernel_ad!
-# be deleted.
+# GPU consolidation pins. The AD kernel and the polarized camera observer are ALIASES
+# of the one shared implementation, and the generic _fused_kernel! reproduces its own
+# Float64 image in the Dual value lane BIT-for-bit.
 @isdefined(_giad_params) || include(joinpath(@__DIR__, "..", "src", "gpu_image_ad.jl"))
 
 @testset "gpu consolidation: alias identities + Dual value lane bit-exact" begin
-    @test _giad_thermal === _gimg_thermal                 # one thermal body (Dual-generic)
     @test _fused_kernel_ad! === _fused_kernel!            # one unpolarized kernel
     @test _gpol_normal_observer === BlackLightPlus.Radiation._normal_observer  # one source
     # small deck: the Dual-seeded run's value lane == the plain Float64 run, bitwise
@@ -536,7 +569,7 @@ end
                             nmax, n, xo, inv_dx, nrays; ndrange = nrays)
     KernelAbstractions.synchronize(backend)
     gpd = _giad_params(cfg, :rat_high)
-    outd = Vector{typeof(gpd.rat_high)}(undef, nrays)
+    outd = Vector{typeof(gpd.plasma_rat_high)}(undef, nrays)
     _fused_kernel!(backend)(outd, rays, host, gpd, a, r_h, C, escape, R_em,
                             nmax, n, xo, inv_dx, nrays; ndrange = nrays)
     KernelAbstractions.synchronize(backend)
@@ -576,57 +609,37 @@ end
 end
 
 # ---------------------------------------------------------------------------------------
-# GPU physics twins pinned bit-for-bit against their CPU source. Three device helpers had
-# only end-to-end coverage, unlike the thermal/thermal-pol/tetrad twins pinned above: the
-# A&S Bessel fits _gpol_k0/k1/k2 (feed the rho_Q/rho_V Faraday rotativities), the
-# fluid-decode _gimg_pfv, and the closed-form KS inverse metric _gimg_gi. Each is a
-# byte-copy of a CPU function, so a CPU-side physics fix would otherwise silently not reach
-# the GPU image. NO consolidation: bessel feeds Faraday (the ~1e-4-amplified path) and
-# _gimg_gi is the geodesic-RHS metric — both fmuladd-sensitive.
+# Bessel fits, fluid decode and metric, pinned. The kernels call these Radiation /
+# Simulation / Geodesics functions directly; the checks guard the physics itself:
+# reference values of the A&S Bessel fits (both branches of the x = 2 split), the
+# four-vector decode's normalization (u·u = -1, b·u = 0), and the closed-form
+# Kerr-Schild inverse against the numerical inverse of the metric.
 using Random
 using BlackLightPlus.Radiation: bessel_k0, bessel_k1, bessel_k2
 using BlackLightPlus.Simulation: primitive_four_vectors
 
-@testset "gpu physics twins == CPU source (bessel / pfv / KS inverse metric), bitwise" begin
+@testset "bessel / four-vector decode / KS metric: pinned physics" begin
+    for (x, ref) in ((0.5, (0.9244190350213235, 1.6564411280110791, 7.5501835470656395)),
+                     (2.0, (0.11389388, 0.13986588, 0.25375976)),
+                     (5.0, (0.0036910983819603066, 0.004044613383208274, 0.005308943735243616)))
+        @test all(isapprox.((bessel_k0(x), bessel_k1(x), bessel_k2(x)), ref; rtol = 1e-14))
+    end
+    # A&S fits vs SpecialFunctions.besselk: the documented fit accuracy
+    for x in (0.1, 0.7, 1.9, 2.1, 4.0, 20.0)
+        @test bessel_k0(x) ≈ BlackLightPlus.Radiation.besselk(0, x) rtol = 2e-7
+        @test bessel_k1(x) ≈ BlackLightPlus.Radiation.besselk(1, x) rtol = 2e-7
+    end
     rng = MersenneTwister(0xBE55E1)
-    # (1) A&S Bessel K0/K1/K2 — both branches: the x<=2 series and the x>2 asymptotic form
-    for _ in 1:4000
-        x = 10.0 ^ (rand(rng) * 4 - 2)                  # 1e-2 .. 1e2, straddles the 2.0 branch
-        @test _gpol_k0(x) == bessel_k0(x)
-        @test _gpol_k1(x) == bessel_k1(x)
-        @test _gpol_k2(x) == bessel_k2(x)
-    end
-    for x in (2.0, prevfloat(2.0), nextfloat(2.0), 0.5, 5.0, 50.0)   # exact branch boundary
-        @test _gpol_k0(x) == bessel_k0(x)
-        @test _gpol_k1(x) == bessel_k1(x)
-        @test _gpol_k2(x) == bessel_k2(x)
-    end
-    # (2) normal-frame primitive -> GR four-vector decode. rtol=1e-12 (NOT bitwise): _gimg_pfv
-    # is a verbatim source copy, but its uu0/ucon decode chain is a sum-of-products whose fma
-    # contraction is inline-context-dependent, so it rounds 1-2 ulp off primitive_four_vectors
-    # in some enclosing scopes (the fmuladd contraction hazard). Same tolerance the sibling
-    # thermal/tetrad twin checks above use (1e-12/1e-13) — 4+ orders below any real physics drift.
     a = 0.9375; st = KerrSchildCartesian(a); r_h = 1 + sqrt(1 - a * a)
     for _ in 1:2000
         x = SVector(0.0, (rand(rng) - 0.5) * 60, (rand(rng) - 0.5) * 60, (rand(rng) - 0.5) * 60)
         ks_radius(st, x) > r_h + 0.5 || continue
-        gcov = metric(st, x); gcon = inverse_metric(st, x)
-        uu1, uu2, uu3 = 0.3 * randn(rng), 0.3 * randn(rng), 0.3 * randn(rng)
-        bb1, bb2, bb3 = 0.1 * randn(rng), 0.1 * randn(rng), 0.1 * randn(rng)
-        g = _gimg_pfv(uu1, uu2, uu3, bb1, bb2, bb3, gcov, gcon)
-        c = primitive_four_vectors(uu1, uu2, uu3, bb1, bb2, bb3, gcov, gcon)
-        @test g[1] ≈ c.ucon rtol = 1e-12
-        @test g[2] ≈ c.ucov rtol = 1e-12
-        @test g[3] ≈ c.bcon rtol = 1e-12
-        @test g[4] ≈ c.b_sq rtol = 1e-12
-    end
-    # (3) closed-form KS inverse metric == the CPU inverse_metric over realistic trace states.
-    # BITWISE by design: should this ever fail ONLY because the CPU _ks_term changed a
-    # primitive (e.g. hypot -> sqrt), update the GPU copy to match — do NOT relax to rtol here.
-    for _ in 1:4000
-        x = SVector(0.0, (rand(rng) - 0.5) * 2.4e3, (rand(rng) - 0.5) * 2.4e3,
-                    (rand(rng) - 0.5) * 2.4e3)
-        ks_radius(st, x) > r_h || continue
-        @test _gimg_gi(x, a) == inverse_metric(st, x)
+        gcov, gcon = metric_and_inverse(st, x)
+        @test gcov == metric(st, x) && gcon == inverse_metric(st, x)
+        @test gcon ≈ inv(gcov) rtol = 1e-12 atol = 1e-12
+        fv = primitive_four_vectors(0.3randn(rng), 0.3randn(rng), 0.3randn(rng),
+                                    0.1randn(rng), 0.1randn(rng), 0.1randn(rng), gcov, gcon)
+        @test dot(fv.ucon, fv.ucov) ≈ -1.0 atol = 1e-12
+        @test abs(dot(fv.bcon, fv.ucov)) <= 1e-12 * max(1.0, sqrt(abs(fv.b_sq)))
     end
 end

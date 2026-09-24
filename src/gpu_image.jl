@@ -3,10 +3,12 @@
 # accumulates the invariant intensity, returning only the per-pixel image. The CPU march
 # runs source->camera with the affine couple I_n = A_n I_{n-1} + B_n; here we march
 # camera->source and accumulate the same sum in reverse, I_obs = Σ_n B_n Π_{k>n} A_k,
-# via a running transmission (identical up to fp round-off). Pitch angle: the invariant
-# identity cos²θ_B = (k·b)²/((k·u)² b²) replaces the CPU fluid tetrad. Approximation:
-# the AMR fluid is resampled once onto a uniform box and trilinearly sampled in-kernel
-# (validated against the CPU path). CUDA optional: NOT included from BlackLightPlus.jl.
+# via a running transmission (identical up to fp round-off). The per-sample physics is
+# the CPU march's own: `metric_and_inverse`, `primitive_four_vectors`,
+# `unpolarized_coefficients` and `unpolarized_segment`, called in-kernel with the isbits
+# `coefficient_params` set. Approximation: the AMR fluid is resampled once onto a
+# uniform box and trilinearly sampled in-kernel (validated against the CPU path). CUDA
+# optional: NOT included from BlackLightPlus.jl.
 
 using StaticArrays
 using ForwardDiff: Dual, partials
@@ -15,19 +17,10 @@ using CUDA
 using LinearAlgebra: dot
 using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays, critical_curve
 using BlackLightPlus.Simulation: AthenaKSnapshot, sample_primitives, pgas_from_eint, units,
-      SnapshotSeries, get_frame, bracketing_pair
-# host precompute of the nonthermal eDF constants (_powerlaw_gp / _kappa_gp); explicit
-# here so the device-params builder resolves them in any include scope.
-using BlackLightPlus.Radiation: SimCoeffConfig, precompute_power_law!, precompute_kappa!
-
-# ---------------------------------------------------------------- CGS constants
-# Literals (BlackLightPlus.Constants values); usable as compile-time consts in a kernel.
-const _CL  = 2.99792458e10
-const _EE  = 4.8032e-10
-const _ME  = 9.1094e-28
-const _MP  = 1.6726e-24
-const _HPL = 6.6261e-27
-const _SQRT2 = sqrt(2.0)
+      SnapshotSeries, get_frame, bracketing_pair, primitive_four_vectors
+using BlackLightPlus.Geodesics: metric_and_inverse, rk4_step_fixed
+using BlackLightPlus.Radiation: coefficient_params, unpolarized_coefficients,
+      unpolarized_segment
 
 # ---------------------------------------------------------------- uniform fluid grid
 """
@@ -123,191 +116,26 @@ function upload_grid(fg::UniformFluidGrid, devices)
     return DeviceFluidGrid(_upload_per_device(fg.host, devices), fg.n, fg.xo, fg.inv_dx)
 end
 
-# ---------------------------------------------------------------- device: geodesic RHS
-# The closed-form KS device metric + in-kernel 3-lane-AD RHS (_gimg_gi/_gimg_rhs/
-# _gimg_rks/_gimg_metric) live in the shared device-metric layer gpu_metric.jl.
-isdefined(@__MODULE__, :_gimg_gi) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_metric.jl"))
+# ---------------------------------------------------------------- device physics
+# The metric, geodesic RHS and RK4 step are the Geodesics functions on
+# `KerrSchildCartesian`; the fluid decode, plasma cuts, coefficients and segment operator
+# are the Radiation functions (the CPU marches call the same ones). gpu_metric.jl adds
+# the Kerr stop rule.
+isdefined(@__MODULE__, :_gimg_stop) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_metric.jl"))
 
-# ---------------------------------------------------------------- device: fluid decode
-# Normal-frame primitive -> (u^μ, u_μ, b^μ, b^μ b_μ), verbatim from primitives.jl.
-@inline function _gimg_pfv(uu1, uu2, uu3, bb1, bb2, bb3,
-                           gcov::SMatrix{4,4}, gcon::SMatrix{4,4})
-    uu0 = sqrt(1 +
-        gcov[2, 2] * uu1 * uu1 + 2 * gcov[2, 3] * uu1 * uu2 + 2 * gcov[2, 4] * uu1 * uu3 +
-        gcov[3, 3] * uu2 * uu2 + 2 * gcov[3, 4] * uu2 * uu3 +
-        gcov[4, 4] * uu3 * uu3)
-    lapse  = 1 / sqrt(-gcon[1, 1])
-    shift1 = -gcon[1, 2] / gcon[1, 1]
-    shift2 = -gcon[1, 3] / gcon[1, 1]
-    shift3 = -gcon[1, 4] / gcon[1, 1]
-    ucon = SVector(uu0 / lapse, uu1 - shift1 * uu0 / lapse,
-                   uu2 - shift2 * uu0 / lapse, uu3 - shift3 * uu0 / lapse)
-    ucov = gcov * ucon
-    b0 = ucov[2] * bb1 + ucov[3] * bb2 + ucov[4] * bb3
-    bcon = SVector(b0, (bb1 + b0 * ucon[2]) / ucon[1],
-                   (bb2 + b0 * ucon[3]) / ucon[1], (bb3 + b0 * ucon[4]) / ucon[1])
-    bcov = gcov * bcon
-    return ucon, ucov, bcon, dot(bcon, bcov)
-end
-
-# ---------------------------------------------------------------- device: coefficients
-# Electron temperature Θ_e (electron_theta, ti_te_beta). The thermal_frac==0 corner is
-# short-circuited in _gimg_thermal (no NaN reaches output); both use_p branches kept.
-@inline function _gimg_theta_e(rho_cgs, pgas_cgs, beta_inv, gp)
-    tti_tte = (gp.rat_high + gp.rat_low * beta_inv * beta_inv) / (1.0 + beta_inv * beta_inv)
-    kbtt = gp.mu * _MP * pgas_cgs / rho_cgs
-    if gp.use_p != 0
-        kbtte = (1.0 + gp.ne_ni) / (tti_tte + gp.ne_ni) * kbtt
-    else
-        kbtte = (1.0 + gp.ne_ni) * kbtt / (gp.gamma - 1.0)
-        kbtte /= tti_tte / (gp.gamma_i - 1.0) + gp.ne_ni / (gp.gamma_e - 1.0)
-    end
-    return kbtte / (_ME * _CL * _CL)
-end
-
-# Unpolarized thermal synchrotron (thermal_synchrotron) -> (j_inv, α_inv). `thermal_frac`
-# scales the coefficient exactly as the CPU `thermal_synchrotron` (thermal_frac==0 -> no emission).
-# Number-type-generic (typed zero on the early exits), so the SAME body serves the plain
-# Float64 kernels bit-for-bit AND the Dual accumulation of gpu_image_ad.jl.
-@inline function _gimg_thermal(thermal_frac, n_e, theta_e, bb, nu, sin_tb)
-    z = zero(promote_type(typeof(n_e), typeof(theta_e), typeof(bb)))
-    (thermal_frac == 0.0 || n_e <= 0.0 || theta_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_tb <= 0.0) &&
-        return (z, z)
-    nu_c = _EE * bb / (2.0 * π * _ME * _CL)
-    nu_s = 2.0 / 9.0 * nu_c * theta_e * theta_e * sin_tb
-    nu_2 = nu * nu
-    xx = nu / nu_s
-    xx12 = sqrt(xx); xx13 = cbrt(xx); xx16 = sqrt(xx13)
-    coeff = thermal_frac * n_e * _EE * _EE * nu_c / (_CL * nu_2) * exp(-xx13)
-    var_a = _SQRT2 * π / 27.0 * sin_tb
-    var_b = 2.0^(11.0 / 12.0)
-    var_c = xx12 + var_b * xx16
-    j_inv = coeff * var_a * var_c * var_c
-    kbtte = theta_e * _ME * _CL * _CL
-    bnn3 = 2.0 * _HPL / (_CL * _CL) / expm1(_HPL * nu / kbtte)
-    alpha_inv = j_inv / bnn3
-    isfinite(1.0 / (alpha_inv * alpha_inv)) || (alpha_inv = z)
-    return (j_inv, alpha_inv)
-end
-
-# Unpolarized power-law synchrotron (power_law_synchrotron) -> (j_inv, α_inv), the
-# additive non-thermal term when power_frac != 0. Reads the host-precomputed constants
-# from the params tuple (_powerlaw_gp), so every per-step formula is bit-for-bit the CPU
-# body. Number-type-generic (typed zero on the early exit), hence Dual-safe.
-@inline function _gimg_powerlaw(gp, n_e, bb, nu, sin_tb)
-    z = zero(promote_type(typeof(n_e), typeof(bb), typeof(nu), typeof(sin_tb)))
-    (gp.power_frac == 0.0 || n_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_tb <= 0.0) &&
-        return (z, z)
-    p = gp.power_p
-    nu_c = _EE * bb / (2.0 * π * _ME * _CL)
-    nu_2 = nu * nu
-    xx = nu / (nu_c * sin_tb)
-    j_inv = gp.power_frac * n_e * _EE * _EE * nu_c / (_CL * nu_2) *
-            gp.power_jj * sin_tb * xx^(-(p - 1.0) / 2.0)
-    alpha_inv = gp.power_frac * n_e * _EE * _EE / (_ME * _CL) * gp.power_aa *
-                xx^(-(p + 2.0) / 2.0)
-    return (j_inv, alpha_inv)
-end
-
-# Harmonic-mean synchrotron bridge (coefficients.jl :: harmonic_bridge), device mirror.
-# (a^-x + b^-x)^(-1/x); IEEE-safe (an underflowed branch -> pow(tiny,-x)=inf -> the other
-# asymptote). Same arithmetic tree as the CPU form so the kappa mixers are bit-for-bit.
-@inline _kappa_bridge(a, b, x) = (a^(-x) + b^(-x))^(-1.0 / x)
-
-# Unpolarized kappa synchrotron (kappa_synchrotron) -> (j_inv, α_inv), the additive
-# non-thermal term when kappa_frac != 0. Reads the host-precomputed constants from the
-# params tuple (_kappa_gp; the kappa-index fit branch is resolved host-side in
-# precompute_kappa!), so every per-step formula is bit-for-bit the CPU body.
-# Number-type-generic (typed zero on the early exit), hence Dual-safe.
-@inline function _gimg_kappa(gp, n_e, bb, nu, sin_tb)
-    z = zero(promote_type(typeof(n_e), typeof(bb), typeof(nu), typeof(sin_tb)))
-    (gp.kappa_frac == 0.0 || n_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_tb <= 0.0) &&
-        return (z, z)
-    k = gp.kappa
-    w = gp.w
-    nu_c = _EE * bb / (2.0 * π * _ME * _CL)
-    nu_2 = nu * nu
-    nu_kappa = nu_c * w * w * k * k * sin_tb
-    xx = nu / nu_kappa
-
-    aa = gp.kappa_frac * n_e * _EE * _EE * nu_c / (_CL * nu_2)
-    j_low = gp.kappa_jj_low * aa * cbrt(xx) * sin_tb
-    j_high = gp.kappa_jj_high * aa * xx^(-(k - 2.0) / 2.0) * sin_tb
-    j_inv = _kappa_bridge(j_low, j_high, gp.kappa_jj_x_i)
-
-    bb_ = gp.kappa_frac * n_e * _EE * _EE / (_ME * _CL)
-    a_low = gp.kappa_aa_low * bb_ * xx^(-2.0 / 3.0)
-    a_high = gp.kappa_aa_high * bb_ * xx^(-(1.0 + k) / 2.0) * gp.kappa_aa_high_i
-    alpha_inv = _kappa_bridge(a_low, a_high, gp.kappa_aa_x_i)
-    return (j_inv, alpha_inv)
-end
-
-# One sample -> (j_inv, α_inv). Mirrors the unpolarized branch of eight_coefficients:
-# cuts (σ, Θ_e), invariant thermal coefficients. Invalid / cut / vacuum samples return
-# (0,0), which the propagator treats as a no-op (A=1,B=0) — exactly the CPU march's
-# `continue`. The zero is typed by the (possibly Dual-seeded) unit/plasma scalars, so
-# the body is Dual-type-stable for the AD render.
-# NOTE(bit-exactness): the fluid-decode/cut front half is deliberately NOT hoisted into
-# a helper shared with _gpol_coeffs — restructuring this body changes LLVM's fmuladd
-# contraction choices (~1 ulp, amplified by exp(-xx^{1/3}) on dim samples), breaking the
-# pinned regression outputs; this exact body reproduces the CPU path sample-for-sample.
+# One fluid sample -> invariant (j, α) at KS position x on the RT lane (Float64, or Dual
+# for the AD render through the parameter set `gp`): normal-frame primitive decode, then
+# `unpolarized_coefficients`. A vacuum or cut sample gives (0, 0), a no-op segment.
 @inline function _gimg_coeffs(prim::SVector{8,Float64}, x::SVector{4,Float64},
                               kcov::SVector{4,Float64}, gp)
-    z = zero(promote_type(typeof(gp.d_unit), typeof(gp.e_unit), typeof(gp.b_unit),
-                          typeof(gp.rat_high), typeof(gp.rat_low)))
-    rho = prim[1]; eint = prim[5]
-    (rho <= 0.0 || eint <= 0.0) && return (z, z)
-    pgas = (gp.gamma - 1.0) * eint
-    gcov, gcon = _gimg_metric(x, gp.bh_a)
-    ucon, ucov, bcon, b_sq = _gimg_pfv(prim[2], prim[3], prim[4],
-                                       prim[6], prim[7], prim[8], gcov, gcon)
-    b_sq <= 0.0 && return (z, z)
-    rho_cgs = rho * gp.d_unit
-    pgas_cgs = pgas * gp.e_unit
-    n_cgs = rho_cgs / (gp.mu * _MP)
-    n_e = n_cgs / (1.0 + 1.0 / gp.ne_ni)
-    bb_cgs = sqrt(b_sq) * gp.b_unit
-    sigma = b_sq / rho
-    beta_inv = b_sq / (2.0 * pgas)
-    theta_e = _gimg_theta_e(rho_cgs, pgas_cgs, beta_inv, gp)
-    (gp.sigma_cut >= 0.0 && sigma > gp.sigma_cut) && return (z, z)
-    (gp.theta_e_min >= 0.0 && theta_e < gp.theta_e_min) && return (z, z)
-    minus_ku = -dot(kcov, ucon)                 # = ν_local / ν_obs (k_t = -1)
-    kb = dot(kcov, bcon)
-    cos2 = min(kb * kb / (minus_ku * minus_ku * b_sq), 1.0)
-    sin_tb = sqrt(1.0 - cos2)
-    nu_local = minus_ku * gp.nu_obs
-    th = _gimg_thermal(gp.thermal_frac, n_e, theta_e, bb_cgs, nu_local, sin_tb)
-    # Additive nonthermal eDF mixing in the CPU eight_coefficients order: thermal, then
-    # power-law, then kappa. Each branch is keyed on the params tuple carrying that eDF's
-    # constants (`hasfield` is compile-time), so a thermal-only deck compiles to the
-    # untouched thermal path — byte-identical output and register count.
-    j = th[1]; a = th[2]
-    if hasfield(typeof(gp), :power_frac)
-        jp, ap = _gimg_powerlaw(gp, n_e, bb_cgs, nu_local, sin_tb)
-        j += jp; a += ap
-    end
-    if hasfield(typeof(gp), :kappa_frac)
-        jk, ak = _gimg_kappa(gp, n_e, bb_cgs, nu_local, sin_tb)
-        j += jk; a += ak
-    end
-    return (j, a)
+    gcov, gcon = metric_and_inverse(KerrSchildCartesian(gp.bh_a), x)
+    return _prim_coeffs(prim, kcov, gcov, gcon, gp)
 end
-
-# Affine propagator factors (A, B) for one segment (couple_unpolarized): I -> A*I + B.
-# Type-generic (Dual-safe) like _gimg_thermal.
-@inline function _gimg_ab(j, alpha, ds)
-    T = promote_type(typeof(j), typeof(alpha))
-    if alpha > 0.0
-        ss = j / alpha
-        dtau = alpha * ds
-        if dtau <= 100.0                        # POL_DELTA_TAU_MAX
-            e = exp(-dtau)
-            return (e, e * ss * expm1(dtau))
-        end
-        return (zero(T), ss)                    # saturated: I -> j/α
-    end
-    return (one(T), j * ds)                     # α ≤ 0: emission only
+@inline function _prim_coeffs(prim, kcov, gcov, gcon, gp)
+    fv = primitive_four_vectors(prim[2], prim[3], prim[4], prim[6], prim[7], prim[8],
+                                gcov, gcon)
+    return unpolarized_coefficients(gp, prim[1], pgas_from_eint(prim[5], gp.plasma_gamma),
+                                    fv, kcov, gp.nu_obs)
 end
 
 # ---------------------------------------------------------------- device: grid sample
@@ -338,18 +166,6 @@ end
 # Termination: `_gimg_stop` (gpu_metric.jl), the shared `march_stop` rule of the CPU
 # sampled tracer — horizon backstop, redshift cut, outbound-only escape.
 
-# One fixed-control geodesic step: low-storage streaming RK4 — same ops/associativity
-# as (k1+2k2+2k3+k4)/6 but the four stage derivatives are not all held live -> fewer
-# registers/thread. Shared by every unpolarized march and the stiffness telemetry kernel.
-# Runs entirely in T = eltype(y), the geodesic lane.
-@inline function _gimg_rk4_step(y::SVector{8,T}, h::T, a::T) where {T}
-    d = _gimg_rhs(y, a);  acc = d;         ys = y + (h / 2) * d
-    d = _gimg_rhs(ys, a); acc = acc + 2*d; ys = y + (h / 2) * d
-    d = _gimg_rhs(ys, a); acc = acc + 2*d; ys = y + h * d
-    d = _gimg_rhs(ys, a); acc = acc + d
-    return y + (h / 6) * acc
-end
-
 # The entire unpolarized fused march for one ray: camera->source fixed-control RK4
 # (step h=(r-r_h)/C), reverse-accumulated invariant intensity (see file header). The one
 # body behind every unpolarized kernel variant, parameterized by
@@ -378,11 +194,11 @@ end
             kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])   # photon k = -p
             j_inv, a_inv = _gimg_coeffs(prim, x, kcov, gp)
             ds = Float64(h) * gp.L_unit / gp.nu_obs
-            A, B = _gimg_ab(j_inv, a_inv, ds)
+            A, B = unpolarized_segment(j_inv, a_inv, ds)
             Iinv += trans * B
             trans *= A
         end
-        y = _gimg_rk4_step(y, h, a)
+        y = rk4_step_fixed(KerrSchildCartesian(a), y, h)
     end
     return Iinv * gp.nu_obs^3
 end
@@ -478,73 +294,20 @@ march_sort_order(counts::AbstractVector) = sortperm(counts)
                      kern(args...; ndrange = cnt, workgroupsize = min(wg, cnt))
 
 # ---------------------------------------------------------------- host driver
-# Host precompute of the power-law eDF constants: runs precompute_power_law! once (the
-# gamma/₂F₁ host math) and returns the isbits Float64 scalars the device _gimg_powerlaw /
-# _gpol_powerlaw mixers consume — bit-identical to the CPU path because both read the
-# same precomputed scalars. Polarized-only fields are carried but unused unpolarized.
-function _powerlaw_gp(p)
-    scc = SimCoeffConfig(; plasma_p = p.power_p, plasma_power_frac = p.power_frac)
-    precompute_power_law!(scc, p.gamma_min, p.gamma_max)
-    return (power_frac = p.power_frac, power_p = p.power_p, gamma_min = scc.plasma_gamma_min,
-            power_jj = scc.power_jj, power_aa = scc.power_aa,
-            power_jj_q = scc.power_jj_q, power_jj_v = scc.power_jj_v,
-            power_aa_q = scc.power_aa_q, power_aa_v = scc.power_aa_v,
-            power_rho = scc.power_rho, power_rho_q = scc.power_rho_q,
-            power_rho_v = scc.power_rho_v)
-end
-
-# Host precompute of the kappa eDF constants: runs precompute_kappa! once (gamma/besselk/
-# ₂F₁ host math AND the kappa-index three-way fit branch, so the device only reads the
-# resolved scalars) and returns the isbits Float64 set the device _gimg_kappa /
-# _gpol_kappa mixers consume — bit-identical to the CPU path.
-function _kappa_gp(p)
-    scc = SimCoeffConfig(; plasma_kappa = p.kappa, plasma_w = p.w, plasma_kappa_frac = p.kappa_frac)
-    precompute_kappa!(scc)
-    return (kappa_frac = p.kappa_frac, kappa = p.kappa, w = p.w,
-            kappa_jj_low = scc.kappa_jj_low, kappa_jj_high = scc.kappa_jj_high,
-            kappa_jj_x_i = scc.kappa_jj_x_i,
-            kappa_aa_low = scc.kappa_aa_low, kappa_aa_high = scc.kappa_aa_high,
-            kappa_aa_high_i = scc.kappa_aa_high_i, kappa_aa_x_i = scc.kappa_aa_x_i,
-            kappa_jj_low_q = scc.kappa_jj_low_q, kappa_jj_low_v = scc.kappa_jj_low_v,
-            kappa_jj_high_q = scc.kappa_jj_high_q, kappa_jj_high_v = scc.kappa_jj_high_v,
-            kappa_jj_x_q = scc.kappa_jj_x_q, kappa_jj_x_v = scc.kappa_jj_x_v,
-            kappa_aa_low_q = scc.kappa_aa_low_q, kappa_aa_low_v = scc.kappa_aa_low_v,
-            kappa_aa_high_q = scc.kappa_aa_high_q, kappa_aa_high_v = scc.kappa_aa_high_v,
-            kappa_aa_x_q = scc.kappa_aa_x_q, kappa_aa_x_v = scc.kappa_aa_x_v,
-            kappa_rho_v = scc.kappa_rho_v, kappa_rho_frac = scc.kappa_rho_frac,
-            kappa_rho_q_low_a = scc.kappa_rho_q_low_a, kappa_rho_q_low_b = scc.kappa_rho_q_low_b,
-            kappa_rho_q_low_c = scc.kappa_rho_q_low_c, kappa_rho_q_low_d = scc.kappa_rho_q_low_d,
-            kappa_rho_q_low_e = scc.kappa_rho_q_low_e,
-            kappa_rho_q_high_a = scc.kappa_rho_q_high_a, kappa_rho_q_high_b = scc.kappa_rho_q_high_b,
-            kappa_rho_q_high_c = scc.kappa_rho_q_high_c, kappa_rho_q_high_d = scc.kappa_rho_q_high_d,
-            kappa_rho_q_high_e = scc.kappa_rho_q_high_e,
-            kappa_rho_v_low_a = scc.kappa_rho_v_low_a, kappa_rho_v_low_b = scc.kappa_rho_v_low_b,
-            kappa_rho_v_high_a = scc.kappa_rho_v_high_a, kappa_rho_v_high_b = scc.kappa_rho_v_high_b)
-end
-
-# Merge the host-precomputed nonthermal constants into a device params `base` tuple. A
-# pure-thermal deck (both fracs 0) returns `base` unchanged (byte-identical tuple shape
-# -> untouched thermal kernel); a single-eDF deck carries only that eDF's fields, keyed
-# in the coeff functions via compile-time `hasfield`.
-_merge_nonthermal(base, p) = begin
-    gp = p.power_frac == 0.0 ? base : merge(base, _powerlaw_gp(p))
-    p.kappa_frac == 0.0 ? gp : merge(gp, _kappa_gp(p))
-end
-
-# Named tuple of the isbits scalars the kernel needs (units + plasma + geometry), with
-# the host-precomputed nonthermal constants merged in when active (`_merge_nonthermal`)
-# so the device coefficient functions mix eDFs exactly as CPU eight_coefficients.
+# The isbits device parameter set: `coefficient_params` of the same prepared
+# SimCoeffConfig the CPU `render` builds (units, plasma model, cuts, and the nonthermal
+# constants of the active populations only), plus the observing frequency and length
+# unit. The coefficient functions read it by the SimCoeffConfig field names.
 function _gimg_params(cfg)
     u = units(cfg.m_bh_cgs, cfg.mass_scale_cgs)
-    p = cfg.plasma
-    base = (d_unit = u.dens_unit, e_unit = u.dens_unit * _CL^2, b_unit = u.B_unit,
-            mu = p.mu, ne_ni = p.ne_ni, use_p = (p.use_p ? 1 : 0),
-            rat_low = p.rat_low, rat_high = p.rat_high, gamma = p.gamma,
-            gamma_i = p.gamma_i, gamma_e = p.gamma_e, thermal_frac = p.thermal_frac,
-            sigma_cut = p.sigma_cut, theta_e_min = p.theta_e_min,
-            nu_obs = cfg.frequency_hz, L_unit = u.L_unit, bh_a = cfg.bh_a)
-    return _merge_nonthermal(base, p)
+    return merge(coefficient_params(BlackLightPlus._prepared_scc(cfg, u)),
+                 (nu_obs = cfg.frequency_hz, L_unit = u.L_unit))
 end
+
+# The mass_scale-dependent unit fields of a parameter set (`_scc_config` convention).
+_unit_fields(m_bh, mass_scale) = (u = units(m_bh, mass_scale);
+    (d_unit = u.dens_unit, e_unit = u.dens_unit * BlackLightPlus.Constants.CL^2,
+     b_unit = u.B_unit))
 
 # Render the ray subset `rng` (any index collection) on the CURRENTLY active device with
 # device-resident grid. rays[rng] gathers, img[rng] .= scatters — exact for a strided rng.
@@ -692,10 +455,8 @@ end
 # Unlike the Dual-seeded AD render, an SVector-valued param lane cannot ride the generic
 # kernel (SVector is not a Number: scalar guards, elementwise ratios and one(T) all
 # break), so only the ACCUMULATOR is vectorized (SVector{K,Float64}) and each variant
-# calls the pinned bit-exact _gimg_coeffs/_gimg_ab verbatim with its own units tuple —
-# lane k is bitwise-identical to a standalone render of that mass_scale. The redundant
-# per-variant geometry inside _gimg_coeffs is deliberately NOT hoisted (fmuladd pin);
-# the expensive shared work (RK4 + trilinear sample) is what the march amortizes.
+# runs the unpolarized coefficients and segment operator with its own units tuple, so
+# lane k is the standalone render of that mass_scale.
 @inline function _gimg_march_kv(y0::SVector{8,Tg}, sample::F, gps::NTuple{K,GP},
                                 a::Tg, r_h::Tg, C::Tg, escape::Tg, R_em::Tg,
                                 nmax) where {F,K,GP,Tg}
@@ -714,18 +475,19 @@ end
             x    = SVector{4,Float64}(y[1], y[2], y[3], y[4])
             kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])   # photon k = -p
             ds   = Float64(h) * L_unit / nu_obs
-            # per-variant (A,B): the exact _gimg_coeffs/_gimg_ab ops with mass_scale k's
-            # (d,e,b)_unit — bit-identical to a standalone render of variant k.
+            # per-variant (A,B) with mass_scale k's (d,e,b)_unit — the ops of a standalone
+            # render of variant k. The metric is re-evaluated per variant: holding it live
+            # across the K lanes costs more registers than recomputing it.
             ab = ntuple(Val(K)) do k
                 j_inv, a_inv = _gimg_coeffs(prim, x, kcov, gps[k])
-                _gimg_ab(j_inv, a_inv, ds)
+                unpolarized_segment(j_inv, a_inv, ds)
             end
             A = SVector{K,Float64}(ntuple(k -> ab[k][1], Val(K)))
             B = SVector{K,Float64}(ntuple(k -> ab[k][2], Val(K)))
             Iinv  = Iinv + trans .* B          # per lane: Iinv[k] += trans[k]*B[k]
             trans = trans .* A                 # per lane: trans[k] *= A[k]
         end
-        y = _gimg_rk4_step(y, h, a)
+        y = rk4_step_fixed(KerrSchildCartesian(a), y, h)
     end
     return Iinv .* nu_obs^3
 end
@@ -803,10 +565,7 @@ function render_gpu_fused_kvariant(cfg, snap_or_grid, mass_scales::Vector{Float6
     # per-variant param tuples differ ONLY in (d_unit,e_unit,b_unit) — exactly what
     # _gimg_params(cfg_k) with mass_scale_cgs = mass_scales[k] produces (L_unit is
     # mass_scale-independent, so gp0.L_unit is shared); the merge preserves gp0's type.
-    gps = ntuple(K) do k
-        u = units(cfg.m_bh_cgs, mass_scales[k])
-        merge(gp0, (d_unit = u.dens_unit, e_unit = u.dens_unit * _CL^2, b_unit = u.B_unit))
-    end
+    gps = ntuple(k -> merge(gp0, _unit_fields(cfg.m_bh_cgs, mass_scales[k])), K)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance

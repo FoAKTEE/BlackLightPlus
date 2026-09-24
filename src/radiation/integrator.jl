@@ -14,14 +14,16 @@
         -> (j::SVector{4}, α::SVector{4}, ρ::SVector{4}, tet, valid::Bool)
 
 Invariant polarized coefficients at one sample: thermal + power-law + kappa
-additive mixing (blacklight CalculatePolarizedCoefficients). `kcov`/`kcon` are the
+additive mixing (blacklight CalculatePolarizedCoefficients). `cfg` is a
+`SimCoeffConfig` or its isbits `coefficient_params` set (the device kernels call this
+same function). `kcov`/`kcon` are the
 photon wave vector (future-directed, source → camera; `-p` of a ray state), so the
 fluid-frame frequency is ν = -k·u ν_obs and cos θ_B is signed along the propagation. `rho`/`pgas` are
 code-unit scalars; `fv` is the NamedTuple from `primitive_four_vectors`. Pass
 `renorm_e1 = true` off single CKS so the returned fluid tetrad's e_(1) (hence the
 Q/U frame) is unit.
 """
-@inline function eight_coefficients(cfg::SimCoeffConfig, rho, pgas,
+@inline function eight_coefficients(cfg, rho, pgas,
                                     fv, gcov, gcon, kcov::SVector{4}, kcon::SVector{4},
                                     ν_obs, renorm_e1::Bool = false)
     (rho <= 0.0 || pgas <= 0.0) && return _ZERO4S, _ZERO4S, _ZERO4S, _ZERO4x4, false
@@ -61,12 +63,12 @@ Q/U frame) is unit.
     ji, jq, jv, ai, aq, av, rq, rv =
         thermal_synchrotron_polarized(cfg.plasma_thermal_frac, n_e_cgs, theta_e,
                                       bb_cgs, nu_cgs, sin_th, cos_th)
-    if cfg.plasma_power_frac != 0.0
+    if has_power_law(cfg)
         t = power_law_synchrotron_polarized(cfg, n_e_cgs, bb_cgs, nu_cgs, sin_th, cos_th)
         ji += t[1]; jq += t[2]; jv += t[3]; ai += t[4]; aq += t[5]; av += t[6]
         rq += t[7]; rv += t[8]
     end
-    if cfg.plasma_kappa_frac != 0.0
+    if has_kappa(cfg)
         t = kappa_synchrotron_polarized(cfg, n_e_cgs, bb_cgs, nu_cgs, sin_th, cos_th)
         ji += t[1]; jq += t[2]; jv += t[3]; ai += t[4]; aq += t[5]; av += t[6]
         rq += t[7]; rv += t[8]
@@ -76,6 +78,45 @@ end
 
 const _ZERO4S = SVector(0.0, 0.0, 0.0, 0.0)
 const _ZERO4x4 = zero(SMatrix{4,4,Float64})
+
+"""
+    unpolarized_coefficients(cfg, rho, pgas, fv, kcov, ν_obs) -> (j, α)
+
+Invariant Stokes-I emissivity and absorptivity at one sample: the plasma decode and
+cuts of `eight_coefficients`, the pitch angle from the invariant identity
+cos²θ_B = (k·b)² / ((k·u)² b²) (b·u = 0, k null: the fluid-frame spatial momentum has
+norm -k·u; the traced k's null-constraint drift enters at relative order
+k·k/(k·u)², below 1e-7 on the C = 80 march), and the thermal + power-law + kappa
+unpolarized fits. No tetrad is built. A vacuum, unmagnetized or cut sample returns zeros, which the
+segment operator treats as a no-op. `cfg` is a `SimCoeffConfig` (AD `Dual` configs
+included) or its `coefficient_params` set; the zeros take the unit/plasma type so a
+`Dual` accumulation is type-stable.
+"""
+@inline function unpolarized_coefficients(cfg, rho, pgas, fv, kcov::SVector{4}, ν_obs)
+    z = zero(promote_type(typeof(cfg.d_unit), typeof(cfg.e_unit), typeof(cfg.b_unit),
+                          typeof(cfg.plasma_rat_high), typeof(cfg.plasma_rat_low)))
+    (rho <= 0.0 || pgas <= 0.0) && return (z, z)
+    b_sq = fv.b_sq
+    b_sq <= 0.0 && return (z, z)                        # b² < 0 is round-off
+    pd = plasma_decode(cfg, rho, pgas, b_sq)
+    pd.omit && return (z, z)
+    minus_ku = -dot(kcov, fv.ucon)                      # = ν_local / ν_obs (k_t = -1)
+    kb = dot(kcov, fv.bcon)
+    cos2 = min(kb * kb / (minus_ku * minus_ku * b_sq), 1.0)
+    sin_th = sqrt(1.0 - cos2)
+    nu = minus_ku * ν_obs
+    j, a = thermal_synchrotron(cfg.plasma_thermal_frac, pd.n_e_cgs, pd.theta_e, pd.bb_cgs,
+                               nu, sin_th)
+    if has_power_law(cfg)
+        jp, ap = power_law_synchrotron(cfg, pd.n_e_cgs, pd.bb_cgs, nu, sin_th)
+        j += jp; a += ap
+    end
+    if has_kappa(cfg)
+        jk, ak = kappa_synchrotron(cfg, pd.n_e_cgs, pd.bb_cgs, nu, sin_th)
+        j += jk; a += ak
+    end
+    return (j, a)
+end
 
 # Coordinate-frame N^{αβ} -> covariant tetrad-frame N_{ab}. Explicit left-to-right
 # sums (no matmul/fma reassociation) keep the accumulation order fixed.
@@ -173,8 +214,7 @@ function polarized_march(st, cfg::SimCoeffConfig, sampler, ys::Vector{SVector{8,
         # reference pairing: coefficients at sample n couple over the segment BEHIND it
         dλ_cgs = (n == 1 ? 0.0 : dls[n-1]) * L_unit * inv_nu
 
-        gcov = metric(st, x)
-        gcon = inverse_metric(st, x)
+        gcov, gcon = metric_and_inverse(st, x)
         # reuse the gcon just computed; christoffel would otherwise re-derive it at x
         Γ = christoffel(st, x, gcon, metric_gradient(st, x))
         conn_old = n == 1 ? Γ : 0.5 .* (conn_old .+ Γ)
@@ -225,8 +265,7 @@ function polarized_march(st, cfg::SimCoeffConfig, sampler, ys::Vector{SVector{8,
     y = ys[m]
     x = SVector(y[1], y[2], y[3], y[4])
     kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
-    gcov = metric(st, x)
-    gcon = inverse_metric(st, x)
+    gcov, gcon = metric_and_inverse(st, x)
     kcon = gcon * kcov
     # unit normal (Eulerian) observer at the camera
     ucon = _normal_observer(gcon)
@@ -246,7 +285,8 @@ end
     unpolarized_march(st, cfg, sampler, ys, dls, ν_obs, L_unit) -> Float64
 
 Stokes-I fast mode: stable exponential propagator over the invariant intensity
-(blacklight unpolarized_transfer). Returns I_ν at the camera.
+(blacklight unpolarized_transfer), with the per-sample `unpolarized_coefficients` and
+`unpolarized_segment` operator the fused kernels use. Returns I_ν at the camera.
 """
 function unpolarized_march(st, cfg::SimCoeffConfig{T}, sampler, ys, dls,
                            ν_obs, L_unit) where {T}
@@ -261,16 +301,12 @@ function unpolarized_march(st, cfg::SimCoeffConfig{T}, sampler, ys, dls,
         s = sampler(x)
         (!s.inside || (s.bb[1] == 0.0 && s.bb[2] == 0.0 && s.bb[3] == 0.0)) && continue
         (s.rho <= 0.0 || s.pgas <= 0.0) && continue
-        gcov = metric(st, x)
-        gcon = inverse_metric(st, x)
+        gcov, gcon = metric_and_inverse(st, x)
         kcov = -SVector(y[5], y[6], y[7], y[8])  # photon k = -p
-        kcon = gcon * kcov
         fv = primitive_four_vectors(s.uu[1], s.uu[2], s.uu[3],
                                     s.bb[1], s.bb[2], s.bb[3], gcov, gcon)
-        j4, a4, _, _, valid = eight_coefficients(cfg, s.rho, s.pgas, fv, gcov, gcon,
-                                                 kcov, kcon, ν_obs)
-        valid || continue
-        Iinv = couple_unpolarized(Iinv, j4[1], a4[1], (n == 1 ? 0.0 : dls[n-1]) * L_unit * inv_nu)
+        j, a = unpolarized_coefficients(cfg, s.rho, s.pgas, fv, kcov, ν_obs)
+        Iinv = couple_unpolarized(Iinv, j, a, (n == 1 ? 0.0 : dls[n-1]) * L_unit * inv_nu)
     end
     return Iinv * ν_obs^3
 end

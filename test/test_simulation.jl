@@ -133,8 +133,8 @@ end
 # corruption + an all-vacuum table -> all-black render). It must now error() loudly.
 # Guarded, idempotent includes: gpu_* `using CUDA` (loads without a device) and
 # _build_leaf_table is a pure host function (no kernel launched here).
-@isdefined(_gimg_thermal)     || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
-@isdefined(_gpol_thermal)     || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
+@isdefined(_fused_kernel!)     || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
+@isdefined(_gpol_kernel!)     || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
 @isdefined(_build_leaf_table) || include(joinpath(@__DIR__, "..", "src", "gpu_amr.jl"))
 
 @testset "gpu_amr _build_leaf_table: reject non-finest-aligned dumps (was OOB write)" begin
@@ -341,7 +341,7 @@ using BlackLightPlus: trace_rays_sampled, PlaneParallelCamera, camera_rays
     @test all(>(100), cnt)                              # pre-fix: cnt == 0 for every ray
     # the march really went inside the escape sphere (not just lingered at the camera)
     for i in 1:nr
-        rmin = minimum(_r_ks(traj[i, s], a) for s in 1:Int(cnt[i]) + 1)
+        rmin = minimum(ks_radius(st, SVector(traj[i, s][1], traj[i, s][2], traj[i, s][3], traj[i, s][4])) for s in 1:Int(cnt[i]) + 1)
         @test rmin < 100.0
     end
     # step-count parity with the (already fixed) CPU tracer on the identical rays;
@@ -375,26 +375,47 @@ end
 end
 
 # ---------------------------------------------------------------------------------------
-# Tracer/imager metric+RHS seam. gpu_tracer.jl's _gi_cks/_rhs_gpu once carried a full
-# PRIVATE byte-identical copy of gpu_image.jl's _gimg_gi/_gimg_rhs; the two were later
-# collapsed onto ONE shared body (gpu_metric.jl) with the tracer names as const aliases.
-# Retained as the regression tripwire for the alias seam: if anyone re-forks the tracer
-# copies and they drift, it fails loudly again.
-using Random
-@testset "gpu tracer/imager seam: _gi_cks/_rhs_gpu == _gimg_gi/_gimg_rhs bitwise" begin
-    a = 0.9375; r_h = 1 + sqrt(1 - a * a)
+# Geodesic RHS regression. Every CPU tracer, device tracer and fused kernel steps with
+# the one Geodesics `geodesic_rhs` (Hamiltonian contraction form: dp_i = -½ ∂_i(g^{μν}p_μp_ν)
+# from `raise_and_norm` on a dual-seeded position). Checked (i) against the textbook form
+# -½ (∂_i g^{μν}) p_μ p_ν with ∂g^{μν} from a ForwardDiff jacobian of the closed-form
+# inverse metric, and (ii) against reference values of the pre-consolidation device RHS.
+using Random, ForwardDiff
+using BlackLightPlus.Geodesics: geodesic_rhs, geodesic_transport_rhs
+@testset "geodesic RHS: Hamiltonian contraction == textbook ∂g form; pinned values" begin
+    a = 0.9375; st = KerrSchildCartesian(a); r_h = 1 + sqrt(1 - a * a)
     rng = MersenneTwister(0x5EA3)
     ntest = 0
     for _ in 1:3000
         X = (rand(rng) - 0.5) * 2.4e3; Y = (rand(rng) - 0.5) * 2.4e3; Z = (rand(rng) - 0.5) * 2.4e3
-        _r_ks(SVector(0.0, X, Y, Z, 0.0, 0.0, 0.0, 0.0), a) > r_h || continue
         x = SVector(0.0, X, Y, Z)
-        @test _gi_cks(x, a) == _gimg_gi(x, a)                  # inverse metric, bit-for-bit
+        ks_radius(st, x) > r_h || continue
         p = SVector(randn(rng), randn(rng), randn(rng), randn(rng))
         y = SVector(0.0, X, Y, Z, p[1], p[2], p[3], p[4])
-        @test _rhs_gpu(y, a) == _gimg_rhs(y, a)                # Hamiltonian RHS, bit-for-bit
-        @test _r_ks(y, a) == _gimg_rks(y, a)                   # KS radius, bit-for-bit
+        J = ForwardDiff.jacobian(xx -> inverse_metric(st, xx), x)      # (16, 4)
+        dg(c) = reshape(J[:, c], 4, 4)
+        ref = vcat(inverse_metric(st, x) * p, 0.0,
+                   [-0.5 * dot(p, dg(c) * p) for c in 2:4])
+        d = geodesic_rhs(st, y)
+        scale = maximum(abs, ref)
+        @test maximum(abs.(d .- ref)) <= 1e-13 * scale
         ntest += 1
     end
     @test ntest > 2500                                          # domain filter kept the sample set
+    # reference values (pre-consolidation device RHS and frame transport, a = 0.9375)
+    y = SVector(0.0, 3.0, 2.0, 1.5, -1.0, 0.4, -0.2, 0.1)
+    @test geodesic_rhs(st, y) ≈ SVector(1.6880859188282549, -0.19485518050083636,
+        -0.414892472296037, -0.17098112715009844, 0.0, -0.0661933978494909,
+        -0.11243827357252122, -0.06326190184633673) rtol = 1e-14
+    y2 = SVector(-12.0, 25.0, -40.0, 7.0, -1.0, -0.3, 0.6, 0.05)
+    @test geodesic_rhs(st, y2) ≈ SVector(1.014500231516396, -0.3073612385561768,
+        0.6123100190633601, 0.047871077359824474, 0.0, -1.7889358723359663e-5,
+        5.7572470545296375e-5, 3.674142047710762e-5) rtol = 1e-13
+    dy, (du, dv) = geodesic_transport_rhs(st, y, (SVector(0.1, 0.9, -0.3, 0.2),
+                                                  SVector(1.2, 0.1, 0.2, -0.1)))
+    @test dy ≈ geodesic_rhs(st, y) rtol = 1e-14
+    @test du ≈ SVector(-0.043775113046461755, -0.01634815409749614,
+                       -0.021421836958690668, -0.030252624371486254) rtol = 1e-13
+    @test dv ≈ SVector(-0.03984434603449974, -0.05443581131101774,
+                       -0.043394329516830164, -0.03968083098638997) rtol = 1e-13
 end

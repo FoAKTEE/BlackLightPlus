@@ -26,8 +26,7 @@ isdefined(@__MODULE__, :_gimg_coeffs) ||
 # (the march is pure Float64 here), but a dedicated tag keeps ForwardDiff bookkeeping clean.
 struct _GIADTag end
 
-# Aliases: the generic gpu_image.jl bodies ARE the AD path (Dual-safe by construction).
-const _giad_thermal = _gimg_thermal
+# Alias: the generic gpu_image.jl kernel IS the AD path (Dual-safe by construction).
 const _fused_kernel_ad! = _fused_kernel!
 
 # ---------------------------------------------------------------- host driver
@@ -37,12 +36,9 @@ const _fused_kernel_ad! = _fused_kernel!
 function _giad_params(cfg, param::Symbol)
     gp = _gimg_params(cfg)
     if param === :rat_high
-        return merge(gp, (rat_high = Dual{_GIADTag}(gp.rat_high, 1.0),))
+        return merge(gp, (plasma_rat_high = Dual{_GIADTag}(gp.plasma_rat_high, 1.0),))
     elseif param === :mass_scale
-        ms = Dual{_GIADTag}(cfg.mass_scale_cgs, 1.0)
-        u = units(cfg.m_bh_cgs, ms)
-        return merge(gp, (d_unit = u.dens_unit, e_unit = u.dens_unit * _CL^2,
-                          b_unit = u.B_unit))
+        return merge(gp, _unit_fields(cfg.m_bh_cgs, Dual{_GIADTag}(cfg.mass_scale_cgs, 1.0)))
     else
         error("render_gpu_fused_grad: param must be :mass_scale or :rat_high, got :$param")
     end
@@ -88,7 +84,7 @@ function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = selec
 
     gp = _giad_params(cfg, param)
     DT = promote_type(typeof(gp.d_unit), typeof(gp.e_unit), typeof(gp.b_unit),
-                      typeof(gp.rat_high), typeof(gp.rat_low))
+                      typeof(gp.plasma_rat_high), typeof(gp.plasma_rat_low))
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance

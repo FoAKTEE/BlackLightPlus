@@ -27,7 +27,7 @@ using BlackLightPlus: MCRng, mc_uniform, sample_direction,
 using BlackLightPlus.Constants: ME, CL, HPL
 
 # Device handle seam (HostDevice, _device!, _backend, _upload) lives in gpu_image.jl.
-@isdefined(_gimg_thermal) || include(joinpath(@__DIR__, "..", "gpu_image.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "gpu_image.jl"))
 
 # CPU-side constants, referenced (not re-typed) so the kernels can never drift
 # from mc_cpu.jl / track.jl / generate.jl / emission_tables.jl.

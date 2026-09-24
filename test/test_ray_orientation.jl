@@ -17,8 +17,8 @@ using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays_at,
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 const RO = BlackLightPlus.Radiation
 
-@isdefined(_gimg_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
-@isdefined(_gpol_thermal) || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
+@isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
+@isdefined(_gpol_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_pol.jl"))
 
 const RO_CL = 2.99792458e10
 const RO_L = 6.674e-8 * 6.5e9 * 1.989e33 / RO_CL^2    # r_g of a 6.5e9 M_sun hole [cm]

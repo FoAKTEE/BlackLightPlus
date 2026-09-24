@@ -28,8 +28,8 @@ using BlackLightPlus.Constants: SIGMA_THOMSON
 using BlackLightPlus.MonteCarlo: NW, NT
 
 const _DI_SRC = joinpath(@__DIR__, "..", "src")
-@isdefined(_gimg_thermal)  || include(joinpath(_DI_SRC, "gpu_image.jl"))
-@isdefined(_gpol_thermal)  || include(joinpath(_DI_SRC, "gpu_pol.jl"))
+@isdefined(_fused_kernel!)  || include(joinpath(_DI_SRC, "gpu_image.jl"))
+@isdefined(_gpol_kernel!)  || include(joinpath(_DI_SRC, "gpu_pol.jl"))
 @isdefined(_gamr_sample)   || include(joinpath(_DI_SRC, "gpu_amr.jl"))
 @isdefined(_gsp_ctl)       || include(joinpath(_DI_SRC, "gpu_spacetime.jl"))
 @isdefined(_fused_kernel_ad!) || include(joinpath(_DI_SRC, "gpu_image_ad.jl"))

@@ -7,6 +7,12 @@
 #   j_inv = j_nu / nu^2,   alpha_inv = alpha_nu * nu,   rho_inv = rho_nu * nu.
 # All physics arithmetic is Float64, using the CGS constants from the Constants
 # module (CL, EE, ME, MP, KB, HPL).
+#
+# Every per-sample function here is pure, allocation-free and isbits-safe, and reads its
+# parameters by field name from `c`: either a `SimCoeffConfig` (host) or the immutable
+# `coefficient_params(c)` NamedTuple with the same field names (device kernels). The CPU
+# transfer marches and the GPU kernels therefore run one implementation of the plasma
+# decode, the cuts and the synchrotron fits.
 
 # ================================================================ Bessel functions
 # Abramowitz & Stegun 9.8 polynomial fits (device-safe). Used by the thermal
@@ -176,6 +182,51 @@ Base.@kwdef mutable struct SimCoeffConfig{T<:Real}
     cut_beta_inverse_max::T = -1.0
 end
 
+# Field groups of the isbits device parameter set (`coefficient_params`).
+const _COEFF_BASE_FIELDS = (:bh_a, :d_unit, :e_unit, :b_unit, :plasma_mu, :plasma_ne_ni,
+    :plasma_use_p, :plasma_rat_low, :plasma_rat_high, :plasma_gamma, :plasma_gamma_i,
+    :plasma_gamma_e, :plasma_thermal_frac,
+    :cut_rho_min, :cut_rho_max, :cut_n_e_min, :cut_n_e_max, :cut_p_gas_min, :cut_p_gas_max,
+    :cut_theta_e_min, :cut_theta_e_max, :cut_b_min, :cut_b_max, :cut_sigma_min,
+    :cut_sigma_max, :cut_beta_inverse_min, :cut_beta_inverse_max)
+const _COEFF_POWER_FIELDS = (:plasma_power_frac, :plasma_p, :plasma_gamma_min, :power_jj,
+    :power_aa, :power_jj_q, :power_jj_v, :power_aa_q, :power_aa_v, :power_rho, :power_rho_q,
+    :power_rho_v)
+const _COEFF_KAPPA_FIELDS = (:plasma_kappa_frac, :plasma_kappa, :plasma_w, :kappa_jj_low,
+    :kappa_jj_high, :kappa_jj_x_i, :kappa_aa_low, :kappa_aa_high, :kappa_aa_high_i,
+    :kappa_aa_x_i, :kappa_jj_low_q, :kappa_jj_low_v, :kappa_jj_high_q, :kappa_jj_high_v,
+    :kappa_jj_x_q, :kappa_jj_x_v, :kappa_aa_low_q, :kappa_aa_low_v, :kappa_aa_high_q,
+    :kappa_aa_high_v, :kappa_aa_x_q, :kappa_aa_x_v, :kappa_rho_v, :kappa_rho_frac,
+    :kappa_rho_q_low_a, :kappa_rho_q_low_b, :kappa_rho_q_low_c, :kappa_rho_q_low_d,
+    :kappa_rho_q_low_e, :kappa_rho_q_high_a, :kappa_rho_q_high_b, :kappa_rho_q_high_c,
+    :kappa_rho_q_high_d, :kappa_rho_q_high_e, :kappa_rho_v_low_a, :kappa_rho_v_low_b,
+    :kappa_rho_v_high_a, :kappa_rho_v_high_b)
+
+_fields(c, names) = NamedTuple{names}(map(n -> getfield(c, n), names))
+
+"""
+    coefficient_params(c::SimCoeffConfig) -> NamedTuple
+
+Immutable isbits copy of the per-sample coefficient parameters of `c` (units, plasma
+model, cuts, and the host-precomputed nonthermal constants) under the `SimCoeffConfig`
+field names, for device kernels, which cannot take the mutable config. The power-law
+(kappa) constants are included only when `plasma_power_frac` (`plasma_kappa_frac`) is
+nonzero; the coefficient functions select each population at compile time from the
+fields present, so a thermal parameter set compiles to the thermal path alone.
+"""
+function coefficient_params(c::SimCoeffConfig)
+    gp = _fields(c, _COEFF_BASE_FIELDS)
+    c.plasma_power_frac != 0.0 && (gp = merge(gp, _fields(c, _COEFF_POWER_FIELDS)))
+    c.plasma_kappa_frac != 0.0 && (gp = merge(gp, _fields(c, _COEFF_KAPPA_FIELDS)))
+    return gp
+end
+
+# Active nonthermal populations of a parameter set: a SimCoeffConfig carries every
+# field (inactive at fraction 0); a `coefficient_params` set carries a population's
+# fields only when it is active, so the field test folds at compile time.
+@inline has_power_law(c) = hasfield(typeof(c), :power_jj) && c.plasma_power_frac != 0.0
+@inline has_kappa(c) = hasfield(typeof(c), :kappa_jj_low) && c.plasma_kappa_frac != 0.0
+
 # ================================================================ plasma cuts / theta_e
 
 """
@@ -186,7 +237,7 @@ Per-sample plasma-value cut test (blacklight PlasmaCutOmits). Returns
 `>= 0.0` so a negative threshold (canonically -1.0) disables it; 0.0 is active. All
 comparisons are false for NaN, so a NaN `theta_e` never trips the theta_e cut.
 """
-@inline function plasma_cut_omits(c::SimCoeffConfig, rho_cgs, n_e_cgs,
+@inline function plasma_cut_omits(c, rho_cgs, n_e_cgs,
                                   pgas_cgs, theta_e, bb_cgs,
                                   sigma, beta_inv)
     return (c.cut_rho_min >= 0.0 && rho_cgs < c.cut_rho_min) ||
@@ -212,8 +263,7 @@ Electron temperature Theta_e (dimensionless, k T_e / m_e c^2) from the ti_te_bet
 model. Returns NaN for the unsupported `plasma_thermal_frac == 0` corner (blacklight
 parity — the NaN makes the theta_e plasma cuts never trip).
 """
-@inline function electron_theta(c::SimCoeffConfig, rho_cgs, pgas_cgs, beta_inv)
-    c.plasma_thermal_frac == 0.0 && return NaN
+@inline function electron_theta(c, rho_cgs, pgas_cgs, beta_inv)
     tti_tte = (c.plasma_rat_high + c.plasma_rat_low * beta_inv * beta_inv) /
               (1.0 + beta_inv * beta_inv)
     kb_tt_tot_cgs = c.plasma_mu * MP * pgas_cgs / rho_cgs
@@ -224,7 +274,8 @@ parity — the NaN makes the theta_e plasma cuts never trip).
         kb_tt_e_cgs = (1.0 + c.plasma_ne_ni) * kb_tt_tot_cgs / (c.plasma_gamma - 1.0)
         kb_tt_e_cgs /= tti_tte / (c.plasma_gamma_i - 1.0) + c.plasma_ne_ni / (c.plasma_gamma_e - 1.0)
     end
-    return kb_tt_e_cgs / (ME * CL * CL)
+    theta_e = kb_tt_e_cgs / (ME * CL * CL)
+    return c.plasma_thermal_frac == 0.0 ? oftype(theta_e, NaN) : theta_e
 end
 
 """
@@ -234,12 +285,11 @@ Shared code-unit -> cgs plasma decode for both the ray-traced imaging
 (`eight_coefficients`) and the GRMHD Monte Carlo (`plasma_at`): cgs conversion ->
 `electron_theta` (ti_te_beta) -> `plasma_cut_omits` gate. Returns
 `(rho_cgs, pgas_cgs, n_e_cgs, bb_cgs, sigma, beta_inv, theta_e, omit::Bool)`;
-`omit == true` means the sample is cut (treat as vacuum). Allocation-free and typed
-on the bare `SimCoeffConfig` UnionAll so AD `Dual` configs match. The GPU kernels
-re-implement this arithmetic against a flat isbits params struct (a mutable config
-cannot live on-device) and must stay bit-exact with it.
+`omit == true` means the sample is cut (treat as vacuum). Allocation-free; `c` is a
+`SimCoeffConfig` (AD `Dual` configs included) or its `coefficient_params` set, which the
+GPU kernels pass.
 """
-@inline function plasma_decode(c::SimCoeffConfig, rho, pgas, b_sq)
+@inline function plasma_decode(c, rho, pgas, b_sq)
     rho_cgs = rho * c.d_unit
     pgas_cgs = pgas * c.e_unit
     n_cgs = rho_cgs / (c.plasma_mu * MP)
@@ -259,12 +309,14 @@ end
     thermal_synchrotron(thermal_frac, n_e, theta_e, B, nu, sin_th) -> (j_inv, alpha_inv)
 
 Unpolarized thermal synchrotron coefficients in Lorentz-invariant form (M 28/30/31),
-with alpha from Kirchhoff's law. Returns `(0.0, 0.0)` on any degenerate input.
+with alpha from Kirchhoff's law. Returns zeros on any degenerate input. Generic in the
+number type (the zeros take the input type), so a ForwardDiff `Dual` flows through.
 Follows blacklight ThermalSynchrotronInvariant.
 """
 @inline function thermal_synchrotron(thermal_frac, n_e, theta_e, bb, nu, sin_theta_b)
+    z = zero(promote_type(typeof(n_e), typeof(theta_e), typeof(bb)))
     (thermal_frac == 0.0 || n_e <= 0.0 || theta_e <= 0.0 || bb <= 0.0 || nu <= 0.0 ||
-     sin_theta_b <= 0.0) && return (0.0, 0.0)
+     sin_theta_b <= 0.0) && return (z, z)
 
     nu_c = EE * bb / (2.0 * π * ME * CL)
     nu_s = 2.0 / 9.0 * nu_c * theta_e * theta_e * sin_theta_b
@@ -283,9 +335,7 @@ Follows blacklight ThermalSynchrotronInvariant.
     kb_tt_e = theta_e * ME * CL * CL
     b_nu_nu_3 = 2.0 * HPL / (CL * CL) / expm1(HPL * nu / kb_tt_e)
     alpha_inv = j_inv / b_nu_nu_3
-    if !isfinite(1.0 / (alpha_inv * alpha_inv))
-        alpha_inv = 0.0
-    end
+    isfinite(1.0 / (alpha_inv * alpha_inv)) || (alpha_inv = z)
     return (j_inv, alpha_inv)
 end
 
@@ -410,9 +460,10 @@ gives 0, the correct limit.
 Unpolarized power-law synchrotron coefficients (accumulation terms carrying
 `plasma_power_frac`). Follows blacklight PowerLawSynchrotronInvariant.
 """
-@inline function power_law_synchrotron(c::SimCoeffConfig, n_e, bb, nu, sin_theta_b)
+@inline function power_law_synchrotron(c, n_e, bb, nu, sin_theta_b)
+    z = zero(promote_type(typeof(n_e), typeof(bb), typeof(nu), typeof(sin_theta_b)))
     (c.plasma_power_frac == 0.0 || n_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_theta_b <= 0.0) &&
-        return (0.0, 0.0)
+        return (z, z)
     p = c.plasma_p
     nu_c = EE * bb / (2.0 * π * ME * CL)
     nu_2 = nu * nu
@@ -431,7 +482,7 @@ Power-law synchrotron polarized coefficients in the order
 `(j_i, j_q, j_v, alpha_i, alpha_q, alpha_v, rho_q, rho_v)` (accumulation terms carrying
 `plasma_power_frac`). Follows blacklight PowerLawSynchrotronPolarized.
 """
-@inline function power_law_synchrotron_polarized(c::SimCoeffConfig, n_e, bb, nu,
+@inline function power_law_synchrotron_polarized(c, n_e, bb, nu,
                                                  sin_theta_b, cos_theta_b)
     (c.plasma_power_frac == 0.0 || n_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_theta_b <= 0.0) &&
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
@@ -479,9 +530,10 @@ end
 Unpolarized kappa-distribution synchrotron coefficients (accumulation terms carrying
 `plasma_kappa_frac`). Follows blacklight KappaSynchrotronInvariant.
 """
-@inline function kappa_synchrotron(c::SimCoeffConfig, n_e, bb, nu, sin_theta_b)
+@inline function kappa_synchrotron(c, n_e, bb, nu, sin_theta_b)
+    z = zero(promote_type(typeof(n_e), typeof(bb), typeof(nu), typeof(sin_theta_b)))
     (c.plasma_kappa_frac == 0.0 || n_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_theta_b <= 0.0) &&
-        return (0.0, 0.0)
+        return (z, z)
     k = c.plasma_kappa
     w = c.plasma_w
     nu_c = EE * bb / (2.0 * π * ME * CL)
@@ -508,7 +560,7 @@ Kappa-distribution synchrotron polarized coefficients in the order
 `(j_i, j_q, j_v, alpha_i, alpha_q, alpha_v, rho_q, rho_v)` (accumulation terms carrying
 `plasma_kappa_frac`). Follows blacklight KappaSynchrotronPolarized.
 """
-@inline function kappa_synchrotron_polarized(c::SimCoeffConfig, n_e, bb, nu,
+@inline function kappa_synchrotron_polarized(c, n_e, bb, nu,
                                              sin_theta_b, cos_theta_b)
     (c.plasma_kappa_frac == 0.0 || n_e <= 0.0 || bb <= 0.0 || nu <= 0.0 || sin_theta_b <= 0.0) &&
         return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
