@@ -23,8 +23,10 @@
 # kernel is no longer audited. Kernels absent from the baseline are reported as NEW.
 using BlackLightPlus, CUDA, KernelAbstractions, StaticArrays, Printf
 using ForwardDiff: Dual
-using BlackLightPlus: EquatorialDisk, SuperposedKerrSchild, SphereModel, Spectrum, MCRng
+using BlackLightPlus: EquatorialDisk, SuperposedKerrSchild, SphereModel, Spectrum, MCRng,
+                      KerrSchildCartesian
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
+using BlackLightPlus.Geodesics: CameraFrame
 
 const REPO = dirname(@__DIR__)
 for f in ("gpu_image.jl", "gpu_pol.jl", "gpu_amr.jl", "gpu_spacetime.jl", "gpu_image_ad.jl",
@@ -89,6 +91,11 @@ const XBINS = (DA(Int64, 3), DA(Int64, 3), DA(Int64, 2))     # exact limbs w, wE
 const CHILD = NamedTuple{(:x, :p, :w, :n, :r),
                          Tuple{DV(S4), DV(S4), DV(F), DV(Int32), DV(MCRng)}}
 
+# camera-ray kernel: (rays, bad flag, items, generator, spacetime, frame, n)
+camray(y, gen, st) = (DV(y), DV(Int32), DV(Int32), gen, st, CameraFrame, Int)
+const PIXELS = PixelGrid{DV(F)}
+const BLOCKS = BlockGrid{DV(SVector{3,F})}
+
 const DUAL = Dual{_GIADTag,Float64,1}
 const GP_AD_RH = typeof(_giad_params(CFG, :rat_high))
 const GP_AD_MS = typeof(_giad_params(CFG, :mass_scale))
@@ -125,6 +132,11 @@ const KERNELS = [
     "analytic"         => (_ganalytic_kernel!, (DV(F), DV(F), DV(F), DV(F), DV(F), DV(F), F, F,
                                                 NTuple{3,Int}, F, EquatorialDisk{F}, Bool,
                                                 Int, Int, Int)),
+    "camray_kerr"      => (_camray_kernel!,   camray(R8, PIXELS, KerrSchildCartesian{F})),
+    "camray_kerr_f32"  => (_camray_kernel!,   camray(R8f, PIXELS, KerrSchildCartesian{F})),
+    "camray_block"     => (_camray_kernel!,   camray(R8, BLOCKS, KerrSchildCartesian{F})),
+    "camray_bbh"       => (_camray_kernel!,   camray(R8, PIXELS, BBH)),
+    "camray_adm"       => (_camray_kernel!,   camray(R8, PIXELS, ADM)),
     "trace"            => (_trace_kernel!,    trace(F)),
     "trace_f32"        => (_trace_kernel!,    trace(Float32)),
     "mc_thin"          => (_mc_thin_kernel!,  (XBINS..., DV(F), Nothing, MCP_THIN, Int, Int)),
