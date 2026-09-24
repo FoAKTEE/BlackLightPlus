@@ -8,6 +8,9 @@
    contains 706b55f and has a clean src/:
    figures/out/examples_meta.txt, figures/out/pol_hires/meta.txt,
    figures/out/z4c_phasespace/deck.json.
+3b. fig_polarized.pdf and figures/out/pol_hires come from a run whose SHA also contains
+   6031897 (the shared transported-frame polarized march that replaced the Strang-split
+   coherency march; figures 2 and 4 do not use it, see paper/figures/CAPTIONS.md).
 4. paper/scripts/plot_analytic.py reads the .npy data (no PNG decoding).
 5. No `PENDING sign-fix` marker remains in paper/sections.
 Exit status 0 = pass. Run from the repository root.
@@ -20,6 +23,7 @@ import subprocess
 import sys
 
 FIX = "706b55f"
+MARCH = "6031897"   # shared transported-frame polarized march (MG13)
 ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
                       text=True, check=True).stdout.strip()
 
@@ -59,6 +63,15 @@ def main():
         print("ok  " if ok else "FAIL", f"{name} git={sha}")
         if not ok:
             bad.append(name)
+
+    t_march = int(git("show", "-s", "--format=%ct", MARCH).stdout.strip())
+    pol = os.path.join(ROOT, "paper", "figures", "fig_polarized.pdf")
+    ok = (os.path.getmtime(pol) > t_march and shas["figures/out/pol_hires/meta.txt"] is not None
+          and git("merge-base", "--is-ancestor", MARCH,
+                  shas["figures/out/pol_hires/meta.txt"]).returncode == 0)
+    print("ok  " if ok else "FAIL", "fig_polarized and pol_hires after", MARCH)
+    if not ok:
+        bad.append("fig_polarized not rebuilt after " + MARCH)
 
     src = open(os.path.join(ROOT, "paper", "scripts", "plot_analytic.py")).read()
     if "analytic_disk_I.npy" not in src or "PIL" in src:
