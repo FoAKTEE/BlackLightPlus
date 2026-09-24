@@ -11,7 +11,7 @@ using BlackLightPlus: SuperposedKerrSchild, PlaneParallelCamera, camera_rays_at,
                       horizon_radius_hole, geodesic_rhs, null_error
 const GEO = BlackLightPlus.Geodesics
 
-@isdefined(_gsp_ctl) || include(joinpath(@__DIR__, "..", "src", "gpu_spacetime.jl"))
+@isdefined(_gsp_amr_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_spacetime.jl"))
 
 const BB_PHI0 = -0.2233022
 const BB_C1 = 12.5 .* (cos(BB_PHI0), sin(BB_PHI0), 0.0)

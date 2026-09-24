@@ -19,8 +19,7 @@ using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, critical_curve
 using BlackLightPlus.Simulation: AthenaKSnapshot, sample_primitives, pgas_from_eint, units,
       SnapshotSeries, get_frame, bracketing_pair, primitive_four_vectors
 using BlackLightPlus.Geodesics: metric_and_inverse, rk4_step_fixed
-using BlackLightPlus.Radiation: coefficient_params, unpolarized_coefficients,
-      unpolarized_segment
+using BlackLightPlus.Radiation: coefficient_params, KerrMarch, reverse_unpolarized_march
 
 # ---------------------------------------------------------------- uniform fluid grid
 """
@@ -119,21 +118,6 @@ resident_grid(pool, s::AthenaKSnapshot; box_half::Real = 40.0, n::Integer = 256)
 # the Kerr stop rule.
 isdefined(@__MODULE__, :_gimg_stop) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_metric.jl"))
 
-# One fluid sample -> invariant (j, α) at KS position x on the RT lane (Float64, or Dual
-# for the AD render through the parameter set `gp`): normal-frame primitive decode, then
-# `unpolarized_coefficients`. A vacuum or cut sample gives (0, 0), a no-op segment.
-@inline function _gimg_coeffs(prim::SVector{8,Float64}, x::SVector{4,Float64},
-                              kcov::SVector{4,Float64}, gp)
-    gcov, gcon = metric_and_inverse(KerrSchildCartesian(gp.bh_a), x)
-    return _prim_coeffs(prim, kcov, gcov, gcon, gp)
-end
-@inline function _prim_coeffs(prim, kcov, gcov, gcon, gp)
-    fv = primitive_four_vectors(prim[2], prim[3], prim[4], prim[6], prim[7], prim[8],
-                                gcov, gcon)
-    return unpolarized_coefficients(gp, prim[1], pgas_from_eint(prim[5], gp.plasma_gamma),
-                                    fv, kcov, gp.nu_obs)
-end
-
 # ---------------------------------------------------------------- device: grid sample
 @inline _gimg_corner(grid, i, j, k) =
     SVector{8,Float64}(ntuple(f -> Float64(@inbounds grid[f, i, j, k]), Val(8)))
@@ -158,46 +142,11 @@ end
     return c0 + (c1 - c0) * dzf
 end
 
-# ---------------------------------------------------------------- shared march body
-# Termination: `_gimg_stop` (gpu_metric.jl), the shared `march_stop` rule of the CPU
-# sampled tracer — horizon backstop, redshift cut, outbound-only escape.
-
-# The entire unpolarized fused march for one ray: camera->source fixed-control RK4
-# (step h=(r-r_h)/C), reverse-accumulated invariant intensity (see file header). The one
-# body behind every unpolarized kernel variant, parameterized by
-#   * `sample(y)::SVector{8,Float64}` — inlined isbits-capture closure supplying the
-#     fluid at state y (uniform grid / time-blended window / native AMR),
-#   * `T` — the accumulator eltype (Float64, or a ForwardDiff Dual for the AD render),
-#   * `Tg` — the geodesic-lane eltype: the state y, step h and every march scalar run
-#     in Tg ∈ {Float32, Float64} (matched ::Tg, no silent promotion); the state is
-#     converted to Float64 ONCE per fluid-sample/RT step (identity when Tg == Float64),
-#     so all RT/coefficient arithmetic stays Float64 (or Dual) in every mode.
-@inline function _gimg_march(y0::SVector{8,Tg}, sample::F, ::Type{T},
-                             gp, a::Tg, r_h::Tg, C::Tg, escape::Tg, R_em::Tg,
-                             nmax) where {F,T,Tg}
-    y = y0
-    Iinv = zero(T)
-    trans = one(T)
-    r_prev = Tg(Inf)
-    for _ in 1:nmax
-        stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
-        stop && break
-        r_prev = r
-        h = (r - r_h) / C
-        prim = @inline sample(y)   # force-inline the sampler (see the _gpol_march note)
-        if prim[1] > 0.0
-            x = SVector{4,Float64}(y[1], y[2], y[3], y[4])
-            kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])   # photon k = -p
-            j_inv, a_inv = _gimg_coeffs(prim, x, kcov, gp)
-            ds = Float64(h) * gp.L_unit / gp.nu_obs
-            A, B = unpolarized_segment(j_inv, a_inv, ds)
-            Iinv += trans * B
-            trans *= A
-        end
-        y = rk4_step_fixed(KerrSchildCartesian(a), y, h)
-    end
-    return Iinv * gp.nu_obs^3
-end
+# ---------------------------------------------------------------- march
+# Every unpolarized kernel runs `reverse_unpolarized_march` (radiation/reverse_march.jl,
+# the CPU `render` march) under a `KerrMarch` control; the kernels differ only in the
+# fluid sampler. The geodesic lane runs in the ray eltype (fp32 or fp64); the transfer
+# in Float64 (or Dual / SVector accumulators) from the converted state.
 
 # ---------------------------------------------------------------- fused kernel
 # One ray per thread on the uniform grid. The eltype(img) accumulator parameter makes
@@ -209,10 +158,10 @@ end
                                 R_em, nmax, ng, xo, inv_dx, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        img[i] = _gimg_march(y0s[i],
+        img[i] = reverse_unpolarized_march(y0s[i],
                              y -> _gimg_sample(grid, ng, xo, inv_dx, Float64(y[2]),
                                                Float64(y[3]), Float64(y[4])),
-                             eltype(img), gp, a, r_h, C, escape, R_em, nmax)
+                             eltype(img), gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
@@ -481,43 +430,9 @@ end
 # -> (d_unit, e_unit, b_unit); every other device scalar is shared across all K.
 # Unlike the Dual-seeded AD render, an SVector-valued param lane cannot ride the generic
 # kernel (SVector is not a Number: scalar guards, elementwise ratios and one(T) all
-# break), so only the ACCUMULATOR is vectorized (SVector{K,Float64}) and each variant
-# runs the unpolarized coefficients and segment operator with its own units tuple, so
+# break), so only the ACCUMULATOR is vectorized (SVector{K,Float64}): the march takes the
+# K-tuple of parameter sets and runs the coefficients and segment operator per set, so
 # lane k is the standalone render of that mass_scale.
-@inline function _gimg_march_kv(y0::SVector{8,Tg}, sample::F, gps::NTuple{K,GP},
-                                a::Tg, r_h::Tg, C::Tg, escape::Tg, R_em::Tg,
-                                nmax) where {F,K,GP,Tg}
-    y = y0
-    Iinv  = zero(SVector{K,Float64})
-    trans = SVector{K,Float64}(ntuple(_ -> 1.0, Val(K)))
-    r_prev = Tg(Inf)
-    nu_obs = gps[1].nu_obs; L_unit = gps[1].L_unit    # mass_scale-independent (shared lane)
-    for _ in 1:nmax
-        stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
-        stop && break
-        r_prev = r
-        h = (r - r_h) / C
-        prim = @inline sample(y)
-        if prim[1] > 0.0
-            x    = SVector{4,Float64}(y[1], y[2], y[3], y[4])
-            kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8])   # photon k = -p
-            ds   = Float64(h) * L_unit / nu_obs
-            # per-variant (A,B) with mass_scale k's (d,e,b)_unit — the ops of a standalone
-            # render of variant k. The metric is re-evaluated per variant: holding it live
-            # across the K lanes costs more registers than recomputing it.
-            ab = ntuple(Val(K)) do k
-                j_inv, a_inv = _gimg_coeffs(prim, x, kcov, gps[k])
-                unpolarized_segment(j_inv, a_inv, ds)
-            end
-            A = SVector{K,Float64}(ntuple(k -> ab[k][1], Val(K)))
-            B = SVector{K,Float64}(ntuple(k -> ab[k][2], Val(K)))
-            Iinv  = Iinv + trans .* B          # per lane: Iinv[k] += trans[k]*B[k]
-            trans = trans .* A                 # per lane: trans[k] *= A[k]
-        end
-        y = rk4_step_fixed(KerrSchildCartesian(a), y, h)
-    end
-    return Iinv .* nu_obs^3
-end
 
 # K-variant fused kernel: the SAME geodesic march + uniform-grid sampler as _fused_kernel!,
 # but the per-thread output is an SVector{K,Float64} of intensity variants (img::CuArray of
@@ -526,10 +441,11 @@ end
                                    R_em, nmax, ng, xo, inv_dx, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        img[i] = _gimg_march_kv(y0s[i],
+        img[i] = reverse_unpolarized_march(y0s[i],
                                 y -> _gimg_sample(grid, ng, xo, inv_dx, Float64(y[2]),
                                                   Float64(y[3]), Float64(y[4])),
-                                gps, a, r_h, C, escape, R_em, nmax)
+                                eltype(img), gps,
+                                KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
@@ -582,7 +498,7 @@ end
 
 # ================================================================ SLOW LIGHT (opt-in)
 # Time-dependent GRMHD frames along the geodesic: a separate kernel entry point sharing
-# the one _gimg_march body with the fast kernel (only the sampler differs), so the
+# the one reverse_unpolarized_march with the fast kernel (only the sampler differs), so the
 # fast-light path stays bit-identical. The device reads two uploaded grids and lerps
 # their samples on the physical dump-time axis (time_series.jl :: sample_primitives_t):
 # the ray starts at X⁰ = y[1] = 0 on the camera and X⁰ decreases along the backward
@@ -709,7 +625,7 @@ end
     return (1.0 - w) .* sA .+ w .* sB
 end
 
-# SLOW-LIGHT fused kernel: the SAME _gimg_march body with the sampler swapped for the
+# SLOW-LIGHT fused kernel: the SAME march with the sampler swapped for the
 # time-blended _gimg_sample_t (w at emission time t_obs + X⁰; t0 = t_obs - t_a — see
 # the SLOW LIGHT header), so inv_dt = 0 reproduces _fused_kernel! on grid-A bit-for-bit.
 @kernel function _fused_kernel_sl!(img, @Const(y0s), @Const(gridA), @Const(gridB),
@@ -717,7 +633,7 @@ end
                                    ng, xo, inv_dx, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        img[i] = _gimg_march(y0s[i],
+        img[i] = reverse_unpolarized_march(y0s[i],
                              y -> begin
                                  # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
@@ -726,7 +642,7 @@ end
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
                              end,
-                             eltype(img), gp, a, r_h, C, escape, R_em, nmax)
+                             eltype(img), gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 

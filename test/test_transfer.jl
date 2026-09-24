@@ -329,55 +329,6 @@ end
 
 using BlackLightPlus   # bind the root module for the qualified references below
 
-# --- regression: polarized_march coherency-tensor rewrite is bit-exact to the loop port -----
-# The march was rewritten off mutable MMatrix temporaries (which heap-allocated ~19.6 kB per
-# emitting sample) onto immutable @SMatrix contractions. Every contraction is written as an
-# explicit left-to-right sum matching the reference `+=` accumulation, so the result is
-# bit-for-bit identical (===), not merely close. This locks that equivalence.
-@testset "polarized march helpers bit-exact vs reference loops (allocation rewrite)" begin
-    Rad = BlackLightPlus.Radiation
-    # verbatim-original mutable-loop references
-    function ref_conn(v, Γ)
-        ta = zero(MMatrix{4,4,Float64}); for μ in 1:4, β in 1:4, α in 1:4; ta[μ,β] += v[α]*Γ[μ,α,β]; end
-        SMatrix(ta)
-    end
-    function ref_dNN(T, N)
-        o = zero(MMatrix{4,4,ComplexF64})
-        for μ in 1:4, ν in 1:4
-            d = zero(ComplexF64); for β in 1:4; d -= T[μ,β]*N[β,ν] + T[ν,β]*N[μ,β]; end; o[μ,ν] = d
-        end
-        SMatrix(o)
-    end
-    function ref_coord(nn, gcov, tet)
-        tb = zero(MMatrix{4,4,ComplexF64}); for ν in 1:4, α in 1:4, β in 1:4; tb[ν,α] += gcov[ν,β]*nn[α,β]; end
-        tc = zero(MMatrix{4,4,ComplexF64}); for μ in 1:4, ν in 1:4, α in 1:4; tc[μ,ν] += gcov[μ,α]*tb[ν,α]; end
-        td = zero(MMatrix{4,4,ComplexF64}); for b in 1:4, μ in 1:4, ν in 1:4; td[b,μ] += tet[b,ν]*tc[μ,ν]; end
-        o  = zero(MMatrix{4,4,ComplexF64}); for a in 1:4, b in 1:4, μ in 1:4; o[a,b] += tet[a,μ]*td[b,μ]; end
-        SMatrix(o)
-    end
-    function ref_rebuild(se, tet)
-        ntc = zero(MMatrix{4,4,ComplexF64})
-        ntc[2,2] = se[1]+se[2]; ntc[3,3] = se[1]-se[2]; ntc[2,3] = se[3]-im*se[4]; ntc[3,2] = se[3]+im*se[4]
-        tf = zero(MMatrix{4,4,ComplexF64}); for ν in 1:4, a in 1:4, b in 1:4; tf[ν,a] += tet[b,ν]*ntc[a,b]; end
-        o  = zero(MMatrix{4,4,ComplexF64})
-        for μ in 1:4, ν in 1:4; acc = zero(ComplexF64); for a in 1:4; acc += tet[a,μ]*tf[ν,a]; end; o[μ,ν] = acc; end
-        SMatrix(o)
-    end
-    for _ in 1:500
-        v    = @SVector randn(4)
-        Γ    = SArray{Tuple{4,4,4},Float64}(randn(4,4,4))
-        N    = SMatrix{4,4,ComplexF64}(randn(ComplexF64,4,4))
-        T    = SMatrix{4,4,Float64}(randn(4,4))
-        gcov = SMatrix{4,4,Float64}(randn(4,4))
-        tet  = SMatrix{4,4,Float64}(randn(4,4))
-        se   = @SVector randn(4)
-        @test Rad._connection_dot(v, Γ)            === ref_conn(v, Γ)
-        @test Rad._transport_dNN(T, N)             === ref_dNN(T, N)
-        @test Rad._coord_to_tetrad_cov(N, gcov, tet) === ref_coord(N, gcov, tet)
-        @test Rad._tetrad_to_coord(se, tet)        === ref_rebuild(se, tet)
-    end
-end
-
 # --- regression: LD85 admissibility clamp (|alpha_P| <= alpha_I) bounds the full branch -------
 # Without the clamp, a fit that returns alpha_P > alpha_I drives the optically-thin full-branch
 # propagator exp(-delta_tau) cosh(lambda_1 ds) with lambda_1 -> alpha_P, i.e. it grows like
@@ -412,7 +363,8 @@ end
 #  * the camera normal observer is a unit Eulerian 4-velocity (shift-sign fix)
 #  * `stokes_admissible` (the per-segment Stokes clamp; the reverse-chain kernels apply
 #    it to the accumulated Stokes) and the affine segment operator `stokes_segment`
-#  * same-fluid polarized parity: fused GPU kernel (KA CPU) vs the CPU coherency march.
+#  * same-fluid polarized parity: fused GPU kernel (KA CPU) vs the CPU march on stored
+#    trajectories — one march, so they agree to round-off.
 using BlackLightPlus
 using BlackLightPlus.Radiation: polarized_march, stokes_admissible, stokes_segment
 using BlackLightPlus.Simulation: pgas_from_eint, units
@@ -454,7 +406,7 @@ end
     @test M1 ≈ exp(-Matrix(K) * 0.37) rtol = 1e-10
 end
 
-@testset "gpu polarized kernel (KA CPU) vs CPU coherency march: same-fluid parity" begin
+@testset "gpu polarized kernel (KA CPU) vs CPU polarized march: same-fluid parity" begin
     # synthetic torus on a uniform grid (same deck as the thermal_frac kernel test above)
     n = 40; box_half = 30.0
     host = zeros(Float32, 8, n, n, n)
@@ -487,7 +439,7 @@ end
     _gpol_kernel!(backend)(gout, rays, host, _gpol_params(cfg), a, r_h, C, escape, R_em,
                            nmax, ng, xo, inv_dx, nrays; ndrange = nrays)
     KernelAbstractions.synchronize(backend)
-    # CPU reference: coherency-tensor march on the IDENTICAL uniform fluid
+    # CPU reference: polarized_march over stored trajectories on the IDENTICAL fluid
     states, dls = trace_rays_sampled(st, rays; C = C, escape = escape, nmax = nmax)
     u = units(cfg.m_bh_cgs, cfg.mass_scale_cgs); p = cfg.plasma
     scc = SimCoeffConfig(bh_a = cfg.bh_a, d_unit = u.dens_unit,
@@ -520,11 +472,13 @@ end
     gI = [o[1] for o in gout]; gQ = [o[2] for o in gout]
     gU = [o[3] for o in gout]; gV = [o[4] for o in gout]
     @test sum(gI) > 0.0
-    @test corr(gI, cpu[1, :]) > 0.999
-    @test corr(gQ, cpu[2, :]) > 0.99
-    @test corr(gU, cpu[3, :]) > 0.99
-    @test corr(gV, cpu[4, :]) > 0.99
-    @test isapprox(sum(gI), sum(cpu[1, :]); rtol = 2e-2)
+    # one march: pixel-wise agreement to Faraday-amplified round-off (measured 2.3e-8 of
+    # the brightest pixel; the CPU sampler's pgas -> eint round trip is the difference)
+    scale = maximum(abs, cpu[1, :])
+    for (s, g) in enumerate((gI, gQ, gU, gV))
+        @test maximum(abs.(g .- cpu[s, :])) < 1e-7 * scale
+    end
+    @test isapprox(sum(gI), sum(cpu[1, :]); rtol = 1e-8)
 end
 
 # ---------------------------------------------------------------------------------------

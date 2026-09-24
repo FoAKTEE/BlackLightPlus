@@ -257,7 +257,7 @@ function photon_ring_layers(cfg::RunConfig; disk::Radiation.EquatorialDisk,
 end
 
 "Diagnostic: ratio of polarized-march I (with alpha_Q=alpha_V=rho=0 forced) to the
-unpolarized-march I on the same rays — isolates coherency-march bookkeeping (expect ~1)."
+unpolarized-march I on the same rays — isolates the polarized march's frame bookkeeping (expect ~1)."
 function polunpol_consistency(cfg::RunConfig, snapshot_path::AbstractString)
     (; st, cam, rays, states, dls, u, sampler) = _pipeline_setup(cfg, snapshot_path)
     p = cfg.plasma

@@ -154,6 +154,22 @@ for the escape test.
     return cap, dmin / C, R
 end
 
+"""
+    spacetime_control(st, y, C) -> (captured, h, R)
+
+Fixed-control step, capture and escape radius of a stationary spacetime for the
+reverse transfer marches: `superposed_control` for the binary; Kerr-Schild steps by
+(r - r_h)/C with the `march_captured` rule on the KS radius r (escape on r); an ADM grid
+steps by max(R, 1)/C and captures on the lapse (`adm_control`).
+"""
+@inline spacetime_control(st::SuperposedKerrSchild, y::SVector{8}, C) =
+    superposed_control(st, y, C)
+@inline function spacetime_control(st::KerrSchildCartesian, y::SVector{8}, C)
+    r, En = ks_radius_energy(y, st.a)
+    d = r - horizon_radius(st)
+    return march_captured(d, En), d / C, r
+end
+
 # trace_geodesic for the binary: terminate when any hole is entered (per-hole radius or
 # normal-frame redshift, see above), or on escape.
 function trace_geodesic(st::SuperposedKerrSchild{N}, y0::SVector{8}; λmax=1.0e5,

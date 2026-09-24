@@ -212,7 +212,7 @@ function amr_locate_probe(dgrid::DeviceAMRGrid, pts::Vector{SVector{3,Float64}};
 end
 
 # ---------------------------------------------------------------- fused AMR kernel (Stokes I)
-# _gimg_march (gpu_image.jl) with the sampler swapped for the native-AMR _gamr_sample.
+# reverse_unpolarized_march with the sampler swapped for the native-AMR _gamr_sample.
 # Two-type: the geodesic lane runs at eltype(eltype(y0s)) — the host passes the march
 # scalars at that type — while the sampler position is converted to Float64 (identity
 # for fp64 rays), so the locate/trilinear sample + RT stay Float64 in every mode.
@@ -220,23 +220,23 @@ end
                                @Const(leaf), amrp, gp, a, r_h, C, escape, R_em, nmax, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        img[i] = _gimg_march(y0s[i],
+        img[i] = reverse_unpolarized_march(y0s[i],
                              y -> _gamr_sample(blk, xlft, dxb, leaf, amrp, Float64(y[2]),
                                                Float64(y[3]), Float64(y[4])),
-                             eltype(img), gp, a, r_h, C, escape, R_em, nmax)
+                             eltype(img), gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
 # ---------------------------------------------------------------- fused AMR kernel (I,Q,U,V)
-# _gpol_march (gpu_pol.jl) with the same single sampler swap (same two-type contract).
+# reverse_polarized_march with the same single sampler swap (same two-type contract).
 @kernel function _gpol_amr_kernel!(out, @Const(y0s), @Const(blk), @Const(xlft), @Const(dxb),
                                    @Const(leaf), amrp, gp, a, r_h, C, escape, R_em, nmax, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        out[i] = _gpol_march(y0s[i],
+        out[i] = reverse_polarized_march(y0s[i],
                              y -> _gamr_sample(blk, xlft, dxb, leaf, amrp, Float64(y[2]),
                                                Float64(y[3]), Float64(y[4])),
-                             gp, a, r_h, C, escape, R_em, nmax)
+                             gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
@@ -590,13 +590,13 @@ end
     return (1.0 - w) .* sA .+ w .* sB
 end
 
-# SLOW-LIGHT Stokes-I AMR kernel: _gimg_march with the time-blended _gamr_sample_t.
+# SLOW-LIGHT Stokes-I AMR kernel: the unpolarized march with the time-blended _gamr_sample_t.
 @kernel function _famr_kernel_sl!(img, @Const(y0s), @Const(blkA), @Const(blkB), @Const(xlft),
                                   @Const(dxb), @Const(leaf), amrp, t0, inv_dt,
                                   gp, a, r_h, C, escape, R_em, nmax, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        img[i] = _gimg_march(y0s[i],
+        img[i] = reverse_unpolarized_march(y0s[i],
                              y -> begin
                                  # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
@@ -605,17 +605,17 @@ end
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
                              end,
-                             eltype(img), gp, a, r_h, C, escape, R_em, nmax)
+                             eltype(img), gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
-# SLOW-LIGHT full-Stokes AMR kernel: _gpol_march with the time-blended _gamr_sample_t.
+# SLOW-LIGHT full-Stokes AMR kernel: the polarized march with the time-blended _gamr_sample_t.
 @kernel function _gpol_amr_kernel_sl!(out, @Const(y0s), @Const(blkA), @Const(blkB), @Const(xlft),
                                       @Const(dxb), @Const(leaf), amrp, t0, inv_dt,
                                       gp, a, r_h, C, escape, R_em, nmax, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        out[i] = _gpol_march(y0s[i],
+        out[i] = reverse_polarized_march(y0s[i],
                              y -> begin
                                  # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
@@ -624,7 +624,7 @@ end
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
                              end,
-                             gp, a, r_h, C, escape, R_em, nmax)
+                             gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 

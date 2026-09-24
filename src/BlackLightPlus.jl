@@ -6,7 +6,8 @@ after blacklight (C++/Kokkos) and ipole: a two-phase driver (geodesics, then
 radiation) over pure StaticArrays staged functions shared by CPU, GPU, and AD.
 Conventions: signature (−,+,+,+); G = c = M = 1; Cartesian Kerr-Schild; state
 y = [x^μ; p_μ] (covariant momentum, p_t conserved for stationary metrics);
-invariant coefficients (j/ν², αν, ρν); coherency-tensor N^{μν} transport."""
+invariant coefficients (j/ν², αν, ρν); Stokes transfer in a parallel-transported
+camera frame."""
 module BlackLightPlus
 
 include("constants.jl")

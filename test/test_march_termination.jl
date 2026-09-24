@@ -27,13 +27,15 @@ using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 using BlackLightPlus.Radiation: polarized_march, unpolarized_march, SimCoeffConfig,
                                 eight_coefficients, fluid_tetrad
 using BlackLightPlus.Geodesics: metric_and_inverse, geodesic_transport_rhs
+using BlackLightPlus.Radiation: KerrMarch, SpacetimeMarch, reverse_unpolarized_march,
+                                reverse_polarized_march
 using BlackLightPlus.Simulation: pgas_from_eint, units, primitive_four_vectors
 const MT_GEO = BlackLightPlus.Geodesics
 
 const _MT_SRC = joinpath(@__DIR__, "..", "src")
 @isdefined(_fused_kernel!) || include(joinpath(_MT_SRC, "gpu_image.jl"))
 @isdefined(_gpol_kernel!) || include(joinpath(_MT_SRC, "gpu_pol.jl"))
-@isdefined(_gsp_ctl)      || include(joinpath(_MT_SRC, "gpu_spacetime.jl"))
+@isdefined(_gsp_amr_kernel!) || include(joinpath(_MT_SRC, "gpu_spacetime.jl"))
 @isdefined(_trace_kernel!) || include(joinpath(_MT_SRC, "geodesics", "gpu_tracer.jl"))
 
 # ------------------------------------------------------------------ deck
@@ -183,10 +185,11 @@ end
     Iu = zeros(nr); Sp = Vector{SVector{4,Float64}}(undef, nr)
     same_u = 0; same_p = 0; maxdev = 0.0
     for i in 1:nr
-        Iu[i], yu = mt_record((y0, f) -> _gimg_march(y0, f, Float64, gpu_u, MT_A, r_h, MT_C,
-                                                     escape, g.R_em, MT_NMAX), rays[i], prim)
-        Sp[i], yp = mt_record((y0, f) -> _gpol_march(y0, f, gpu_p, MT_A, r_h, MT_C,
-                                                     escape, g.R_em, MT_NMAX), rays[i], prim)
+        km = KerrMarch(MT_A, r_h, MT_C, escape, g.R_em)
+        Iu[i], yu = mt_record((y0, f) -> reverse_unpolarized_march(y0, f, Float64, gpu_u, km,
+                                                                   MT_NMAX), rays[i], prim)
+        Sp[i], yp = mt_record((y0, f) -> reverse_polarized_march(y0, f, gpu_p, km, MT_NMAX),
+                              rays[i], prim)
         m = length(states[i])
         same_u += length(yu) == m - 1
         same_p += length(yp) == m - 1
@@ -223,10 +226,10 @@ end
             for i in 1:nr]
     @test corr(Iu, cpuU) > 1 - 1e-12
     @test abs(sum(Iu) / sum(cpuU) - 1) < 1e-7
-    for s in 1:4
-        @test corr([o[s] for o in Sp], [c[s] for c in cpuP]) > 0.99999
-    end
-    @test abs(sum(o[1] for o in Sp) / sum(c[1] for c in cpuP) - 1) < 5e-3
+    # one polarized march on both sides: agreement to round-off
+    scaleP = maximum(c[1] for c in cpuP)
+    @test maximum(maximum(abs.(Sp[i] - cpuP[i])) for i in 1:nr) < 1e-8 * scaleP
+    @test abs(sum(o[1] for o in Sp) / sum(c[1] for c in cpuP) - 1) < 1e-9
     # the device polarized I and unpolarized I now integrate the same samples
     @test corr([o[1] for o in Sp], Iu) > 0.99999
 
@@ -378,10 +381,11 @@ end
     Iu = zeros(nr); Sp = Vector{SVector{4,Float64}}(undef, nr)
     same_u = 0; same_p = 0; ncap = 0
     for i in 1:nr
-        Iu[i], yu = mt_record((y0, f) -> _gsp_march(y0, f, gpu_u, st, MT_C, escape, R_em,
-                                                    MT_NMAX), rays[i], mt_prim)
-        Sp[i], yp = mt_record((y0, f) -> _gsp_pol_march(y0, f, gpu_p, st, MT_C, escape,
-                                                        R_em, MT_NMAX), rays[i], mt_prim)
+        sm = SpacetimeMarch(st, MT_C, escape, R_em)
+        Iu[i], yu = mt_record((y0, f) -> reverse_unpolarized_march(y0, f, Float64, gpu_u, sm,
+                                                                   MT_NMAX), rays[i], mt_prim)
+        Sp[i], yp = mt_record((y0, f) -> reverse_polarized_march(y0, f, gpu_p, sm, MT_NMAX),
+                              rays[i], mt_prim)
         m = length(states[i])
         same_u += length(yu) == m - 1
         same_p += length(yp) == m - 1
@@ -395,9 +399,8 @@ end
             for i in 1:nr]
     @test corr(Iu, cpuU) > 1 - 1e-12
     @test abs(sum(Iu) / sum(cpuU) - 1) < 1e-7
-    for s in 1:4
-        @test corr([o[s] for o in Sp], [c[s] for c in cpuP]) > 0.9999
-    end
+    scaleP = maximum(c[1] for c in cpuP)
+    @test maximum(maximum(abs.(Sp[i] - cpuP[i])) for i in 1:nr) < 1e-8 * scaleP
 end
 
 end

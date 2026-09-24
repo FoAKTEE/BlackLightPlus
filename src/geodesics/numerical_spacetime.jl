@@ -306,6 +306,28 @@ function adm_grid_from_metric(metric_fn, xs::AbstractRange, ys::AbstractRange,
     return ADMGridSpacetime(xs, ys, zs, data; alpha_min, offgrid_eta)
 end
 
+# ---------------------------------------------------------------- march control
+"""
+    adm_control(sp, y, C) -> (captured, h, R)
+
+Fixed-control march control on an ADM grid (duck-typed on the grid fields, so the
+device parameter struct runs it too): the horizon proxy is the local lapse
+α = 1/√(−g^{tt}) against `alpha_min` (off-grid the metric is Minkowski, α = 1, never
+captures) with the shared redshift cut on top; step h = max(R, 1)/C on the coordinate
+radius R, which is also the escape radius. A non-finite state is a capture.
+"""
+@inline function adm_control(sp, y::SVector{8,Float64}, C)
+    x = SVector(y[1], y[2], y[3], y[4])
+    r = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
+    gi = inverse_metric(sp, x)
+    gtt = gi[1, 1]
+    alpha = gtt < 0.0 ? 1.0 / sqrt(-gtt) : 1.0
+    En = gtt < 0.0 ? normal_frame_energy(gi, y) : 0.0
+    d = isfinite(r) ? alpha - sp.alpha_min : r
+    return march_captured(d, En, 0.0), max(r, 1.0) / C, r
+end
+@inline spacetime_control(sp::ADMGridSpacetime, y::SVector{8}, C) = adm_control(sp, y, C)
+
 # ---------------------------------------------------------------- geodesic tracing
 # Interpolated lapse for the termination callback; off-grid returns a large value
 # so the lapse root-finder stays quiet (escape/off-grid handled by the box radius).

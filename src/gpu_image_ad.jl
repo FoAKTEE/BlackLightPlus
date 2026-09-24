@@ -19,7 +19,7 @@ using BlackLightPlus.Simulation: units
 
 # Bring in render_gpu_fused + the device helpers we reuse (geodesic RHS, metric, fluid
 # decode, trilinear sample, unit tuple, grid up/resample) if not already loaded.
-isdefined(@__MODULE__, :_gimg_coeffs) ||
+isdefined(@__MODULE__, :_fused_kernel!) ||
     Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_image.jl"))
 
 # Distinct AD tag: the intensity Dual never meets the geodesic RHS's own in-kernel Duals

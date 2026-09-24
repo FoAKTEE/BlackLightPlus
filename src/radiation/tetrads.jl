@@ -17,10 +17,24 @@ up-direction (e.g. the magnetic field `b^mu`). With `renorm_e1 = true` the spati
 basis vector `e_(1)` is renormalized against `gcov` (needed off single CKS, where
 |det g| != 1).
 """
-@inline function fluid_tetrad(ucon::SVector{4}, ucov::SVector{4},
-                              kcon::SVector{4}, kcov::SVector{4},
-                              up_con::SVector{4}, gcov::SMatrix{4,4},
-                              gcon::SMatrix{4,4}; renorm_e1::Bool = false)
+@inline fluid_tetrad(ucon::SVector{4}, ucov::SVector{4}, kcon::SVector{4},
+                     kcov::SVector{4}, up_con::SVector{4}, gcov::SMatrix{4,4},
+                     gcon::SMatrix{4,4}; renorm_e1::Bool = false) =
+    first(fluid_tetrad_checked(ucon, ucov, kcon, kcov, up_con, gcov, gcon; renorm_e1))
+
+"""
+    fluid_tetrad_checked(ucon, ucov, kcon, kcov, up_con, gcov, gcon; renorm_e1=false)
+        -> (tet, ok::Bool)
+
+`fluid_tetrad` with a validity flag: `ok` is false when no spacelike e_(2) exists
+(the inputs are not a unit timelike u and a null k to working precision, e.g. a
+photon momentum far off the null cone); `tet` then carries e_(2) = 0 instead of a
+NaN.
+"""
+@inline function fluid_tetrad_checked(ucon::SVector{4}, ucov::SVector{4},
+                                      kcon::SVector{4}, kcov::SVector{4},
+                                      up_con::SVector{4}, gcov::SMatrix{4,4},
+                                      gcon::SMatrix{4,4}; renorm_e1::Bool = false)
     omega = -dot(kcov, ucon)                         # omega = -k_mu u^mu
     k_up_over_omega = dot(kcov, up_con) / omega
     u_up_over_omega = dot(ucov, up_con) / omega
@@ -42,7 +56,8 @@ basis vector `e_(1)` is renormalized against `gcov` (needed off single CKS, wher
         e2u = trial .- (dot(kcov, trial) / omega) .* e3 .+ (dot(ucov, trial) / omega) .* kcon
         e2u_n2 = dot(e2u, gcov * e2u)
     end
-    e2 = e2u ./ sqrt(e2u_n2)                          # normalize e_(2) with gcov
+    ok = e2u_n2 > 0.0
+    e2 = ok ? e2u ./ sqrt(e2u_n2) : zero(e2u)          # normalize e_(2) with gcov
 
     # e_(1) covariant = metric cross product of e_(0), e_(2), e_(3).
     e1c1 = e0[2] * (e2[4] * e3[3] - e2[3] * e3[4]) + e0[3] * (e2[2] * e3[4] - e2[4] * e3[2]) +
@@ -63,9 +78,9 @@ basis vector `e_(1)` is renormalized against `gcov` (needed off single CKS, wher
         end
     end
 
-    return @inbounds SMatrix{4,4}(
+    return (@inbounds SMatrix{4,4}(
         e0[1], e1[1], e2[1], e3[1],
         e0[2], e1[2], e2[2], e3[2],
         e0[3], e1[3], e2[3], e3[3],
-        e0[4], e1[4], e2[4], e3[4])
+        e0[4], e1[4], e2[4], e3[4])), ok
 end

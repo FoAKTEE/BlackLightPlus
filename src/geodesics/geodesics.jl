@@ -23,6 +23,7 @@ export AbstractSpacetime, AnalyticSpacetime, StationarySpacetime,
        geodesic_rhs, geodesic_transport_rhs, null_error, energy, angular_momentum_z,
        lower_index, raise_index, raise_and_norm, nullify_covariant, metric_gradient, christoffel,
        trace_geodesic, trace_rays, trace_rays_sampled, rk4_step_fixed,
+       spacetime_control, adm_control,
        PlaneParallelCamera, camera_rays, camera_rays_at,
        # shared exact-Kerr orbital primitives (kerr_orbits.jl)
        kerr_horizon, kerr_delta, kerr_radial_potential,

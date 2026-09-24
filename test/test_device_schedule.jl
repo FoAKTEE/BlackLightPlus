@@ -7,7 +7,7 @@ using Statistics
 @isdefined(DI_NDEV) || include(joinpath(@__DIR__, "device_decks.jl"))
 
 # Trip count of the kernel march loop: the `_gimg_stop` rule and the `rk4_step_fixed`
-# step that `_gimg_march` iterates (sampling does not change the step sequence).
+# step that `reverse_unpolarized_march` iterates (sampling does not change the step sequence).
 function ds_trips(y, a, r_h, C, escape, R_em, nmax)
     r_prev = Inf; n = 0
     for _ in 1:nmax

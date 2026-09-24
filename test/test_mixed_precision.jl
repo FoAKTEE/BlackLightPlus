@@ -13,6 +13,7 @@ using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays
 using BlackLightPlus.Inputs: RunConfig, CameraConfig, PlasmaConfig
 using BlackLightPlus.Simulation: AthenaKSnapshot
 using BlackLightPlus.Geodesics: geodesic_rhs, geodesic_transport_rhs, rk4_step_fixed, ks_radius_energy
+using BlackLightPlus.Radiation: KerrMarch, reverse_unpolarized_march, reverse_polarized_march
 
 @isdefined(_fused_kernel!) || include(joinpath(@__DIR__, "..", "src", "gpu_image.jl"))
 @isdefined(_trace_kernel!) || include(joinpath(@__DIR__, "..", "src", "geodesics", "gpu_tracer.jl"))
@@ -78,14 +79,16 @@ end
     @test_throws MethodError rk4_step_fixed(st32, y32, 0.01)
     @test_throws MethodError _gimg_stop(y32, Inf32, Float32(1.35), 550.0, 52.0f0, a32)
     @test_throws MethodError _gimg_stop(y32, Inf32, Float32(1.35), 550.0f0, 52.0f0, a64)
-    @test_throws MethodError _gimg_march(y32, _ -> zero(SVector{8,Float64}), Float64,
-                                         (nu_obs = 2.3e11, L_unit = 1.0), a64,
-                                         Float32(1.35), 80.0f0, 550.0f0, Float32(Inf), 16)
+    @test_throws MethodError KerrMarch(a64, Float32(1.35), 80.0f0, 550.0f0, Float32(Inf))
+    @test_throws MethodError reverse_unpolarized_march(y32, _ -> zero(SVector{8,Float64}),
+                                         Float64, (nu_obs = 2.3e11, L_unit = 1.0, bh_a = a64),
+                                         KerrMarch(a64, 1.35, 80.0, 550.0, Inf), 16)
     # G4: the march accumulator comes from the OUTPUT type, never Tgeo — an fp32
     # state with a Float64 accumulator returns Float64 (the AD twin relies on this)
     vac = _ -> zero(SVector{8,Float64})
-    I = _gimg_march(y32, vac, Float64, (nu_obs = 2.3e11, L_unit = 1.0), a32,
-                    Float32(1 + sqrt(1 - a64^2)), 80.0f0, 550.0f0, Float32(Inf), 16)
+    I = reverse_unpolarized_march(y32, vac, Float64, (nu_obs = 2.3e11, L_unit = 1.0, bh_a = a64),
+                                  KerrMarch(a32, Float32(1 + sqrt(1 - a64^2)), 80.0f0, 550.0f0,
+                                            Float32(Inf)), 16)
     @test typeof(I) === Float64
 end
 
@@ -343,20 +346,20 @@ end
     # G1: any mismatched lane member is a MethodError, never a silent promotion
     @test_throws MethodError geodesic_transport_rhs(st32, y32, (e64, u64))
     @test_throws MethodError geodesic_transport_rhs(st64, y64, (e32, u32))
-    @test_throws MethodError _gpol_march(y32, _ -> zero(SVector{8,Float64}),
-                                         _gpol_params(_mp_pol_cfg(2)), a64,
-                                         Float32(1.35), 80.0f0, 550.0f0, Float32(Inf), 16)
+    @test_throws MethodError reverse_polarized_march(y32, _ -> zero(SVector{8,Float64}),
+                                         _gpol_params(_mp_pol_cfg(2)),
+                                         KerrMarch(a64, 1.35, 80.0, 550.0, Inf), 16)
     # the march: fp32 state + matched fp32 scalars — Stokes accumulator stays Float64
     gp = _gpol_params(_mp_pol_cfg(2))
     vac = _ -> zero(SVector{8,Float64})
-    S = _gpol_march(y32, vac, gp, a32, Float32(1 + sqrt(1 - a64^2)), 80.0f0, 550.0f0,
-                    Float32(Inf), 16)
+    S = reverse_polarized_march(y32, vac, gp, KerrMarch(a32, Float32(1 + sqrt(1 - a64^2)),
+                                                        80.0f0, 550.0f0, Float32(Inf)), 16)
     @test S isa SVector{4,Float64}
-    @test _gpol_march(y64, vac, gp, a64, 1 + sqrt(1 - a64^2), 80.0, 550.0,
-                      Inf, 16) isa SVector{4,Float64}
+    @test reverse_polarized_march(y64, vac, gp, KerrMarch(a64, 1 + sqrt(1 - a64^2), 80.0,
+                                                          550.0, Inf), 16) isa SVector{4,Float64}
     # G1 at march level: fp32 state with the fp64 spin must throw
-    @test_throws MethodError _gpol_march(y32, vac, gp, a64, Float32(1 + sqrt(1 - a64^2)),
-                                         80.0f0, 550.0f0, Float32(Inf), 16)
+    @test_throws MethodError reverse_polarized_march(y32, vac, gp,
+                                         KerrMarch(a64, 1 + sqrt(1 - a64^2), 80.0, 550.0, Inf), 16)
 end
 
 @testset "G1/G5: fused polarized kernel two-type (KA CPU, 32² deck) + rescue" begin
@@ -428,7 +431,7 @@ end
     st = KerrSchildCartesian(a)
     backend = CPU()
 
-    # ---- unpolarized AMR kernel, 24² (_gimg_march is already two-type; this pins
+    # ---- unpolarized AMR kernel, 24² (the unpolarized march is two-type; this pins
     # the AMR sampler's Float64 conversion + the fp32 lane)
     res = 24
     rays = camera_rays(st, PlaneParallelCamera(30.0, 500.0, 30.0, res))

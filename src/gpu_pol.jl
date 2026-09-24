@@ -1,14 +1,11 @@
-# gpu_pol.jl — fused single-pass GPU polarized imager (Stokes I,Q,U,V). The CPU
-# coherency march (polarized_march) runs source->camera over a stored trajectory; the
-# fused tracer integrates camera->source and stores nothing, and RT is order-dependent,
-# so the transfer is accumulated in reverse: the Stokes accumulator S plus a running
-# REAL 4x4 Mueller transmission G (no ComplexF64 in-kernel) in a parallel-transported
-# camera polarization frame, S += G(R b_seg); G <- G(R M_seg Rᵀ), with (M,b) the
-# analytic segment operator (transfer.jl::stokes_segment) in the fluid tetrad and R the
-# Q-U rotation into the transported frame. Exact reverse RT, validated against the CPU
-# march. Coefficients (`eight_coefficients`), fluid tetrad, segment operator, clamp and
-# frame transport (`geodesic_transport_rhs`) are the CPU functions called in-kernel.
-# CUDA optional: NOT included from BlackLightPlus.jl — include AFTER gpu_image.jl.
+# gpu_pol.jl — fused single-pass GPU polarized imager (Stokes I,Q,U,V): one thread per
+# ray runs `reverse_polarized_march` (radiation/reverse_march.jl), the march the CPU
+# `render` runs: camera->source fixed-control RK4 with the parallel-transported camera
+# polarization frame, and a reverse Mueller chain S += G(R b_seg); G <- G(R M_seg Rᵀ) of
+# the analytic segment operators `stokes_segment` in the fluid tetrad (R the Q-U rotation
+# into the transported frame; real arithmetic only). This file adds the kernels, the
+# host drivers and the stiffness telemetry. CUDA optional: NOT included from
+# BlackLightPlus.jl — include AFTER gpu_image.jl.
 
 using StaticArrays
 using ForwardDiff: Dual, partials, value
@@ -19,53 +16,7 @@ using LinearAlgebra: dot
 using BlackLightPlus: KerrSchildCartesian
 using BlackLightPlus.Geodesics: metric_and_inverse, rk4_step_fixed, geodesic_transport_rhs
 using BlackLightPlus.Simulation: primitive_four_vectors, pgas_from_eint
-using BlackLightPlus.Radiation: fluid_tetrad, eight_coefficients, stokes_segment,
-      stokes_admissible
-
-const _gpz4  = SVector(0.0, 0.0, 0.0, 0.0)
-const _gpI4  = one(SMatrix{4,4,Float64})
-
-# One fluid sample -> the eight invariant coefficients and the fluid tetrad on the RT
-# lane (Float64): normal-frame primitive decode, then `eight_coefficients`. The fluid
-# tetrad renormalizes e_(1) off single CKS (|det g| ≠ 1), as the CPU march does.
-@inline function _gpol_coeffs(prim::SVector{8,Float64}, kcov::SVector{4,Float64},
-                              kcon::SVector{4,Float64}, gcov::SMatrix{4,4},
-                              gcon::SMatrix{4,4}, gp, renorm_e1::Bool)
-    fv = primitive_four_vectors(prim[2], prim[3], prim[4], prim[6], prim[7], prim[8],
-                                gcov, gcon)
-    return eight_coefficients(gp, prim[1], pgas_from_eint(prim[5], gp.plasma_gamma), fv,
-                              gcov, gcon, kcov, kcon, gp.nu_obs, renorm_e1)
-end
-
-# ---------------------------------------------------------------- device: analytic R
-# Stokes rotation fluid-tetrad -> readout-tetrad E: pure Q-U rotation by 2χ (I,V fixed),
-# χ = angle of E's e_(1) in the fluid (e_(1),e_(2)) basis. Reproduces the coherency
-# round-trip `_coord_to_tetrad_cov` (validated against the CPU path). Returns
-# (cos 2χ, sin 2χ); R = [1 0 0 0; 0 c s 0; 0 -s c 0; 0 0 0 1] is applied by
-# `_gpol_rot` without forming the 4×4 matrix.
-@inline function _gpol_R(tet_fl::SMatrix{4,4}, E::SMatrix{4,4}, gcov::SMatrix{4,4})
-    e1f = SVector(tet_fl[2,1], tet_fl[2,2], tet_fl[2,3], tet_fl[2,4])
-    e2f = SVector(tet_fl[3,1], tet_fl[3,2], tet_fl[3,3], tet_fl[3,4])
-    E1  = SVector(E[2,1], E[2,2], E[2,3], E[2,4])
-    c = dot(E1, gcov * e1f); s = dot(E1, gcov * e2f)
-    nrm = sqrt(c*c + s*s); c /= nrm; s /= nrm
-    return c*c - s*s, 2.0*s*c
-end
-
-# R b and R M Rᵀ for the Q-U rotation R of `_gpol_R`: only the Q, U rows (and columns)
-# mix.
-@inline _gpol_rot(c, s, b::SVector{4}) =
-    SVector(b[1], c * b[2] + s * b[3], c * b[3] - s * b[2], b[4])
-@inline function _gpol_rot(c, s, M::SMatrix{4,4})
-    A = SMatrix{4,4}(M[1,1], c*M[2,1] + s*M[3,1], c*M[3,1] - s*M[2,1], M[4,1],
-                     M[1,2], c*M[2,2] + s*M[3,2], c*M[3,2] - s*M[2,2], M[4,2],
-                     M[1,3], c*M[2,3] + s*M[3,3], c*M[3,3] - s*M[2,3], M[4,3],
-                     M[1,4], c*M[2,4] + s*M[3,4], c*M[3,4] - s*M[2,4], M[4,4])   # R M
-    return SMatrix{4,4}(A[1,1], A[2,1], A[3,1], A[4,1],
-                        c*A[1,2] + s*A[1,3], c*A[2,2] + s*A[2,3], c*A[3,2] + s*A[3,3], c*A[4,2] + s*A[4,3],
-                        c*A[1,3] - s*A[1,2], c*A[2,3] - s*A[2,2], c*A[3,3] - s*A[3,2], c*A[4,3] - s*A[4,2],
-                        A[1,4], A[2,4], A[3,4], A[4,4])                        # (R M) Rᵀ
-end
+using BlackLightPlus.Radiation: KerrMarch, reverse_polarized_march, _sample_coefficients
 
 # ---------------------------------------------------------------- device: stiffness detector
 # DIAGNOSTIC-ONLY transfer-matrix stiffness detector (RAPTOR check_stiffness; RAPTOR is
@@ -130,91 +81,11 @@ end
 using BlackLightPlus.Radiation: _normal_observer
 const _gpol_normal_observer = _normal_observer
 
-# ---------------------------------------------------------------- fused polarized march
-# The entire polarized fused march for one ray, camera->source. Per-thread state:
-# geodesic y(8), transported up-vector eU(4) + timelike leg eUu(4), accumulated Stokes
-# S(4), running Mueller transmission G(16) — all real. The one body behind every
-# polarized kernel variant, parameterized by the inlined fluid sampler `sample(y)`.
-# Two-type: the geodesic state and transported frame legs run in Tg ∈ {Float32, Float64}
-# with matched-::Tg march scalars; the state is converted to Float64 ONCE per fluid-
-# sample/RT step (identity when Tg == Float64), so the Stokes/Mueller coupling and every
-# coefficient stay Float64 in every mode. The RT-lane metric uses the fp64 spin gp.bh_a.
-@inline function _gpol_march(y0::SVector{8,Tg}, sample::F,
-                             gp, a::Tg, r_h::Tg, C::Tg, escape::Tg, R_em::Tg,
-                             nmax) where {F,Tg}
-    y = y0
-    # camera readout frame: built in Float64 from the CONVERTED initial state (identity
-    # at Tg == Float64), then NARROWED onto the Tg transport lane
-    y64 = SVector{8,Float64}(y0)
-    x0 = SVector(y64[1], y64[2], y64[3], y64[4]); kcov0 = -SVector(y64[5], y64[6], y64[7], y64[8])
-    st = KerrSchildCartesian(gp.bh_a)            # RT-lane metric (fp64 spin)
-    gcov0, gcon0 = metric_and_inverse(st, x0); kcon0 = gcon0 * kcov0
-    # camera readout tetrad -> initial transported up-vector eU (= its e_(2))
-    e0c = _gpol_normal_observer(gcon0)   # unit Eulerian observer (CPU shift-sign fix mirror)
-    e0cov0 = gcov0 * e0c
-    cu = SVector(gp.cu1, gp.cu2, gp.cu3, gp.cu4)
-    upc0 = e0c[1]*cu[1] - (e0cov0[2]*cu[2] + e0cov0[3]*cu[3] + e0cov0[4]*cu[4]) / e0cov0[1]
-    upcam = SVector(upc0, cu[2]+e0c[2]*cu[1], cu[3]+e0c[3]*cu[1], cu[4]+e0c[4]*cu[1])
-    Ecam = fluid_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0)
-    eU  = SVector{4,Tg}(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])   # camera e_(2) (up)
-    eUu = SVector{4,Tg}(e0c)     # camera 4-velocity — parallel-transported alongside eU
-
-    S = _gpz4; G = _gpI4
-    r_prev = Tg(Inf)
-    for _ in 1:nmax
-        stop, r = _gimg_stop(y, r_prev, r_h, escape, R_em, a)
-        stop && break
-        r_prev = r
-        h = (r - r_h) / C
-        # callsite @inline: the inliner otherwise leaves the sampler closure as a call
-        # in this register-heavy body, which perturbs downstream fmuladd contraction
-        # (~1 ulp, Faraday-amplified on dim pixels); forced inlining keeps the kernel
-        # bit-for-bit stable.
-        prim = @inline sample(y)
-        if prim[1] > 0.0
-            # RT lane: Float64 from the CONVERTED state (identity at Tg == Float64)
-            x = SVector{4,Float64}(y[1], y[2], y[3], y[4])
-            gcov, gcon = metric_and_inverse(st, x)
-            kcov = -SVector{4,Float64}(y[5], y[6], y[7], y[8]); kcon = gcon * kcov   # photon k = -p
-            j, al, ro, tet_fl, valid = _gpol_coeffs(prim, kcov, kcon, gcov, gcon, gp, false)
-            if valid
-                # readout screen = the parallel-transported camera tetrad: its
-                # timelike leg is PT(u_cam)=eUu (not the per-sample local ZAMO,
-                # which drifts and rotates EVPA per ray). fluid_tetrad uses only
-                # parallel-transport-invariant operations, so E == PT(Ecam) and S
-                # ends up in the camera frame with no final rotation (cf. ipole/Krang).
-                # The march ends at the shared redshift cut (march_stop), before the
-                # transported frame's KS components (∝ 1/(r - r_h)) degrade the
-                # invariant -k·eUu (drift < 1e-2 in fp64 and fp32 up to the cut).
-                eU64 = SVector{4,Float64}(eU); eUu64 = SVector{4,Float64}(eUu)
-                E = fluid_tetrad(eUu64, gcov * eUu64, kcon, kcov, eU64, gcov, gcon)
-                ds = Float64(h) * gp.L_unit / gp.nu_obs
-                M, b = stokes_segment(j, al, ro, ds)
-                c2, s2 = _gpol_R(tet_fl, E, gcov)
-                S = stokes_admissible(S + G * _gpol_rot(c2, s2, b))   # the stokes_couple clamp
-                G = G * _gpol_rot(c2, s2, M)
-            end
-        end
-        # low-storage streaming RK4: same ops/associativity as the 4-stage combine but
-        # the four stages of {y,eU,eUu} are not all held live -> fewer registers/thread.
-        stg = KerrSchildCartesian(a)             # geodesic-lane metric (lane spin)
-        dy, (de, du) = geodesic_transport_rhs(stg, y, (eU, eUu))
-        ay = dy; ae = de; au = du
-        ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
-        ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
-        ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
-        ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
-        ys = y + h*dy; es = eU + h*de; us = eUu + h*du
-        dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
-        ay = ay + dy; ae = ae + de; au = au + du
-        y   = y   + (h/6)*ay
-        eU  = eU  + (h/6)*ae
-        eUu = eUu + (h/6)*au
-    end
-    return S * gp.nu_obs^3
-end
+# ---------------------------------------------------------------- march
+# Every polarized kernel runs `reverse_polarized_march` (radiation/reverse_march.jl, the
+# CPU `render` march) under a `KerrMarch` control; the kernels differ only in the fluid
+# sampler. The geodesic and the transported frame run in the ray eltype (fp32 or fp64),
+# the Stokes/Mueller transfer and every coefficient in Float64 from the converted state.
 
 # ---------------------------------------------------------------- fused polarized kernel
 # One ray/thread on the uniform grid; writes out[i]. Two-type: the geodesic/frame lane
@@ -225,10 +96,10 @@ end
                                R_em, nmax, ng, xo, inv_dx, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        out[i] = _gpol_march(y0s[i],
+        out[i] = reverse_polarized_march(y0s[i],
                              y -> _gimg_sample(grid, ng, xo, inv_dx, Float64(y[2]),
                                                Float64(y[3]), Float64(y[4])),
-                             gp, a, r_h, C, escape, R_em, nmax)
+                             gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
@@ -318,7 +189,7 @@ function render_gpu_polarized(cfg, snap_or_grid; devices = default_pool(),
 end
 
 # ================================================================ SLOW LIGHT (opt-in, polarized)
-# The SAME _gpol_march body with the sampler swapped for the time-blended
+# The SAME march with the sampler swapped for the time-blended
 # _gimg_sample_t (gpu_image.jl); w = clamp((t0 + X⁰) * inv_dt, 0, 1) at the emission
 # time t_emit = t_obs + X⁰, t0 = t_obs - t_a (the physical dump-time axis — see the
 # gpu_image.jl SLOW LIGHT header). inv_dt=0 (fast-light limit) makes _gimg_sample_t
@@ -329,7 +200,7 @@ end
                                   R_em, nmax, ng, xo, inv_dx, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        out[i] = _gpol_march(y0s[i],
+        out[i] = reverse_polarized_march(y0s[i],
                              y -> begin
                                  # w on frame B at emission time t_obs + X⁰ (Float64
                                  # RT lane; the conversion is identity for fp64 rays)
@@ -338,7 +209,7 @@ end
                                                 Float64(y[2]), Float64(y[3]),
                                                 Float64(y[4]))
                              end,
-                             gp, a, r_h, C, escape, R_em, nmax)
+                             gp, KerrMarch(a, r_h, C, escape, R_em), nmax)
     end
 end
 
@@ -386,7 +257,7 @@ end
 # DIAGNOSTIC marcher: same geodesic stepping + fluid decode as _gpol_kernel! (the
 # geodesic step is `rk4_step_fixed`, whose RHS is the geodesic part of the polarized
 # march's `geodesic_transport_rhs`,
-# and _gpol_coeffs, so the sampled segments are the polarized kernel's), but
+# and the same per-sample coefficients, so the sampled segments are the polarized kernel's), but
 # instead of accumulating Stokes it tallies per ray the emitting segments, how many are
 # 'stiff' (max(|λ|)·ds > thresh), and the max/sum metric. Kept entirely separate from
 # _gpol_kernel! so the production kernel stays bit-identical. Output per ray:
@@ -408,8 +279,8 @@ end
             if prim[1] > 0.0
                 gcov, gcon = metric_and_inverse(KerrSchildCartesian(gp.bh_a), x)
                 kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
-                j, al, ro, tet_fl, valid = _gpol_coeffs(prim, kcov, gcon * kcov, gcov, gcon,
-                                                        gp, false)
+                j, al, ro, tet_fl, valid = _sample_coefficients(prim, kcov, gcon * kcov, gcov,
+                                                                gcon, gp, false)
                 if valid
                     ds = h * gp.L_unit / gp.nu_obs
                     m = _stiffness_metric(al, ro, ds)

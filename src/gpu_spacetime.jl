@@ -20,11 +20,14 @@ using BlackLightPlus.Geodesics: metric, inverse_metric, metric_and_inverse, geod
       rk4_step_fixed, ks_radius_hole, horizon_radius_hole, HORIZON_EPS_SAMPLED,
       ADMGridSpacetime, superposed_control, march_captured, march_escaped,
       normal_frame_energy, StationarySpacetime, _adm_gcov, _adm_gcon, _adm_pair,
-      _adm_lower_index, _adm_raise_index, _adm_raise_and_norm
+      _adm_lower_index, _adm_raise_index, _adm_raise_and_norm, spacetime_control,
+      adm_control
+using BlackLightPlus.Radiation: SpacetimeMarch, reverse_unpolarized_march,
+      reverse_polarized_march
 using BlackLightPlus.Simulation: AthenaKSnapshot
 
-isdefined(@__MODULE__, :_gimg_coeffs) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_image.jl"))
-isdefined(@__MODULE__, :_gpol_march)  || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_pol.jl"))
+isdefined(@__MODULE__, :_fused_kernel!) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_image.jl"))
+isdefined(@__MODULE__, :_gpol_kernel!)  || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_pol.jl"))
 isdefined(@__MODULE__, :_gamr_lerp)   || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_amr.jl"))
 
 # ---------------------------------------------------------------- device ADM params
@@ -78,124 +81,12 @@ upload_adm(st::ADMGridSpacetime, devices; alpha_min::Real = st.alpha_min) =
                   for (dev, d) in upload_per_device(st.data, devices))
 
 # ---------------------------------------------------------------- march control
-# Per-spacetime fixed-control march control: (captured, step h, escape-test radius);
-# capture is the shared `march_captured` rule on the spacetime's horizon proxy.
-# SuperposedKerrSchild calls the CPU tracer's own `superposed_control` (spacetimes.jl):
-# step by the distance to the NEAREST horizon h = min_A(r_A − r_h_A)/C, capture (either
-# hole) at horizon + HORIZON_EPS_SAMPLED or above CAPTURE_REDSHIFT in the normal frame,
-# escape on the global coordinate radius. Non-finite r_A ⇒ capture.
-@inline _gsp_ctl(st::SuperposedKerrSchild{N,Float64}, y::SVector{8,Float64},
-                  C::Float64) where {N} = superposed_control(st, y, C)
-
-# ADM grid mirrors the z4c shadow tracer: the horizon proxy is the local lapse
-# α = 1/√(−g^{tt}) against alpha_min (off-grid the metric is Minkowski ⇒ α = 1, never
-# captures), with the shared redshift cut on top; coordinate-radius step
-# h = max(r,1)/C, escape on the coordinate radius. A non-finite state (puncture
-# blow-up) is a capture.
-@inline function _gsp_ctl(sp::DevADMParams, y::SVector{8,Float64}, C::Float64)
-    x = SVector(y[1], y[2], y[3], y[4])
-    r = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
-    gi = inverse_metric(sp, x)
-    gtt = gi[1, 1]
-    alpha = gtt < 0.0 ? 1.0 / sqrt(-gtt) : 1.0
-    En = gtt < 0.0 ? normal_frame_energy(gi, y) : 0.0
-    d = isfinite(r) ? alpha - sp.alpha_min : r
-    return march_captured(d, En, 0.0), max(r, 1.0) / C, r
-end
-
-# ---------------------------------------------------------------- generic unpol march
-# The generic-spacetime fused unpolarized march for one ray, camera->source: the
-# `_gimg_march` reverse-accumulation scheme (gpu_image.jl header) with the geodesic
-# step, step control and termination supplied by the spacetime (`_gsp_ctl` +
-# `rk4_step_fixed`/`geodesic_rhs`, the CPU engine in-kernel). Float64-only (the fp32
-# critical-curve rescue is a Kerr-specific construct).
-@inline function _gsp_march(y0::SVector{8,Float64}, sample::F, gp, sp,
-                            C::Float64, escape::Float64, R_em::Float64, nmax) where {F}
-    y = y0
-    Iinv = 0.0
-    trans = 1.0
-    r_prev = Inf
-    for _ in 1:nmax
-        cap, h, re = _gsp_ctl(sp, y, C)
-        (cap || march_escaped(re, r_prev, escape, R_em)) && break   # shared rule, as CPU
-        r_prev = re
-        prim = @inline sample(y)
-        if prim[1] > 0.0
-            kcov = -SVector(y[5], y[6], y[7], y[8])     # photon k = -p
-            gcov, gcon = metric_and_inverse(sp, SVector(y[1], y[2], y[3], y[4]))
-            j_inv, a_inv = _prim_coeffs(prim, kcov, gcov, gcon, gp)
-            ds = h * gp.L_unit / gp.nu_obs
-            A, B = unpolarized_segment(j_inv, a_inv, ds)
-            Iinv += trans * B
-            trans *= A
-        end
-        y = rk4_step_fixed(sp, y, h)
-    end
-    return Iinv * gp.nu_obs^3
-end
-
-# ---------------------------------------------------------------- generic pol march
-# The generic-spacetime fused POLARIZED march for one ray, camera->source: the Kerr
-# reverse-Mueller scheme `_gpol_march` (gpu_pol.jl) with (i) march control/termination
-# from the spacetime (`_gsp_ctl`), (ii) the RT-lane metric from `metric_and_inverse(sp,·)`,
-# (iii) geodesic + two-leg frame transport stepped by the fused low-storage RK4 over
-# `geodesic_transport_rhs` (same combine ops as `rk4_step_fixed`, so the trajectory is the
-# unpol march's / CPU tracer's), and (iv) the e_(1)-renormalizing `fluid_tetrad` in both
-# the fluid tetrad and the readout frame (|det g| ≠ 1 off single CKS).
-@inline function _gsp_pol_march(y0::SVector{8,Float64}, sample::F, gp, sp,
-                                C::Float64, escape::Float64, R_em::Float64,
-                                nmax) where {F}
-    y = y0
-    x0 = SVector(y0[1], y0[2], y0[3], y0[4]); kcov0 = -SVector(y0[5], y0[6], y0[7], y0[8])
-    gcov0, gcon0 = metric_and_inverse(sp, x0); kcon0 = gcon0 * kcov0
-    e0c = _gpol_normal_observer(gcon0)
-    e0cov0 = gcov0 * e0c
-    cu = SVector(gp.cu1, gp.cu2, gp.cu3, gp.cu4)
-    upc0 = e0c[1]*cu[1] - (e0cov0[2]*cu[2] + e0cov0[3]*cu[3] + e0cov0[4]*cu[4]) / e0cov0[1]
-    upcam = SVector(upc0, cu[2]+e0c[2]*cu[1], cu[3]+e0c[3]*cu[1], cu[4]+e0c[4]*cu[1])
-    Ecam = fluid_tetrad(e0c, e0cov0, kcon0, kcov0, upcam, gcov0, gcon0; renorm_e1 = true)
-    eU  = SVector(Ecam[3, 1], Ecam[3, 2], Ecam[3, 3], Ecam[3, 4])   # camera e_(2) (up)
-    eUu = e0c                    # camera 4-velocity, parallel-transported alongside eU
-    S = _gpz4; G = _gpI4
-    r_prev = Inf
-    for _ in 1:nmax
-        cap, h, re = _gsp_ctl(sp, y, C)
-        (cap || march_escaped(re, r_prev, escape, R_em)) && break   # shared rule, as CPU
-        r_prev = re
-        prim = @inline sample(y)
-        if prim[1] > 0.0
-            x = SVector(y[1], y[2], y[3], y[4])
-            gcov, gcon = metric_and_inverse(sp, x)
-            kcov = -SVector(y[5], y[6], y[7], y[8]); kcon = gcon * kcov   # photon k = -p
-            j, al, ro, tet_fl, valid = _gpol_coeffs(prim, kcov, kcon, gcov, gcon, gp, true)
-            if valid
-                E = fluid_tetrad(eUu, gcov * eUu, kcon, kcov, eU, gcov, gcon; renorm_e1 = true)
-                ds = h * gp.L_unit / gp.nu_obs
-                M, b = stokes_segment(j, al, ro, ds)
-                c2, s2 = _gpol_R(tet_fl, E, gcov)
-                S = stokes_admissible(S + G * _gpol_rot(c2, s2, b))   # the stokes_couple clamp
-                G = G * _gpol_rot(c2, s2, M)
-            end
-        end
-        # low-storage streaming RK4 of {y, eU, eUu} (the _gpol_march scheme; same
-        # ops/associativity as rk4_step_fixed's 4-stage combine)
-        dy, (de, du) = geodesic_transport_rhs(sp, y, (eU, eUu))
-        ay = dy; ae = de; au = du
-        ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, (de, du) = geodesic_transport_rhs(sp, ys, (es, us))
-        ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
-        ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, (de, du) = geodesic_transport_rhs(sp, ys, (es, us))
-        ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
-        ys = y + h*dy; es = eU + h*de; us = eUu + h*du
-        dy, (de, du) = geodesic_transport_rhs(sp, ys, (es, us))
-        ay = ay + dy; ae = ae + de; au = au + du
-        y   = y   + (h/6)*ay
-        eU  = eU  + (h/6)*ae
-        eUu = eUu + (h/6)*au
-    end
-    return S * gp.nu_obs^3
-end
+# The kernels run the reverse marches under a `SpacetimeMarch(sp, …)` control:
+# `spacetime_control` (Geodesics) steps, captures and escapes per spacetime — the CPU
+# `superposed_control` for the binary, `adm_control` (lapse horizon proxy) for the ADM
+# grid, whose device parameter struct runs the same duck-typed body.
+@inline BlackLightPlus.Geodesics.spacetime_control(sp::DevADMParams, y::SVector{8}, C) =
+    adm_control(sp, y, C)
 
 # ---------------------------------------------------------------- device: scan sample
 # Scan-locate AMR sample: the exact `_find_meshblock_scan` port (`_gamr_locate_scan`,
@@ -255,24 +146,24 @@ end
                                   nmax, ni, nj, nk, nmb, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        img[i] = _gsp_march(y0s[i],
+        img[i] = reverse_unpolarized_march(y0s[i],
                             y -> _gamr_sample_scan(blk, xlft, dxb, lo, hi, ni, nj, nk,
                                                    nmb, y[2], y[3], y[4]),
-                            gp, sp, C, escape, R_em, nmax)
+                            eltype(img), gp, SpacetimeMarch(sp, C, escape, R_em), nmax)
     end
 end
 
 # Generic-spacetime fused POLARIZED kernel over the scan-locate AMR fluid (the
-# _gsp_amr_kernel! twin with _gsp_pol_march; out[i] is the camera-frame Stokes 4-vector).
+# _gsp_amr_kernel! twin with the polarized march; out[i] is the camera-frame Stokes 4-vector).
 @kernel function _gsp_pol_amr_kernel!(out, @Const(y0s), @Const(blk), @Const(xlft),
                                       @Const(dxb), @Const(lo), @Const(hi), sp, gp, C,
                                       escape, R_em, nmax, ni, nj, nk, nmb, nrays)
     i = @index(Global)
     @inbounds if i <= nrays
-        out[i] = _gsp_pol_march(y0s[i],
+        out[i] = reverse_polarized_march(y0s[i],
                                 y -> _gamr_sample_scan(blk, xlft, dxb, lo, hi, ni, nj,
                                                        nk, nmb, y[2], y[3], y[4]),
-                                gp, sp, C, escape, R_em, nmax)
+                                gp, SpacetimeMarch(sp, C, escape, R_em), nmax)
     end
 end
 
@@ -289,7 +180,7 @@ end
         maxnull = 0.0
         n = 0
         for _ in 1:nmax
-            cap, h, re = _gsp_ctl(sp, y, C)
+            cap, h, re = spacetime_control(sp, y, C)
             x = SVector(y[1], y[2], y[3], y[4])
             p = SVector(y[5], y[6], y[7], y[8])
             gi = inverse_metric(sp, x)

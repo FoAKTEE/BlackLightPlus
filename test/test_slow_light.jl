@@ -505,7 +505,7 @@ end
 
 # ------------------------------------------------------------------------------------
 # (j) consolidated march: the fast/slow AMR POLARIZED kernel pair shares ONE
-# _gpol_march body (sampler swap only), so the slow kernel at inv_dt = 0 on the same
+# polarized march (sampler swap only), so the slow kernel at inv_dt = 0 on the same
 # frame must reproduce the fast kernel to floating-point contraction accuracy.
 # (Bit-for-bit equality between the two kernel instantiations is compiler-dependent
 # — fmuladd fusion may differ per specialization — so a tight relative bound is
