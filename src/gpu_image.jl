@@ -13,7 +13,7 @@ using ForwardDiff: Dual, partials
 using KernelAbstractions
 using CUDA
 using LinearAlgebra: dot
-using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays, critical_curve
+using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, critical_curve
 using BlackLightPlus.Simulation: AthenaKSnapshot, sample_primitives, pgas_from_eint, units,
       SnapshotSeries, get_frame, bracketing_pair
 # host precompute of the nonthermal eDF constants (_powerlaw_gp / _kappa_gp); explicit
@@ -46,8 +46,9 @@ struct UniformFluidGrid
     inv_dx::Float64           # = (n-1) / (2 box_half)
 end
 
-# Device handles, the DevicePool runtime, uploads and the march executor.
+# Device handles, the DevicePool runtime, uploads and the march executor; device rays.
 isdefined(@__MODULE__, :DevicePool) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_pool.jl"))
+isdefined(@__MODULE__, :CameraRays) || Base.include(@__MODULE__, joinpath(@__DIR__, "gpu_camera.jl"))
 
 """
     DeviceFluidGrid
@@ -563,7 +564,6 @@ function render_gpu_fused(cfg, snap_or_grid; devices = default_pool(),
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
 
     gp = _gimg_params(cfg)
@@ -572,24 +572,24 @@ function render_gpu_fused(cfg, snap_or_grid; devices = default_pool(),
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
-    nrays = length(rays)
+    nrays = cam.npix^2
     items = queue_items(order, nrays)
     img = Vector{Float64}(undef, nrays)
     f64 = _fused_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax, wg)
     frac = 0.0
     if precision === :f64
-        march!((img,), pool, [MarchPart(items, HostRays(rays), f64)])
+        march!((img,), pool, [MarchPart(items, CameraRays(st, cam), f64)])
     else
-        # fp32 geodesic lane: the fp64-built rays are narrowed as they are staged; the host
+        # fp32 geodesic lane: the fp64 rays are narrowed as the device makes them; the host
         # constructs every geodesic-lane scalar as Float32 (no in-kernel widening), while gp
         # (units, frequency, fp64 spin gp.bh_a for the metric/redshift) stays Float64.
         f32 = _fused_launch(dgrid, gp, Float32(a), Float32(r_h), Float32(Cf),
                             Float32(escape), Float32(R_em), nmax, wg)
-        march!((img,), pool, [MarchPart(items, HostRays(rays, Float32), f32)])
+        march!((img,), pool, [MarchPart(items, CameraRays(st, cam, Float32), f32)])
         if precision === :mixed
             pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
                                  rescue_px = rescue_px)
-            march!((img,), pool, [MarchPart(pix, HostRays(rays), f64)])
+            march!((img,), pool, [MarchPart(pix, CameraRays(st, cam), f64)])
             frac = length(pix) / nrays
         end
     end
@@ -684,7 +684,6 @@ function render_gpu_fused_kvariant(cfg, snap_or_grid, mass_scales::Vector{Float6
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
 
     gp0 = _gimg_params(cfg)
@@ -700,9 +699,9 @@ function render_gpu_fused_kvariant(cfg, snap_or_grid, mass_scales::Vector{Float6
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
-    nrays = length(rays)
+    nrays = cam.npix^2
     img = Vector{SVector{K,Float64}}(undef, nrays)
-    march!((img,), pool, [MarchPart(1:nrays, HostRays(rays),
+    march!((img,), pool, [MarchPart(1:nrays, CameraRays(st, cam),
                                     _fused_launch_kv(dgrid, gps, a, r_h, Cf, escape, R_em, nmax))])
     imgmat = reshape(img, cam.npix, cam.npix)
     return [getindex.(imgmat, k) for k in 1:K]
@@ -885,7 +884,6 @@ function render_gpu_fused_slow(cfg, win::DeviceFluidWindow; devices = default_po
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     gp = _gimg_params(cfg)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
@@ -893,9 +891,9 @@ function render_gpu_fused_slow(cfg, win::DeviceFluidWindow; devices = default_po
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(win.a.xo)
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
-    nrays = length(rays)
+    nrays = cam.npix^2
     img = Vector{Float64}(undef, nrays)
-    march!((img,), pool, [MarchPart(queue_items(order, nrays), HostRays(rays),
+    march!((img,), pool, [MarchPart(queue_items(order, nrays), CameraRays(st, cam),
                                     _fused_launch_sl(win, t0, gp, a, r_h, Cf, escape, R_em,
                                                      nmax, wg))])
     return reshape(img, cam.npix, cam.npix)

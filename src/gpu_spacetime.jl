@@ -14,7 +14,7 @@ using KernelAbstractions
 using CUDA
 using Adapt
 using LinearAlgebra: dot
-using BlackLightPlus: SuperposedKerrSchild, PlaneParallelCamera, camera_rays
+using BlackLightPlus: SuperposedKerrSchild, PlaneParallelCamera
 using BlackLightPlus.Geodesics: metric, inverse_metric, geodesic_rhs, rk4_step_fixed,
       ks_radius_hole, horizon_radius_hole, HORIZON_EPS_SAMPLED, ADMGridSpacetime,
       superposed_control, march_captured, march_escaped, normal_frame_energy,
@@ -448,30 +448,36 @@ function march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays::Vector{SVecto
                                   polarized::Bool = false,
                                   devices = default_pool(), nmax::Int = cfg.max_steps,
                                   C::Real = 80, R_em::Real = Inf, wg = :default)
-    wg === :default && (wg = polarized ? _GPOL_WG : nothing)
     pool = device_pool(devices)
+    out = _gsp_march(cfg, pool, _gsp_per_device(st, pool), snap_or_scangrid, HostRays(rays),
+                     length(rays), polarized, nmax, C, R_em, wg)
+    polarized || return out
+    M = Matrix{Float64}(undef, 4, length(rays))
+    @inbounds for j in eachindex(out)
+        o = out[j]
+        M[1, j] = o[1]; M[2, j] = o[2]; M[3, j] = o[3]; M[4, j] = o[4]
+    end
+    return M
+end
+
+# The generic-spacetime march of `nrays` items from the ray source `src` over the
+# per-device spacetimes `sps`: Stokes I (Float64) or IQUV (SVector{4,Float64}) per item.
+function _gsp_march(cfg, pool, sps, snap_or_scangrid, src, nrays, polarized, nmax, C, R_em, wg)
+    wg === :default && (wg = polarized ? _GPOL_WG : nothing)
     sg = _resident_scan(pool, snap_or_scangrid)
-    sps = _gsp_per_device(st, pool)
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
-    nrays = length(rays)
     if polarized
         out = Vector{SVector{4,Float64}}(undef, nrays)
-        march!((out,), pool, [MarchPart(1:nrays, HostRays(rays),
-            _gsp_launch(_gsp_pol_amr_kernel!, sg, sps, _gpol_params(cfg), Cf, escape,
-                        Float64(R_em), nmax, wg))])
-        M = Matrix{Float64}(undef, 4, nrays)
-        @inbounds for j in 1:nrays
-            o = out[j]
-            M[1, j] = o[1]; M[2, j] = o[2]; M[3, j] = o[3]; M[4, j] = o[4]
-        end
-        return M
+        launch = _gsp_launch(_gsp_pol_amr_kernel!, sg, sps, _gpol_params(cfg), Cf, escape,
+                             Float64(R_em), nmax, wg)
+    else
+        out = Vector{Float64}(undef, nrays)
+        launch = _gsp_launch(_gsp_amr_kernel!, sg, sps, _gimg_params(cfg), Cf, escape,
+                             Float64(R_em), nmax, wg)
     end
-    img = Vector{Float64}(undef, nrays)
-    march!((img,), pool, [MarchPart(1:nrays, HostRays(rays),
-        _gsp_launch(_gsp_amr_kernel!, sg, sps, _gimg_params(cfg), Cf, escape, Float64(R_em),
-                    nmax, wg))])
-    return img
+    march!((out,), pool, [MarchPart(1:nrays, src, launch)])
+    return out
 end
 
 """
@@ -481,31 +487,25 @@ end
         -> Matrix{Float64} (unpol)  |  NamedTuple (I,Q,U,V) (polarized)
 
 Full-frame generic-spacetime fused GPU render: the device twin of
-`render(cfg, snap; spacetime=st, polarized=...)` — camera rays built with the same
-`camera_rays(st, cam)` (host CPU metric), marched/sampled/accumulated entirely on
-device. `polarized=false` returns the Stokes-I `Matrix{Float64}` in `render().I`
-layout; `polarized=true` returns the `(I, Q, U, V)` NamedTuple of npix×npix matrices
-(full-IQUV reverse-Mueller march, parallel-transported camera frame).
+`render(cfg, snap; spacetime=st, polarized=...)` — camera rays made on the device by
+the same `camera_ray` as `camera_rays(st, cam)` (on each device's copy of `st`),
+marched/sampled/accumulated entirely on device. `polarized=false` returns the Stokes-I
+`Matrix{Float64}` in `render().I` layout; `polarized=true` returns the `(I, Q, U, V)`
+NamedTuple of npix×npix matrices (full-IQUV reverse-Mueller march, parallel-transported
+camera frame).
 """
 function render_gpu_spacetime(cfg, st, snap_or_scangrid; polarized::Bool = false,
                               devices = default_pool(),
                               nmax::Int = cfg.max_steps, C::Real = 80, R_em::Real = Inf,
                               wg = :default)
-    st_host = st isa Dict ? error("pass the ADMGridSpacetime itself to render_gpu_spacetime") : st
+    st isa Dict && error("pass the ADMGridSpacetime itself to render_gpu_spacetime")
+    pool = device_pool(devices)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st_host, cam)
-    npx = cam.npix
-    if polarized
-        M = march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays; polarized = true,
-                                     devices = devices, nmax = nmax, C = C,
-                                     R_em = R_em, wg = wg)
-        return (I = reshape(M[1, :], npx, npx), Q = reshape(M[2, :], npx, npx),
-                U = reshape(M[3, :], npx, npx), V = reshape(M[4, :], npx, npx))
-    end
-    img = march_rays_gpu_spacetime(cfg, st, snap_or_scangrid, rays; devices = devices,
-                                   nmax = nmax, C = C, R_em = R_em, wg = wg)
-    return reshape(img, npx, npx)
+    sps = _gsp_per_device(st, pool)
+    out = _gsp_march(cfg, pool, sps, snap_or_scangrid, CameraRays(sps, cam), cam.npix^2,
+                     polarized, nmax, C, R_em, wg)
+    return polarized ? _stokes_planes(out, cam.npix) : reshape(out, cam.npix, cam.npix)
 end
 
 """

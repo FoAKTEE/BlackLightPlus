@@ -113,6 +113,20 @@ silently returning a negative-energy (E < 0) covector that a downstream p/(−p_
 normalization would flip.
 """
 function nullify_covariant(st, x::SVector{4,T}, ps::SVector{3,T}) where {T}
+    p, ok = null_covariant(st, x, ps)
+    ok || error("nullify_covariant: no past-oriented (p_t<0 ⇒ E>0) null root " *
+                "at x=$x — inside the ergosphere the positive-energy contract is unsatisfiable")
+    return p
+end
+
+"""
+    null_covariant(st, x, p_spatial) -> (p::SVector{4}, ok::Bool)
+
+The root of `nullify_covariant` without the error: `ok == false` flags the
+unsatisfiable case (no p_t < 0 root). Allocation- and exception-free, so the camera-ray
+kernels call it on the device.
+"""
+@inline function null_covariant(st, x::SVector{4,T}, ps::SVector{3,T}) where {T}
     gi = inverse_metric(st, x)
     A = gi[1, 1]
     B = 2 * (gi[1, 2] * ps[1] + gi[1, 3] * ps[2] + gi[1, 4] * ps[3])
@@ -122,12 +136,12 @@ function nullify_covariant(st, x::SVector{4,T}, ps::SVector{3,T}) where {T}
     end
     disc = B * B - 4 * A * C
     pt = (-B - sqrt(disc)) / (2 * A)
+    ok = true
     if !(pt < 0)                                    # first root non-negative (or NaN)
         pt = (-B + sqrt(disc)) / (2 * A)
-        pt < 0 || error("nullify_covariant: no past-oriented (p_t<0 ⇒ E>0) null root " *
-                        "at x=$x — inside the ergosphere the positive-energy contract is unsatisfiable")
+        ok = pt < 0
     end
-    return SVector(pt, ps[1], ps[2], ps[3])
+    return SVector(pt, ps[1], ps[2], ps[3]), ok
 end
 
 "Hamiltonian geodesic RHS for stationary metrics (the exact-zero dp_t/dλ is dropped)."

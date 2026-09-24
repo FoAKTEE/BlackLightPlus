@@ -270,8 +270,8 @@ _gpol_amr_launch(dg, gp, a, r_h, C, escape, R_em, nmax, wg) = (lane, (outd,), y0
 Fused single-pass GPU march of an arbitrary camera-ray list against the native-AMR
 meshblock hierarchy, returning a dense `4 × length(rays)` Stokes matrix (row 1 = I;
 rows 2-4 = Q,U,V, zero when `polarized=false`); column `j` corresponds to input ray `j`
-(`order` sets the queue order only). This is the shared `:f64` core behind the
-full-frame `render_gpu_amr[_polarized]` entry points. `snap_or_amrgrid`:
+(`order` sets the queue order only). The full-frame `render_gpu_amr[_polarized]` run
+the same `:f64` march on camera rays made on the device. `snap_or_amrgrid`:
 `AthenaKSnapshot` (uploaded once per device pool) or pre-uploaded `DeviceAMRGrid`.
 `:f64`-only by design — the critical-curve rescue behind `:mixed`/`:f32_raw` is
 pixel-grid-coupled and lives only at the full-frame wrapper level.
@@ -287,50 +287,55 @@ function march_rays_gpu_amr(cfg, snap_or_amrgrid, rays::Vector{SVector{8,Float64
               "render_gpu_amr[_polarized] for :mixed / :f32_raw.")
     wg === :default && (wg = polarized ? _GPOL_WG : nothing)
     pool = device_pool(devices)
-    dg = resident_amr(pool, snap_or_amrgrid)
-    a = cfg.bh_a
-    r_h = 1 + sqrt(1 - a * a)
-    escape = 1.1 * cfg.camera.distance
-    Cf = Float64(C)
-    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
     nrays = length(rays)
-    items = queue_items(order, nrays)
+    out = _amr_march(cfg, pool, resident_amr(pool, snap_or_amrgrid), HostRays(rays),
+                     queue_items(order, nrays), nrays, polarized, nmax, C, wg)
     M = zeros(Float64, 4, nrays)
-    if polarized
-        out = Vector{SVector{4,Float64}}(undef, nrays)
-        march!((out,), pool, [MarchPart(items, HostRays(rays),
-            _gpol_amr_launch(dg, _gpol_params(cfg), a, r_h, Cf, escape, R_em, nmax, wg))])
-        @inbounds for j in 1:nrays
-            o = out[j]
-            M[1, j] = o[1]; M[2, j] = o[2]; M[3, j] = o[3]; M[4, j] = o[4]
-        end
-    else
-        img = Vector{Float64}(undef, nrays)
-        march!((img,), pool, [MarchPart(items, HostRays(rays),
-            _famr_launch(dg, _gimg_params(cfg), a, r_h, Cf, escape, R_em, nmax, wg))])
-        @inbounds for j in 1:nrays
-            M[1, j] = img[j]
+    @inbounds for j in 1:nrays
+        o = out[j]
+        for k in eachindex(o)
+            M[k, j] = o[k]
         end
     end
     return M
 end
 
-# :mixed / :f32_raw full-frame native-AMR render (the rescue is pixel-GRID-coupled, so it
-# lives only at this level): the fp32 lane over every pixel, then (:mixed) the fp64 lane
-# over the pixels within `rescue_px` of the critical curve. `launch(a, r_h, C, escape,
-# R_em)` builds the kernel launch at the scalars' type; writes `out`, returns the rescued
-# fraction.
-function _amr_mixed!(out, pool, cfg, cam, rays, items, launch, R_em, precision, rescue_px)
+# The :f64 native-AMR march of `nrays` items from the ray source `src`, queued in
+# `items` order: Stokes I (Float64) or IQUV (SVector{4,Float64}) per item.
+function _amr_march(cfg, pool, dg, src, items, nrays, polarized, nmax, C, wg)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance
-    march!((out,), pool, [MarchPart(items, HostRays(rays, Float32),
+    Cf = Float64(C)
+    R_em = _gamr_domain_radius(dg.amrp)       # vacuum beyond the covered domain -> exact gate
+    if polarized
+        out = Vector{SVector{4,Float64}}(undef, nrays)
+        launch = _gpol_amr_launch(dg, _gpol_params(cfg), a, r_h, Cf, escape, R_em, nmax, wg)
+    else
+        out = Vector{Float64}(undef, nrays)
+        launch = _famr_launch(dg, _gimg_params(cfg), a, r_h, Cf, escape, R_em, nmax, wg)
+    end
+    march!((out,), pool, [MarchPart(items, src, launch)])
+    return out
+end
+
+# :mixed / :f32_raw full-frame native-AMR render (the rescue is pixel-GRID-coupled, so it
+# lives only at this level): the fp32 lane over every pixel, then (:mixed) the fp64 lane
+# over the pixels within `rescue_px` of the critical curve. `launch(a, r_h, escape,
+# R_em)` builds the kernel launch at the scalars' type; writes `out`, returns the rescued
+# fraction.
+function _amr_mixed!(out, pool, cfg, cam, items, launch, R_em, precision, rescue_px)
+    st = KerrSchildCartesian(cfg.bh_a)
+    a = cfg.bh_a
+    r_h = 1 + sqrt(1 - a * a)
+    escape = 1.1 * cfg.camera.distance
+    march!((out,), pool, [MarchPart(items, CameraRays(st, cam, Float32),
         launch(Float32(a), Float32(r_h), Float32(escape), Float32(R_em)))])
     precision === :mixed || return 0.0
     pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
                          rescue_px = rescue_px)
-    march!((out,), pool, [MarchPart(pix, HostRays(rays), launch(a, r_h, escape, R_em))])
-    return length(pix) / length(rays)
+    march!((out,), pool, [MarchPart(pix, CameraRays(st, cam), launch(a, r_h, escape, R_em))])
+    return length(pix) / cam.npix^2
 end
 
 """
@@ -353,29 +358,9 @@ function render_gpu_amr(cfg, snap_or_amrgrid; devices = default_pool(),
                         rescued_frac = nothing)
     precision in (:f64, :mixed, :f32_raw) ||
         error("render_gpu_amr: precision must be :f64, :mixed or :f32_raw, got :$precision")
-    st = KerrSchildCartesian(cfg.bh_a)
-    cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
-                              cfg.camera.fov, cfg.camera.resolution)
-    # :f64 full frame == the shared ray-list core on the camera pixel grid (bit-identical).
-    if precision === :f64
-        M = march_rays_gpu_amr(cfg, snap_or_amrgrid, camera_rays(st, cam);
-                               polarized = false, devices = devices, nmax = nmax,
-                               C = C, order = order, wg = wg)
-        rescued_frac === nothing || (rescued_frac[] = 0.0)
-        return reshape(M[1, :], cam.npix, cam.npix)
-    end
-    pool = device_pool(devices)
-    rays = camera_rays(st, cam)
-    dg = resident_amr(pool, snap_or_amrgrid)
-    gp = _gimg_params(cfg)
-    Cf = Float64(C)
-    img = Vector{Float64}(undef, length(rays))
-    frac = _amr_mixed!(img, pool, cfg, cam, rays, queue_items(order, length(rays)),
-                       (a, r_h, escape, R_em) -> _famr_launch(dg, gp, a, r_h, typeof(a)(Cf),
-                                                              escape, R_em, nmax, wg),
-                       _gamr_domain_radius(dg.amrp), precision, rescue_px)
-    rescued_frac === nothing || (rescued_frac[] = frac)
-    return reshape(img, cam.npix, cam.npix)
+    img = _amr_frame(cfg, snap_or_amrgrid, false, devices, nmax, C, order, wg, precision,
+                     rescue_px, rescued_frac)
+    return reshape(img, cfg.camera.resolution, cfg.camera.resolution)
 end
 
 """
@@ -399,31 +384,37 @@ function render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices = default_pool()
                                   rescued_frac = nothing)
     precision in (:f64, :mixed, :f32_raw) ||
         error("render_gpu_amr_polarized: precision must be :f64, :mixed or :f32_raw, got :$precision")
-    st = KerrSchildCartesian(cfg.bh_a)
+    out = _amr_frame(cfg, snap_or_amrgrid, true, devices, nmax, C, order, wg, precision,
+                     rescue_px, rescued_frac)
+    return _stokes_planes(out, cfg.camera.resolution)
+end
+
+# Full-frame native-AMR render on camera rays made on the device: per-pixel Stokes I
+# (Float64) or IQUV (SVector{4,Float64}) in `camera_rays` order.
+function _amr_frame(cfg, snap_or_amrgrid, polarized, devices, nmax, C, order, wg, precision,
+                    rescue_px, rescued_frac)
+    pool = device_pool(devices)
+    dg = resident_amr(pool, snap_or_amrgrid)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    npx = cam.npix
-    # :f64 full frame == the shared ray-list core on the camera pixel grid (bit-identical).
+    nrays = cam.npix^2
+    items = queue_items(order, nrays)
     if precision === :f64
-        M = march_rays_gpu_amr(cfg, snap_or_amrgrid, camera_rays(st, cam);
-                               polarized = true, devices = devices, nmax = nmax,
-                               C = C, order = order, wg = wg)
-        rescued_frac === nothing || (rescued_frac[] = 0.0)
-        return (I = reshape(M[1, :], npx, npx), Q = reshape(M[2, :], npx, npx),
-                U = reshape(M[3, :], npx, npx), V = reshape(M[4, :], npx, npx))
+        out = _amr_march(cfg, pool, dg, CameraRays(KerrSchildCartesian(cfg.bh_a), cam),
+                         items, nrays, polarized, nmax, C, wg)
+        frac = 0.0
+    else
+        Cf = Float64(C)
+        out = Vector{polarized ? SVector{4,Float64} : Float64}(undef, nrays)
+        gp = polarized ? _gpol_params(cfg) : _gimg_params(cfg)
+        mk = polarized ? _gpol_amr_launch : _famr_launch
+        frac = _amr_mixed!(out, pool, cfg, cam, items,
+                           (a, r_h, escape, R_em) -> mk(dg, gp, a, r_h, typeof(a)(Cf), escape,
+                                                        R_em, nmax, wg),
+                           _gamr_domain_radius(dg.amrp), precision, rescue_px)
     end
-    pool = device_pool(devices)
-    rays = camera_rays(st, cam)
-    dg = resident_amr(pool, snap_or_amrgrid)
-    gp = _gpol_params(cfg)
-    Cf = Float64(C)
-    out = Vector{SVector{4,Float64}}(undef, length(rays))
-    frac = _amr_mixed!(out, pool, cfg, cam, rays, queue_items(order, length(rays)),
-                       (a, r_h, escape, R_em) -> _gpol_amr_launch(dg, gp, a, r_h, typeof(a)(Cf),
-                                                                  escape, R_em, nmax, wg),
-                       _gamr_domain_radius(dg.amrp), precision, rescue_px)
     rescued_frac === nothing || (rescued_frac[] = frac)
-    return _stokes_planes(out, npx)
+    return out
 end
 
 # ================================================================ SLOW LIGHT (opt-in, direct AMR)
@@ -606,14 +597,13 @@ function _amr_slow(cfg, win, devices, kern, gp, ::Type{T}, nmax, C, t_obs, time_
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance
     R_em = _gamr_domain_radius(win.a.amrp)
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
-    out = Vector{T}(undef, length(rays))
-    march!((out,), pool, [MarchPart(queue_items(order, length(rays)), HostRays(rays),
+    out = Vector{T}(undef, cam.npix^2)
+    march!((out,), pool, [MarchPart(queue_items(order, cam.npix^2), CameraRays(st, cam),
         _amr_launch_sl(kern, win, t0, gp, a, r_h, Float64(C), escape, R_em, nmax, wg))])
     return out
 end

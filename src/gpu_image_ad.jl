@@ -14,7 +14,7 @@ using KernelAbstractions
 using LinearAlgebra: dot
 using ForwardDiff
 using ForwardDiff: Dual, partials, value
-using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera, camera_rays
+using BlackLightPlus: KerrSchildCartesian, PlaneParallelCamera
 using BlackLightPlus.Simulation: units
 
 # Bring in render_gpu_fused + the device helpers we reuse (geodesic RHS, metric, fluid
@@ -74,7 +74,6 @@ function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = defau
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
 
     gp = _giad_params(cfg, param)
@@ -85,9 +84,9 @@ function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = defau
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
-    nrays = length(rays)
+    nrays = cam.npix^2
     out = Vector{DT}(undef, nrays)
-    march!((out,), pool, [MarchPart(1:nrays, HostRays(rays),
+    march!((out,), pool, [MarchPart(1:nrays, CameraRays(st, cam),
                                     _giad_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax))])
     outmat = reshape(out, cam.npix, cam.npix)
     image = value.(outmat)

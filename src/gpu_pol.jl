@@ -744,7 +744,6 @@ function render_gpu_polarized(cfg, snap_or_grid; devices = default_pool(),
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
 
     gp = _gpol_params(cfg)
@@ -753,24 +752,24 @@ function render_gpu_polarized(cfg, snap_or_grid; devices = default_pool(),
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
-    nrays = length(rays)
+    nrays = cam.npix^2
     items = queue_items(order, nrays)
     out = Vector{SVector{4,Float64}}(undef, nrays)
     f64 = _gpol_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax)
     frac = 0.0
     if precision === :f64
-        march!((out,), pool, [MarchPart(items, HostRays(rays), f64)])
+        march!((out,), pool, [MarchPart(items, CameraRays(st, cam), f64)])
     else
-        # fp32 geodesic/frame lane: the fp64-built rays are narrowed as they are staged; the
-        # host constructs every march scalar as Float32 (no in-kernel widening), while gp
-        # (units, frequency, fp64 spin gp.bh_a for the RT lane) stays Float64.
+        # fp32 geodesic/frame lane: the fp64 rays are narrowed as the device makes them;
+        # the host constructs every march scalar as Float32 (no in-kernel widening), while
+        # gp (units, frequency, fp64 spin gp.bh_a for the RT lane) stays Float64.
         f32 = _gpol_launch(dgrid, gp, Float32(a), Float32(r_h), Float32(Cf),
                            Float32(escape), Float32(R_em), nmax)
-        march!((out,), pool, [MarchPart(items, HostRays(rays, Float32), f32)])
+        march!((out,), pool, [MarchPart(items, CameraRays(st, cam, Float32), f32)])
         if precision === :mixed
             pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
                                  rescue_px = rescue_px)
-            march!((out,), pool, [MarchPart(pix, HostRays(rays), f64)])
+            march!((out,), pool, [MarchPart(pix, CameraRays(st, cam), f64)])
             frac = length(pix) / nrays
         end
     end
@@ -829,7 +828,6 @@ function render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices = defaul
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     gp = _gpol_params(cfg)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
@@ -837,9 +835,9 @@ function render_gpu_polarized_slow(cfg, win::DeviceFluidWindow; devices = defaul
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(win.a.xo)
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
-    nrays = length(rays)
+    nrays = cam.npix^2
     out = Vector{SVector{4,Float64}}(undef, nrays)
-    march!((out,), pool, [MarchPart(queue_items(order, nrays), HostRays(rays),
+    march!((out,), pool, [MarchPart(queue_items(order, nrays), CameraRays(st, cam),
                                     _gpol_launch_sl(win, t0, gp, a, r_h, Cf, escape, R_em, nmax))])
     return _stokes_planes(out, cam.npix)
 end
@@ -913,7 +911,6 @@ function stiffness_telemetry(cfg, snap_or_grid; devices = default_pool(),
     st = KerrSchildCartesian(cfg.bh_a)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
-    rays = camera_rays(st, cam)
     dgrid = resident_grid(pool, snap_or_grid; box_half = box_half, n = n)
     gp = _gpol_params(cfg)
     a = cfg.bh_a
@@ -921,9 +918,9 @@ function stiffness_telemetry(cfg, snap_or_grid; devices = default_pool(),
     escape = 1.1 * cfg.camera.distance
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)
-    nrays = length(rays)
+    nrays = cam.npix^2
     out = Vector{SVector{4,Float64}}(undef, nrays)
-    march!((out,), pool, [MarchPart(1:nrays, HostRays(rays),
+    march!((out,), pool, [MarchPart(1:nrays, CameraRays(st, cam),
                                     _gpol_launch_stiff(dgrid, gp, a, r_h, Cf, escape, R_em,
                                                        nmax, thresh))])
     nv = sum(o[1] for o in out)
