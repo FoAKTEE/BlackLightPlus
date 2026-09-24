@@ -150,23 +150,101 @@ end
     if !on_grid(st, X)
         st.offgrid_eta && return SMatrix{4,4,T,16}(ETA)   # off-grid → Minkowski (ray terminates)
     end
-    α, β, γ = sample_adm(st, X[2], X[3], X[4])
+    return _adm_lower(sample_adm(st, X[2], X[3], X[4])...)
+end
+
+# g_00 = -α² + β_i β^i, g_0i = β_i = γ_ij β^j, g_ij = γ_ij.
+@inline function _adm_lower(α, β, γ)
     βd = γ * β                                            # β_i = γ_ij β^j
     b2 = dot(βd, β)                                        # β_i β^i
     g00 = -α * α + b2
     gxx = γ[1,1]; gxy = γ[1,2]; gxz = γ[1,3]
     gyy = γ[2,2]; gyz = γ[2,3]; gzz = γ[3,3]
-    return SMatrix{4,4,T,16}(g00,   βd[1], βd[2], βd[3],   # (symmetric ⇒ column = row)
-                             βd[1], gxx,   gxy,   gxz,
-                             βd[2], gxy,   gyy,   gyz,
-                             βd[3], gxz,   gyz,   gzz)
+    return SMatrix{4,4}(g00,   βd[1], βd[2], βd[3],        # (symmetric ⇒ column = row)
+                        βd[1], gxx,   gxy,   gxz,
+                        βd[2], gxy,   gyy,   gyz,
+                        βd[3], gxz,   gyz,   gzz)
 end
+
+# The 3+1 inverse: g^00 = -1/α², g^0i = β^i/α², g^ij = γ^ij - β^i β^j/α². A 3×3
+# inverse of γ replaces the 4×4 inverse of g (the in-kernel AD derivative runs on it).
+@inline function _adm_raise(α, β, γ)
+    γi = inv(γ)
+    ia2 = 1 / (α * α)
+    b1 = β[1] * ia2; b2 = β[2] * ia2; b3 = β[3] * ia2
+    gxx = γi[1,1] - β[1] * b1; gxy = γi[1,2] - β[1] * b2; gxz = γi[1,3] - β[1] * b3
+    gyy = γi[2,2] - β[2] * b2; gyz = γi[2,3] - β[2] * b3; gzz = γi[3,3] - β[3] * b3
+    return SMatrix{4,4}(-ia2, b1,  b2,  b3,
+                        b1,   gxx, gxy, gxz,
+                        b2,   gxy, gyy, gyz,
+                        b3,   gxz, gyz, gzz)
+end
+
+@inline function _adm_gcon(st, X::SVector{4,T}) where {T}
+    if !on_grid(st, X)
+        st.offgrid_eta && return SMatrix{4,4,T,16}(ETA)
+    end
+    return _adm_raise(sample_adm(st, X[2], X[3], X[4])...)
+end
+
+@inline function _adm_pair(st, X::SVector{4,T}) where {T}
+    if !on_grid(st, X)
+        st.offgrid_eta && return SMatrix{4,4,T,16}(ETA), SMatrix{4,4,T,16}(ETA)
+    end
+    α, β, γ = sample_adm(st, X[2], X[3], X[4])
+    return _adm_lower(α, β, γ), _adm_raise(α, β, γ)
+end
+
+# Contractions g_μν v^ν and g^μν p_ν from (α, β^i, γ_ij) without the 4×4 matrices:
+# (g v)_0 = (β_iβ^i - α²) v^0 + β_i v^i, (g v)_i = β_i v^0 + γ_ij v^j;
+# (g⁻¹p)^0 = -q/α², (g⁻¹p)^i = γ^ij p_j + β^i q/α², q = p_0 - β^i p_i.
+@inline function _adm_lower_index(st, X::SVector{4,T}, v::SVector{4}) where {T}
+    R = promote_type(T, eltype(v), eltype(st.data))
+    if !on_grid(st, X)
+        st.offgrid_eta && return SVector{4,R}(_eta_apply(v))
+    end
+    α, β, γ = sample_adm(st, X[2], X[3], X[4])
+    βd = γ * β
+    vs = SVector(v[2], v[3], v[4])
+    gs = βd * v[1] + γ * vs
+    return SVector{4,R}((dot(βd, β) - α * α) * v[1] + dot(βd, vs), gs[1], gs[2], gs[3])
+end
+@inline function _adm_raise_index(st, X::SVector{4,T}, p::SVector{4}) where {T}
+    R = promote_type(T, eltype(p), eltype(st.data))
+    if !on_grid(st, X)
+        st.offgrid_eta && return SVector{4,R}(_eta_apply(p))
+    end
+    α, β, γ = sample_adm(st, X[2], X[3], X[4])
+    ps = SVector(p[2], p[3], p[4])
+    qa = (p[1] - dot(β, ps)) / (α * α)
+    gs = inv(γ) * ps + β * qa
+    return SVector{4,R}(-qa, gs[1], gs[2], gs[3])
+end
+# (g⁻¹p, g⁻¹(p,p)) with g⁻¹(p,p) = γ^ij p_i p_j - q²/α².
+@inline function _adm_raise_and_norm(st, X::SVector{4,T}, p::SVector{4}) where {T}
+    R = promote_type(T, eltype(p), eltype(st.data))
+    if !on_grid(st, X)
+        st.offgrid_eta && (ηp = _eta_apply(p); return SVector{4,R}(ηp), R(dot(p, ηp)))
+    end
+    α, β, γ = sample_adm(st, X[2], X[3], X[4])
+    ps = SVector(p[2], p[3], p[4])
+    q = p[1] - dot(β, ps)
+    qa = q / (α * α)
+    gps = inv(γ) * ps
+    gs = gps + β * qa
+    return SVector{4,R}(-qa, gs[1], gs[2], gs[3]), R(dot(ps, gps) - q * qa)
+end
+@inline raise_and_norm(st::ADMGridSpacetime, x::SVector{4}, p::SVector{4}) =
+    _adm_raise_and_norm(st, x, p)
+@inline lower_index(st::ADMGridSpacetime, x::SVector{4}, v::SVector{4}) = _adm_lower_index(st, x, v)
+@inline raise_index(st::ADMGridSpacetime, x::SVector{4}, p::SVector{4}) = _adm_raise_index(st, x, p)
 
 "ADM 4-metric g_μν from the cubically interpolated (α, β^i, γ_ij)."
 @inline metric(st::ADMGridSpacetime, X::SVector{4}) = _adm_gcov(st, X)
 
-"Contravariant metric by direct 4×4 inverse; the generic AD `inverse_metric_gradient` then supplies ∂g^{μν}."
-@inline inverse_metric(st::ADMGridSpacetime, x::SVector{4}) = inv(metric(st, x))
+"Contravariant metric by the 3+1 closed form; the generic AD `inverse_metric_gradient` then supplies ∂g^{μν}."
+@inline inverse_metric(st::ADMGridSpacetime, x::SVector{4}) = _adm_gcon(st, x)
+@inline metric_and_inverse(st::ADMGridSpacetime, x::SVector{4}) = _adm_pair(st, x)
 
 # ---------------------------------------------------------------- ADM-from-metric builder
 "Extract ADM data (α, β^i, γ_ij) from a covariant 4-metric."

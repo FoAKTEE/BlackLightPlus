@@ -35,6 +35,13 @@ UserMetric(f::F) where {F} = UserMetric{F,Float64}(f)
 
 const ETA = @SMatrix Float64[-1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1]
 
+# Minkowski η in the value precision of a metric component type: Float32 stays Float32
+# (the fp32 geodesic lane), a ForwardDiff Dual takes η in its value type (η has no
+# derivative), anything else takes the Float64 ETA.
+@inline _eta(::Type{T}) where {T<:AbstractFloat} = SMatrix{4,4,T}(ETA)
+@inline _eta(::Type{ForwardDiff.Dual{G,V,N}}) where {G,V,N} = _eta(V)
+@inline _eta(::Type) = ETA
+
 # ---------------------------------------------------------------- Kerr-Schild
 # (r, f, l_a) for ONE Kerr-Schild hole of mass M, spin a, at the local Cartesian
 # offset (X,Y,Z) from that hole (hypot-form root, robust near the ring). THE single
@@ -63,8 +70,9 @@ const ETA = @SMatrix Float64[-1 0 0 0; 0 1 0 0; 0 0 1 0; 0 0 0 1]
     return r, f, l
 end
 
-# Single Kerr (M = 1) from the shared primitive.
-@inline _rfl(x::SVector{4,T}, a) where {T} = _ks_term(x[2], x[3], x[4], one(T), a)
+# Single Kerr (M = 1) from the shared primitive. The unit mass takes the spin's type, so
+# a Dual position does not carry a derivative-free mass through the products.
+@inline _rfl(x::SVector{4}, a) = _ks_term(x[2], x[3], x[4], one(a), a)
 
 """
     ks_radius(st::KerrSchildCartesian, x::SVector{4}) -> Float64
@@ -95,14 +103,28 @@ See also [`horizon_radius_hole`](@ref) for the binary case.
 
 @inline function metric(st::KerrSchildCartesian, x::SVector{4})
     _, f, l = _rfl(x, st.a)
-    return ETA + f * (l * l')
+    return _eta(typeof(f)) + f * (l * l')
 end
 
 "Exact Kerr-Schild inverse: g^{ab} = η^{ab} − f l^a l^b with l^a = η^{ab} l_b."
 @inline function inverse_metric(st::KerrSchildCartesian, x::SVector{4})
     _, f, l = _rfl(x, st.a)
     lu = SVector(-l[1], l[2], l[3], l[4])
-    return ETA - f * (lu * lu')
+    return _eta(typeof(f)) - f * (lu * lu')
+end
+
+"""
+    metric_and_inverse(st, x) -> (g_μν, g^μν)
+
+Covariant and contravariant metric at `x`. Spacetimes with a closed-form inverse
+evaluate their shared terms once (single Kerr-Schild: one `(r, f, l)`).
+"""
+@inline metric_and_inverse(st, x::SVector{4}) = (metric(st, x), inverse_metric(st, x))
+@inline function metric_and_inverse(st::KerrSchildCartesian, x::SVector{4})
+    _, f, l = _rfl(x, st.a)
+    lu = SVector(-l[1], l[2], l[3], l[4])
+    eta = _eta(typeof(f))
+    return eta + f * (l * l'), eta - f * (lu * lu')
 end
 
 @inline metric(::Minkowski, ::SVector{4}) = ETA
@@ -126,14 +148,8 @@ end
 # in-kernel GPU RHS uses) and write the exact-zero t-column. Spatial columns are
 # bit-identical to the 4-column jacobian (per-partial dual arithmetic is independent).
 @inline function inverse_metric_gradient(st::StationarySpacetime, x::SVector{4,T}) where {T}
-    # A REAL tag (not Nothing), parameterized by T: under nested AD (Dual st.a or x)
-    # T embeds the outer tag, so this tag is instantiated later ⇒ ranks outermost
-    # (ForwardDiff tagcount ordering) and `partials` below extracts OUR seeds.
-    Tg = typeof(ForwardDiff.Tag(inverse_metric_gradient, T))
-    z = zero(T); o = one(T)
-    xd = SVector(ForwardDiff.Dual{Tg}(x[1], (z, z, z)), ForwardDiff.Dual{Tg}(x[2], (o, z, z)),
-                 ForwardDiff.Dual{Tg}(x[3], (z, o, z)), ForwardDiff.Dual{Tg}(x[4], (z, z, o)))
-    gd = inverse_metric(st, xd)                                  # values + ∂/∂(x,y,z)
+    z = zero(T)
+    gd = inverse_metric(st, _seed_spatial(x))                    # values + ∂/∂(x,y,z)
     return SArray{Tuple{4,4,4},T}((ntuple(_ -> z, Val(16))...,
                                    ntuple(k -> ForwardDiff.partials(gd[k])[1], Val(16))...,
                                    ntuple(k -> ForwardDiff.partials(gd[k])[2], Val(16))...,
@@ -143,8 +159,47 @@ end
     zero(SArray{Tuple{4,4,4},T})
 
 # ---------------------------------------------------------------- index utils
+"""
+    lower_index(st, x, v) -> g_μν(x) v^ν
+    raise_index(st, x, p) -> g^μν(x) p_ν
+
+Metric contractions without the 4×4 matrix where the spacetime has a closed form
+(Kerr-Schild, superposed Kerr-Schild, ADM grid). With a dual-number position the
+partials are the derivatives of the contraction, which is how the geodesic RHS and the
+frame transport differentiate the metric in-kernel without forming ∂g.
+"""
 @inline lower_index(st, x, v::SVector{4}) = metric(st, x) * v
 @inline raise_index(st, x, v::SVector{4}) = inverse_metric(st, x) * v
+
+@inline _eta_apply(v::SVector{4}) = SVector(-v[1], v[2], v[3], v[4])
+
+@inline function lower_index(st::KerrSchildCartesian, x::SVector{4}, v::SVector{4})
+    _, f, l = _rfl(x, st.a)
+    return _eta_apply(v) + (f * dot(l, v)) * l
+end
+@inline function raise_index(st::KerrSchildCartesian, x::SVector{4}, p::SVector{4})
+    _, f, l = _rfl(x, st.a)
+    lu = _eta_apply(l)
+    return _eta_apply(p) - (f * dot(lu, p)) * lu
+end
+@inline lower_index(::Minkowski, x::SVector{4}, v::SVector{4}) = _eta_apply(v)
+@inline raise_index(::Minkowski, x::SVector{4}, p::SVector{4}) = _eta_apply(p)
+
+"""
+    raise_and_norm(st, x, p) -> (g^{μν}p_ν, g^{μν}p_μp_ν)
+
+The raised covector and its squared norm (twice the geodesic Hamiltonian) from one
+metric evaluation; the closed-form spacetimes contract the norm directly (Kerr-Schild:
+η(p,p) − f (l^a p_a)²).
+"""
+@inline raise_and_norm(st, x, p::SVector{4}) = (gp = raise_index(st, x, p); (gp, dot(p, gp)))
+@inline function raise_and_norm(st::KerrSchildCartesian, x::SVector{4}, p::SVector{4})
+    _, f, l = _rfl(x, st.a)
+    lu = _eta_apply(l)
+    lp = dot(lu, p)
+    ηp = _eta_apply(p)
+    return ηp - (f * lp) * lu, dot(p, ηp) - f * (lp * lp)
+end
 
 
 """

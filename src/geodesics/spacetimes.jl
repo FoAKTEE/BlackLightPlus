@@ -42,17 +42,72 @@ end
 # One Kerr-Schild hole's (r, f, l_a) comes from the shared `_ks_term` primitive
 # (metrics.jl) — the same closed form single Kerr uses, evaluated at the per-hole
 # offset. Superposition then sums f_A l^A_μ l^A_ν over the holes.
-@inline function metric(st::SuperposedKerrSchild{N}, x::SVector{4,T}) where {N,T}
-    g = ETA
-    @inbounds for A in 1:N
-        c = st.center[A]
-        _, f, l = _ks_term(x[2] - c[1], x[3] - c[2], x[4] - c[3], st.mass[A], st.spin[A])
-        g = g + f * (l * l')
-    end
-    return g
+@inline function _hole_term(st::SuperposedKerrSchild, x::SVector{4}, A::Int)
+    c = st.center[A]
+    _, f, l = _ks_term(x[2] - c[1], x[3] - c[2], x[4] - c[3], st.mass[A], st.spin[A])
+    return (f, l)
+end
+# (the `@inline` inside the closure keeps the per-hole body out of a device call)
+@inline _hole_terms(st::SuperposedKerrSchild{N}, x::SVector{4}) where {N} =
+    ntuple(A -> (@inline; _hole_term(st, x, A)), Val(N))
+
+# Left fold over a tuple, unrolled at compile time (type-stable when the accumulator's
+# type changes on the first step, e.g. a Float64 η plus a dual term).
+@inline _tfold(op, acc, ::Tuple{}) = acc
+@inline _tfold(op, acc, t::Tuple) = _tfold(op, op(acc, first(t)), Base.tail(t))
+
+# g = η + Σ_A f_A l_A l_Aᵀ, summed hole by hole.
+@inline _add_hole(g, t) = g + t[1] * (t[2] * t[2]')
+@inline _superposed_gcov(terms::Tuple) = _tfold(_add_hole, _eta(typeof(terms[1][1])), terms)
+
+# Contravariant metric by the Woodbury identity: g⁻¹ = η − U K⁻¹ F Uᵀ with U = η L (the
+# raised l^A) and the N×N K = I + F P, P = Lᵀ η L (P_AA = l_A·η·l_A vanishes up to
+# round-off: each l_A is null). One hole gives the Kerr-Schild closed form η − f l^a l^b;
+# two holes need a 2×2 solve in place of a 4×4 inverse, which keeps the in-kernel AD
+# derivative cheap.
+@inline function _superposed_gcon(terms::NTuple{N}) where {N}
+    L = hcat(map(t -> t[2], terms)...)
+    U = hcat(map(t -> (l = t[2]; SVector(-l[1], l[2], l[3], l[4])), terms)...)
+    F = Diagonal(SVector(map(first, terms)))
+    K = one(SMatrix{N,N,eltype(F)}) + F * (U' * L)
+    return _eta(eltype(F)) - U * ((inv(K) * F) * U')
 end
 
-@inline inverse_metric(st::SuperposedKerrSchild, x::SVector{4}) = inv(metric(st, x))
+# g^{-1}p by the same Woodbury form, contracted without the 4×4 matrix.
+@inline function _superposed_raise(terms::NTuple{N}, p::SVector{4}) where {N}
+    L = hcat(map(t -> t[2], terms)...)
+    U = hcat(map(t -> (l = t[2]; SVector(-l[1], l[2], l[3], l[4])), terms)...)
+    F = Diagonal(SVector(map(first, terms)))
+    K = one(SMatrix{N,N,eltype(F)}) + F * (U' * L)
+    return _eta_apply(p) - U * ((inv(K) * F) * (U' * p))
+end
+
+@inline function raise_and_norm(st::SuperposedKerrSchild{N}, x::SVector{4},
+                                p::SVector{4}) where {N}
+    terms = _hole_terms(st, x)
+    L = hcat(map(t -> t[2], terms)...)
+    U = hcat(map(t -> (l = t[2]; SVector(-l[1], l[2], l[3], l[4])), terms)...)
+    F = Diagonal(SVector(map(first, terms)))
+    K = one(SMatrix{N,N,eltype(F)}) + F * (U' * L)
+    w = U' * p                                            # l^A p (N components)
+    Mw = (inv(K) * F) * w
+    ηp = _eta_apply(p)
+    return ηp - U * Mw, dot(p, ηp) - dot(w, Mw)
+end
+
+@inline lower_index(st::SuperposedKerrSchild, x::SVector{4}, v::SVector{4}) =
+    _tfold((g, t) -> (@inline; g + (t[1] * dot(t[2], v)) * t[2]), _eta_apply(v),
+           _hole_terms(st, x))
+@inline raise_index(st::SuperposedKerrSchild, x::SVector{4}, p::SVector{4}) =
+    _superposed_raise(_hole_terms(st, x), p)
+
+@inline metric(st::SuperposedKerrSchild, x::SVector{4}) = _superposed_gcov(_hole_terms(st, x))
+@inline inverse_metric(st::SuperposedKerrSchild, x::SVector{4}) =
+    _superposed_gcon(_hole_terms(st, x))
+@inline function metric_and_inverse(st::SuperposedKerrSchild, x::SVector{4})
+    terms = _hole_terms(st, x)
+    return _superposed_gcov(terms), _superposed_gcon(terms)
+end
 
 "Local KS radius of hole A (for termination / diagnostics)."
 @inline function ks_radius_hole(st::SuperposedKerrSchild, x::SVector{4}, A::Int)

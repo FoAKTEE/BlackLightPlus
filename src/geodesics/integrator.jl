@@ -130,21 +130,77 @@ function nullify_covariant(st, x::SVector{4,T}, ps::SVector{3,T}) where {T}
     return SVector(pt, ps[1], ps[2], ps[3])
 end
 
-"Hamiltonian geodesic RHS for stationary metrics (the exact-zero dp_t/dλ is dropped)."
+"""
+    geodesic_rhs(st::StationarySpacetime, y) -> dy/dλ
+
+Hamiltonian geodesic RHS for stationary metrics (the exact-zero dp_t/dλ is dropped):
+dx^μ/dλ = g^{μν}p_ν and dp_i/dλ = -∂_i H with H = ½ g^{μν}p_μp_ν. Both come from one
+`raise_and_norm` on a position carrying three spatial dual partials: the value lane of
+the raised covector is g^{μν}p_ν, and the partials of the norm are ∂_i(2H). Spacetimes
+with a closed-form contraction never form g^{μν} or ∂g^{μν} (few live values per
+device thread).
+"""
 @inline function geodesic_rhs(st::StationarySpacetime, y::SVector{8,T}) where {T}
     x = SVector(y[1], y[2], y[3], y[4])
     p = SVector(y[5], y[6], y[7], y[8])
-    gi = inverse_metric(st, x)
-    dg = inverse_metric_gradient(st, x)                 # dg[a,b,c] = ∂_c g^{ab}
-    dx = gi * p
+    gp, h2 = raise_and_norm(st, _seed_spatial(x), p)     # g^{μν}p_ν, 2H and ∂_{x,y,z}
+    dh = ForwardDiff.partials(h2)
+    v = ForwardDiff.value
+    return SVector(v(gp[1]), v(gp[2]), v(gp[3]), v(gp[4]), zero(T),
+                   -dh[1] / 2, -dh[2] / 2, -dh[3] / 2)
+end
+@inline geodesic_rhs(::Minkowski, y::SVector{8,T}) where {T} =
+    SVector(-y[5], y[6], y[7], y[8], zero(T), zero(T), zero(T), zero(T))
+
+"""
+    geodesic_transport_rhs(st::StationarySpacetime, y, vs::NTuple{M,SVector{4}})
+        -> (dy, dvs::NTuple{M,SVector{4}})
+
+The geodesic RHS plus the parallel transport dV^μ/dλ = -Γ^μ_{αβ} k^α V^β of M vectors
+along the ray (k^μ = dx^μ/dλ), with
+2Γ^μ_{αβ} k^α V^β = g^{μλ}[(k·∂)g_{λβ} V^β + (V·∂)g_{λα} k^α - k^α V^β ∂_λ g_{αβ}]
+(∂_t g ≡ 0). One `metric_and_inverse` evaluation at the spatially seeded position
+gives g^{ab} and ∂_c g^{ab} (the geodesic, dp_i = -½ ∂_i g^{μν} p_μ p_ν; equal to
+`geodesic_rhs` to round-off) and ∂_c g_{ab} (the transport); no Christoffel symbol is
+formed. Runs in the state's number type (the fp32 device lane included).
+"""
+@inline function geodesic_transport_rhs(st::StationarySpacetime, y::SVector{8,T},
+                                        vs::NTuple{M,SVector{4,T}}) where {T,M}
+    x = SVector(y[1], y[2], y[3], y[4])
+    p = SVector(y[5], y[6], y[7], y[8])
+    gcovd, gcond = metric_and_inverse(st, _seed_spatial(x))
+    gcon = SMatrix{4,4,T}(ntuple(i -> ForwardDiff.value(gcond[i]), Val(16)))
+    k = gcon * p
     dp1 = zero(T); dp2 = zero(T); dp3 = zero(T)
     @inbounds for μ in 1:4, ν in 1:4
         pp = p[μ] * p[ν]
-        dp1 -= pp * dg[μ, ν, 2]
-        dp2 -= pp * dg[μ, ν, 3]
-        dp3 -= pp * dg[μ, ν, 4]
+        prt = ForwardDiff.partials(gcond[μ, ν])
+        dp1 -= pp * prt[1]; dp2 -= pp * prt[2]; dp3 -= pp * prt[3]
     end
-    return SVector(dx[1], dx[2], dx[3], dx[4], zero(T), dp1 / 2, dp2 / 2, dp3 / 2)
+    dy = SVector(k[1], k[2], k[3], k[4], zero(T), dp1 / 2, dp2 / 2, dp3 / 2)
+    dg2 = SMatrix{4,4,T}(ntuple(i -> ForwardDiff.partials(gcovd[i], 1), Val(16)))
+    dg3 = SMatrix{4,4,T}(ntuple(i -> ForwardDiff.partials(gcovd[i], 2), Val(16)))
+    dg4 = SMatrix{4,4,T}(ntuple(i -> ForwardDiff.partials(gcovd[i], 3), Val(16)))
+    q2 = dg2 * k; q3 = dg3 * k; q4 = dg4 * k              # ∂_c g_{ab} k^b
+    # ∂_c g is symmetric, so (V·∂)g k = Σ_c V^c q_c and k^α V^β ∂_c g_{αβ} = q_c·V
+    @inline function _transport(v)
+        t1 = k[2] .* (dg2 * v) .+ k[3] .* (dg3 * v) .+ k[4] .* (dg4 * v)   # (k·∂)g V
+        t2 = v[2] .* q2 .+ v[3] .* q3 .+ v[4] .* q4
+        t3 = SVector(zero(T), dot(q2, v), dot(q3, v), dot(q4, v))
+        return -(T(0.5) .* (gcon * (t1 .+ t2 .- t3)))
+    end
+    return dy, map(_transport, vs)
+end
+
+# Position with three hand-seeded spatial dual partials (∂_t g ≡ 0 on a stationary
+# metric, so the time lane would be dead work). A REAL tag parameterized by T: under
+# nested AD (Dual spin or position) T embeds the outer tag, so this tag ranks
+# outermost (ForwardDiff tagcount ordering) and `partials` extracts these seeds.
+@inline function _seed_spatial(x::SVector{4,T}) where {T}
+    Tg = typeof(ForwardDiff.Tag(inverse_metric_gradient, T))
+    z = zero(T); o = one(T)
+    return SVector(ForwardDiff.Dual{Tg}(x[1], (z, z, z)), ForwardDiff.Dual{Tg}(x[2], (o, z, z)),
+                   ForwardDiff.Dual{Tg}(x[3], (z, o, z)), ForwardDiff.Dual{Tg}(x[4], (z, z, o)))
 end
 
 """
@@ -212,13 +268,20 @@ function trace_geodesic(st::AnalyticSpacetime, y0::SVector{8}; λmax=1.0e5,
                  save_everystep, save_start=save_everystep)
 end
 
-"One classical fixed-step RK4 step (AD/GPU mode: static computation graph)."
+"""
+    rk4_step_fixed(st, y, h) -> y_next
+
+One classical fixed-step RK4 step (AD/GPU mode: static computation graph), in the
+low-storage streaming form: the stage sum ((k1 + 2k2) + 2k3) + k4 accumulates as each
+stage is formed, so only one stage derivative is live at a time (fewer registers per
+device thread). Same operations and association as `y + (h/6)(k1 + 2k2 + 2k3 + k4)`.
+"""
 @inline function rk4_step_fixed(st, y::SVector{8,T}, h::T) where {T}
-    k1 = geodesic_rhs(st, y)
-    k2 = geodesic_rhs(st, y + (h / 2) * k1)
-    k3 = geodesic_rhs(st, y + (h / 2) * k2)
-    k4 = geodesic_rhs(st, y + h * k3)
-    return y + (h / 6) * (k1 + 2k2 + 2k3 + k4)
+    d = geodesic_rhs(st, y);  acc = d;         ys = y + (h / 2) * d
+    d = geodesic_rhs(st, ys); acc = acc + 2*d; ys = y + (h / 2) * d
+    d = geodesic_rhs(st, ys); acc = acc + 2*d; ys = y + h * d
+    d = geodesic_rhs(st, ys); acc = acc + d
+    return y + (h / 6) * acc
 end
 
 """
