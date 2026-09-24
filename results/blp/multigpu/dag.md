@@ -370,3 +370,16 @@ acceptance runs. Revert a node with `git revert <SHAs>` in reverse DAG order
 
 Kernel signatures are unchanged by these nodes; the only new kernel is
 `_camray_kernel!` (MG08).
+
+## Landed commits and reverts (lane B, CPU-verified, speed unmeasured)
+
+| node | commits (revert these) | CPU verification | GPU acceptance to run |
+|---|---|---|---|
+| `MG12` | `e253c10` (geodesic contraction form, closed-form binary/ADM inverses), `35ebb96` (kernels call the CPU physics), `adcfce7` (audit rows) | 31 test files on the KA CPU backend; coefficient, Bessel, RHS and frame-transport values pinned; kernel images vs pre-change: Stokes I ≤ 2.6e-12 of max, IQUV ≤ 8e-13 (Kerr) / 4e-11 (binary) | fused unpolarized and polarized single-GPU throughput within −2% of the `MG01` baseline |
+| `MG13` | `6031897` (one reverse march per mode; CPU polarized scheme = transported frame), `ba1f1df` (docs), `ca207e4` (audit rows) | CPU vs kernel on identical trajectories ≤ 1e-8 of the brightest pixel; step-density study C = 20…1280 | throughput within −2% on every leg; 1-vs-2 GPU bitwise equal |
+
+Kernel resources after lane B (`bench/kernel_audit_baseline.json`): `fused` 240 → 172
+registers and 2208 → 32 B stack; `gsp_bbh` spill 5004/7060 → 108/100 B; `gsp_pol_bbh`
+6480/9712 → 2120/2208 B; `gsp_adm` 504/472 → 244/244 B; `gpol` stack 3352 → 2768 B.
+Open: `gsp_pol_adm` (≈2.7/3.0 KB spill) and `analytic` (1.5 KB + 1.9 KB callee spill in
+the elliptic-function and complex-power routines).
