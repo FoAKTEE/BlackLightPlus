@@ -564,7 +564,7 @@ end
     # queue order validation (the drivers' `order` argument)
     ord = [3, 1, 2, 5, 4, 6, 10, 9, 8, 7, 12, 11]
     @test queue_items(nothing, 12) == 1:12 && queue_items(ord, 12) === ord
-    @test march_sort_order([5, 2, 8, 1]) == [4, 2, 1, 3]              # ascending trip-count sort
+    @test march_sort_order([5, 2, 8, 1]) == [3, 1, 2, 4]              # longest trip count first
     @test_throws ErrorException queue_items(vcat([1, 1], collect(3:12)), 12)  # not a permutation
     @test_throws ErrorException queue_items(collect(1:11), 12)                # wrong length
     permute(v, o) = v[o]                                         # rays in queue order

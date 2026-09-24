@@ -320,21 +320,25 @@ function _amr_march(cfg, pool, dg, src, items, nrays, polarized, nmax, C, wg)
 end
 
 # :mixed / :f32_raw full-frame native-AMR render (the rescue is pixel-GRID-coupled, so it
-# lives only at this level): the fp32 lane over every pixel, then (:mixed) the fp64 lane
-# over the pixels within `rescue_px` of the critical curve. `launch(a, r_h, escape,
-# R_em)` builds the kernel launch at the scalars' type; writes `out`, returns the rescued
-# fraction.
+# lives only at this level): the fp32 lane over every pixel except (:mixed) those within
+# `rescue_px` of the critical curve, which are queued first in fp64. `launch(a, r_h,
+# escape, R_em)` builds the kernel launch at the scalars' type; writes `out`, returns the
+# rescued fraction.
 function _amr_mixed!(out, pool, cfg, cam, items, launch, R_em, precision, rescue_px)
     st = KerrSchildCartesian(cfg.bh_a)
     a = cfg.bh_a
     r_h = 1 + sqrt(1 - a * a)
     escape = 1.1 * cfg.camera.distance
-    march!((out,), pool, [MarchPart(items, CameraRays(st, cam, Float32),
-        launch(Float32(a), Float32(r_h), Float32(escape), Float32(R_em)))])
-    precision === :mixed || return 0.0
+    f32 = launch(Float32(a), Float32(r_h), Float32(escape), Float32(R_em))
+    if precision === :f32_raw
+        march!((out,), pool, [MarchPart(items, CameraRays(st, cam, Float32), f32)])
+        return 0.0
+    end
     pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
                          rescue_px = rescue_px)
-    march!((out,), pool, [MarchPart(pix, CameraRays(st, cam), launch(a, r_h, escape, R_em))])
+    march!((out,), pool, _mixed_parts(items, pix, CameraRays(st, cam),
+                                      CameraRays(st, cam, Float32),
+                                      launch(a, r_h, escape, R_em), f32))
     return length(pix) / cam.npix^2
 end
 
@@ -346,10 +350,12 @@ Fused single-pass GPU render of the unpolarized (Stokes I) npix×npix image, sam
 the AMR meshblock hierarchy directly on device (nothing is resampled — no `box_half`/
 `n`). `snap_or_amrgrid`: `AthenaKSnapshot` (uploaded once per device pool) or
 pre-uploaded `DeviceAMRGrid`. Layout as `render(...;polarized=false).I`; `order` sets
-the queue order (bit-exact per pixel); `wg` overrides the block size. `precision`:
-`:f64` (default, bitwise unchanged) · `:mixed` (fp32 march + fp64 RT + critical-curve
-rescue splice within `rescue_px` px; `rescued_frac::Ref{Float64}` receives the
-fraction) · `:f32_raw` (no rescue — DIAGNOSTIC only). See `render_gpu_fused`.
+the queue order (default `cost_order`; bit-exact per pixel); `wg` overrides the block
+size. `precision`:
+`:f64` (default, bitwise unchanged) · `:mixed` (fp32 march + fp64 RT, the pixels within
+`rescue_px` px of the critical curve marched in fp64 and queued first;
+`rescued_frac::Ref{Float64}` receives their fraction) · `:f32_raw` (no rescue —
+DIAGNOSTIC only). See `render_gpu_fused`.
 """
 function render_gpu_amr(cfg, snap_or_amrgrid; devices = default_pool(),
                         nmax::Int = cfg.max_steps, C::Real = 80,
@@ -370,12 +376,13 @@ end
 
 Full-Stokes fused GPU render sampling the AMR fluid directly on device (closes the
 uniform-resample EVPA caveat). Mirrors `render_gpu_polarized` but with the AMR sampler.
-`order` sets the queue order (bit-exact per pixel); `wg` overrides the register-heavy
-kernel's block size (defaults to `_GPOL_WG`). `precision`: `:f64` (default, bitwise
-unchanged) · `:mixed` (fp32 geodesic + frame transport, fp64 Stokes/coefficients from
-converted state, critical-curve rescue splice within `rescue_px` px;
-`rescued_frac::Ref{Float64}` receives the fraction) · `:f32_raw` (no rescue — DIAGNOSTIC
-only). See `render_gpu_polarized` for the full contract.
+`order` sets the queue order (default `cost_order`; bit-exact per pixel); `wg`
+overrides the register-heavy kernel's block size (defaults to `_GPOL_WG`). `precision`:
+`:f64` (default, bitwise unchanged) · `:mixed` (fp32 geodesic + frame transport, fp64
+Stokes/coefficients from converted state; the pixels within `rescue_px` px of the
+critical curve marched in fp64 and queued first; `rescued_frac::Ref{Float64}` receives
+their fraction) · `:f32_raw` (no rescue — DIAGNOSTIC only). See `render_gpu_polarized`
+for the full contract.
 """
 function render_gpu_amr_polarized(cfg, snap_or_amrgrid; devices = default_pool(),
                                   nmax::Int = cfg.max_steps, C::Real = 80,
@@ -398,7 +405,7 @@ function _amr_frame(cfg, snap_or_amrgrid, polarized, devices, nmax, C, order, wg
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
     nrays = cam.npix^2
-    items = queue_items(order, nrays)
+    items = _frame_items(order, cfg, cam.npix)
     if precision === :f64
         out = _amr_march(cfg, pool, dg, CameraRays(KerrSchildCartesian(cfg.bh_a), cam),
                          items, nrays, polarized, nmax, C, wg)
@@ -603,7 +610,7 @@ function _amr_slow(cfg, win, devices, kern, gp, ::Type{T}, nmax, C, t_obs, time_
     R_em = _gamr_domain_radius(win.a.amrp)
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
     out = Vector{T}(undef, cam.npix^2)
-    march!((out,), pool, [MarchPart(queue_items(order, cam.npix^2), CameraRays(st, cam),
+    march!((out,), pool, [MarchPart(_frame_items(order, cfg, cam.npix), CameraRays(st, cam),
         _amr_launch_sl(kern, win, t0, gp, a, r_h, Float64(C), escape, R_em, nmax, wg))])
     return out
 end

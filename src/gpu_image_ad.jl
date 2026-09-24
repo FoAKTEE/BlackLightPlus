@@ -86,7 +86,7 @@ function render_gpu_fused_grad(cfg, snap_or_grid, param::Symbol; devices = defau
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
     nrays = cam.npix^2
     out = Vector{DT}(undef, nrays)
-    march!((out,), pool, [MarchPart(1:nrays, CameraRays(st, cam),
+    march!((out,), pool, [MarchPart(_frame_items(nothing, cfg, cam.npix), CameraRays(st, cam),
                                     _giad_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax))])
     outmat = reshape(out, cam.npix, cam.npix)
     image = value.(outmat)

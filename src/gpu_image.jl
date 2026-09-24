@@ -407,14 +407,16 @@ end
 """
     march_sort_order(counts) -> Vector{Int}
 
-Permutation sorting rays by ascending march trip count (`counts[i]` = steps ray `i`
-marched). Pass it as the `order` kwarg of the `render_gpu_*` drivers to group similar-
-length rays so each warp's lanes finish together. Note: on the fused native-AMR path,
-camera-order rays are spatially coherent and trip-count sorting scatters that sampling
-locality — leave `order = nothing` there unless a fixed-camera movie loop amortizes a
-logged-frame permutation (the queue order is bit-exact per pixel either way).
+Permutation sorting rays by descending march trip count (`counts[i]` = steps ray `i`
+marched, e.g. in the previous frame of a movie). Pass it as the `order` kwarg of the
+`render_gpu_*` drivers: the longest rays are queued first, so they do not end the render
+on one device while the others idle (longest-processing-time-first makespan), and each
+warp's lanes march similar-length rays. Note: on the fused native-AMR path, camera-order
+rays are spatially coherent and trip-count sorting scatters that sampling locality — the
+default `cost_order` keeps pixels in tiles; the queue order is bit-exact per pixel
+either way.
 """
-march_sort_order(counts::AbstractVector) = sortperm(counts)
+march_sort_order(counts::AbstractVector) = sortperm(counts; rev = true)
 
 # KA launch with an OPTIONAL workgroupsize. Results are invariant to the block size (one
 # independent ray per thread, no cross-lane reductions), so this tunes only occupancy;
@@ -499,6 +501,41 @@ _fused_launch(dgrid, gp, a, r_h, C, escape, R_em, nmax, wg) = (lane, (outd,), y0
     _kern_launch!(_fused_kernel!(lane.backend), wg, n, outd, y0d, dgrid.dev_data[lane.dev],
                   gp, a, r_h, C, escape, R_em, Int(nmax), dgrid.n, dgrid.xo, dgrid.inv_dx, n)
 
+# `critical_curve(a, θo)` of the latest (a, θo) (a 2×10⁵-radius scan), kept for reuse.
+const _CURVE_LAST = Ref{Any}(nothing)
+const _CURVE_LOCK = ReentrantLock()
+function _critical_curve_cached(a::Float64, θo::Float64)
+    @lock _CURVE_LOCK begin
+        last = _CURVE_LAST[]
+        (last !== nothing && last[1] == (a, θo)) || (_CURVE_LAST[] = last = ((a, θo), critical_curve(a, θo)))
+        last[2]
+    end
+end
+
+# Walk the Kerr critical curve at ≤ px/2 spacing on this camera's image plane (see
+# `_rescue_pixels`), calling `f(iα, iβ)` with the image-matrix pixel of every sample
+# (indices may fall outside 1:npix). Returns false when the curve is empty.
+function _walk_critical_curve(f, a::Real, inc_deg::Real, fov::Real, npix::Integer)
+    θo = clamp(deg2rad(Float64(inc_deg)), 0.02, π - 0.02)
+    αB, βB = _critical_curve_cached(Float64(a), θo)
+    isempty(αB) && return false
+    px = Float64(fov) / npix
+    half = Float64(fov) / 2
+    m = length(αB)
+    for s in 1:m
+        s2 = s == m ? 1 : s + 1               # closed loop (upper + mirrored lower branch)
+        x1 = αB[s];  y1 = βB[s]               # camera screen coords (see _rescue_pixels)
+        x2 = αB[s2]; y2 = βB[s2]
+        nsub = max(1, ceil(Int, hypot(x2 - x1, y2 - y1) / (px / 2)))
+        for q in 0:nsub                       # walk the segment at ≤ px/2 spacing
+            t = q / nsub
+            f(floor(Int, (x1 + t * (x2 - x1) + half) / px) + 1,
+              floor(Int, (y1 + t * (y2 - y1) + half) / px) + 1)
+        end
+    end
+    return true
+end
+
 """
     _rescue_pixels(a, inc_deg, fov, npix; rescue_px=2) -> Vector{Int}
 
@@ -510,30 +547,106 @@ ray at (α, β) carries λ = L_z/E = -α sin θo, Bardeen's λ; the curve is β-
 are both absorbed by the ≥2 px dilation. Returns Int[] when the curve misses the frame.
 """
 function _rescue_pixels(a::Real, inc_deg::Real, fov::Real, npix::Integer; rescue_px::Int = 2)
-    θo = clamp(deg2rad(Float64(inc_deg)), 0.02, π - 0.02)
-    αB, βB = critical_curve(Float64(a), θo)
-    isempty(αB) && return Int[]
     npix = Int(npix)
-    px = Float64(fov) / npix
-    half = Float64(fov) / 2
     mask = falses(npix, npix)                 # [iβ, iα] — the image-matrix layout
-    m = length(αB)
-    for s in 1:m
-        s2 = s == m ? 1 : s + 1               # closed loop (upper + mirrored lower branch)
-        x1 = αB[s];  y1 = βB[s]               # camera screen coords (see docstring)
-        x2 = αB[s2]; y2 = βB[s2]
-        nsub = max(1, ceil(Int, hypot(x2 - x1, y2 - y1) / (px / 2)))
-        for q in 0:nsub                       # walk the segment at ≤ px/2 spacing
-            t = q / nsub
-            iα = floor(Int, (x1 + t * (x2 - x1) + half) / px) + 1
-            iβ = floor(Int, (y1 + t * (y2 - y1) + half) / px) + 1
-            for dα in -rescue_px:rescue_px, dβ in -rescue_px:rescue_px
-                jα = iα + dα; jβ = iβ + dβ
-                (1 <= jα <= npix && 1 <= jβ <= npix) && (mask[jβ, jα] = true)
-            end
+    _walk_critical_curve(a, inc_deg, fov, npix) do iα, iβ
+        for dα in -rescue_px:rescue_px, dβ in -rescue_px:rescue_px
+            jα = iα + dα; jβ = iβ + dβ
+            (1 <= jα <= npix && 1 <= jβ <= npix) && (mask[jβ, jα] = true)
+        end
+    end || return Int[]
+    return findall(vec(mask))
+end
+
+# Distance, in cells, from every `cell`×`cell`-pixel cell [iβ, iα] of the image to the
+# nearest cell the critical curve crosses: two raster passes propagating the nearest
+# crossed cell over the 8-neighbourhood. Cells are infinitely far when the curve misses.
+function _curve_cell_distance(a, inc_deg, fov, npix::Int, cell::Int)
+    n = cld(npix, cell)
+    near = fill((0, 0), n, n)                 # nearest crossed cell; (0, 0): none yet
+    _walk_critical_curve(a, inc_deg, fov, npix) do iα, iβ
+        if 1 <= iα <= npix && 1 <= iβ <= npix
+            i = (iβ - 1) ÷ cell + 1; j = (iα - 1) ÷ cell + 1
+            near[i, j] = (i, j)
         end
     end
-    return findall(vec(mask))
+    for j in 1:n, i in 1:n
+        _relax!(near, i, j, i - 1, j); _relax!(near, i, j, i, j - 1)
+        _relax!(near, i, j, i - 1, j - 1); _relax!(near, i, j, i + 1, j - 1)
+    end
+    for j in n:-1:1, i in n:-1:1
+        _relax!(near, i, j, i + 1, j); _relax!(near, i, j, i, j + 1)
+        _relax!(near, i, j, i + 1, j + 1); _relax!(near, i, j, i - 1, j + 1)
+    end
+    return [near[i, j][1] == 0 ? Inf : sqrt(Float64(_dist2(near[i, j], i, j))) for i in 1:n, j in 1:n]
+end
+
+_dist2(c, i, j) = c[1] == 0 ? typemax(Int) : (i - c[1])^2 + (j - c[2])^2
+
+# Adopt the nearest crossed cell of neighbour (k, l) at cell (i, j) if it is closer.
+@inline function _relax!(near, i, j, k, l)
+    n = size(near, 1)
+    (1 <= k <= n && 1 <= l <= n) || return nothing
+    @inbounds c = near[k, l]
+    @inbounds _dist2(c, i, j) < _dist2(near[i, j], i, j) && (near[i, j] = c)
+    return nothing
+end
+
+const _COST_ORDER_LAST = Ref{Any}(nothing)     # (key, order) of the latest camera
+const _COST_ORDER_LOCK = ReentrantLock()
+
+"""
+    cost_order(a, inc_deg, fov, npix; tile=16) -> Vector{Int}
+
+Default queue order of a full-frame Kerr render, longest predicted work first: the
+pixels grouped in `tile`×`tile` image tiles (camera order inside a tile, keeping the
+fluid-sampling locality of neighbouring rays), the tiles in descending predicted cost. A
+ray marches longest near the critical curve, where its orbit count grows as the
+logarithm of the inverse impact-parameter offset, so a pixel's predicted cost is
+log(n / (d + 1/4)) with d its distance to the curve on a grid of `max(1, tile ÷ 4)`-pixel
+cells and n the grid size. The order of the latest camera is kept for reuse. Any order
+gives the same image; this one lets the longest rays start first.
+"""
+function cost_order(a::Real, inc_deg::Real, fov::Real, npix::Integer; tile::Int = 16)
+    key = (Float64(a), Float64(inc_deg), Float64(fov), Int(npix), tile)
+    @lock _COST_ORDER_LOCK begin
+        last = _COST_ORDER_LAST[]
+        last !== nothing && last[1] == key && return last[2]
+    end
+    npix = Int(npix)
+    cell = max(1, tile ÷ 4)
+    D = _curve_cell_distance(a, inc_deg, fov, npix, cell)
+    nc = size(D, 1)
+    nt = cld(npix, tile)
+    tcost = zeros(nt, nt)                     # [β tile, α tile]: Σ over its pixels
+    for j in 1:nc, i in 1:nc                  # a cell's pixels all lie in one tile
+        npx = (min(i * cell, npix) - (i - 1) * cell) * (min(j * cell, npix) - (j - 1) * cell)
+        tcost[(i - 1) * cell ÷ tile + 1, (j - 1) * cell ÷ tile + 1] += npx * log(nc / (D[i, j] + 0.25))
+    end
+    order = Vector{Int}(undef, npix * npix)
+    k = 0
+    for t in sortperm(vec(tcost); rev = true)
+        ta, tb = divrem(t - 1, nt)            # t: linear index of tcost[β tile, α tile]
+        for iα in ta * tile + 1:min((ta + 1) * tile, npix), iβ in tb * tile + 1:min((tb + 1) * tile, npix)
+            order[k += 1] = (iα - 1) * npix + iβ
+        end
+    end
+    @lock _COST_ORDER_LOCK (_COST_ORDER_LAST[] = (key, order))
+    return order
+end
+
+# Queue order of a full-frame Kerr render: the caller's `order`, else `cost_order`.
+_frame_items(order, cfg, npix) = order === nothing ?
+    cost_order(cfg.bh_a, cfg.camera.inclination_deg, cfg.camera.fov, npix) :
+    queue_items(order, npix^2)
+
+# The `:mixed` queue: the critical-curve pixels first, marched in fp64, then the other
+# items in `items` order in fp32 — one queue, the same image as an fp32 sweep of every
+# pixel overwritten by an fp64 sweep of the rescued ones.
+function _mixed_parts(items, pix, src64, src32, launch64, launch32)
+    rescued = falses(length(items)); rescued[pix] .= true
+    return [MarchPart(pix, src64, launch64),
+            MarchPart(filter(i -> !rescued[i], items), src32, launch32)]
 end
 
 """
@@ -545,12 +658,13 @@ Fused single-pass GPU render of the npix×npix unpolarized image, in the layout 
 `render(...;polarized=false).I`. `snap_or_grid`: `AthenaKSnapshot` (resampled + uploaded
 once per device pool), `UniformFluidGrid` (uploaded once per pool), or a pre-uploaded
 `DeviceFluidGrid`. `devices` is a device list or a `DevicePool`; rays are queued in
-chunks that the devices pull as they free up. `order` sets the queue order (bit-exact per
-pixel); `wg` overrides the block size (occupancy only). `precision`: `:f64` (default,
-bitwise unchanged) · `:mixed` (fp32 geodesic lane, Float64 fluid-sample/RT; near-critical-
-curve pixels re-rendered in fp64 and spliced — `rescued_frac::Ref{Float64}` receives the
-fraction) · `:f32_raw` (no rescue, DIAGNOSTIC only — near-critical pixels carry O(1)
-errors).
+chunks that the devices pull as they free up. `order` sets the queue order (default
+`cost_order`: longest predicted tiles first; any order is bit-exact per pixel); `wg`
+overrides the block size (occupancy only). `precision`: `:f64` (default, bitwise
+unchanged) · `:mixed` (fp32 geodesic lane, Float64 fluid-sample/RT; the near-critical-
+curve pixels are marched in fp64 instead, queued first — `rescued_frac::Ref{Float64}`
+receives their fraction) · `:f32_raw` (no rescue, DIAGNOSTIC only — near-critical pixels
+carry O(1) errors).
 """
 function render_gpu_fused(cfg, snap_or_grid; devices = default_pool(),
                           nmax::Int = cfg.max_steps,   # step limit wired from RunConfig, as render()
@@ -573,25 +687,25 @@ function render_gpu_fused(cfg, snap_or_grid; devices = default_pool(),
     Cf = Float64(C)
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
     nrays = cam.npix^2
-    items = queue_items(order, nrays)
+    items = _frame_items(order, cfg, cam.npix)
     img = Vector{Float64}(undef, nrays)
     f64 = _fused_launch(dgrid, gp, a, r_h, Cf, escape, R_em, nmax, wg)
+    # fp32 geodesic lane: the fp64 rays are narrowed as the device makes them; the host
+    # constructs every geodesic-lane scalar as Float32 (no in-kernel widening), while gp
+    # (units, frequency, fp64 spin gp.bh_a for the metric/redshift) stays Float64.
+    f32() = _fused_launch(dgrid, gp, Float32(a), Float32(r_h), Float32(Cf),
+                          Float32(escape), Float32(R_em), nmax, wg)
     frac = 0.0
     if precision === :f64
         march!((img,), pool, [MarchPart(items, CameraRays(st, cam), f64)])
+    elseif precision === :f32_raw
+        march!((img,), pool, [MarchPart(items, CameraRays(st, cam, Float32), f32())])
     else
-        # fp32 geodesic lane: the fp64 rays are narrowed as the device makes them; the host
-        # constructs every geodesic-lane scalar as Float32 (no in-kernel widening), while gp
-        # (units, frequency, fp64 spin gp.bh_a for the metric/redshift) stays Float64.
-        f32 = _fused_launch(dgrid, gp, Float32(a), Float32(r_h), Float32(Cf),
-                            Float32(escape), Float32(R_em), nmax, wg)
-        march!((img,), pool, [MarchPart(items, CameraRays(st, cam, Float32), f32)])
-        if precision === :mixed
-            pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
-                                 rescue_px = rescue_px)
-            march!((img,), pool, [MarchPart(pix, CameraRays(st, cam), f64)])
-            frac = length(pix) / nrays
-        end
+        pix = _rescue_pixels(a, cfg.camera.inclination_deg, cfg.camera.fov, cam.npix;
+                             rescue_px = rescue_px)
+        march!((img,), pool, _mixed_parts(items, pix, CameraRays(st, cam),
+                                          CameraRays(st, cam, Float32), f64, f32()))
+        frac = length(pix) / nrays
     end
     rescued_frac === nothing || (rescued_frac[] = frac)
     return reshape(img, cam.npix, cam.npix)
@@ -701,7 +815,7 @@ function render_gpu_fused_kvariant(cfg, snap_or_grid, mass_scales::Vector{Float6
     R_em = sqrt(3.0) * abs(dgrid.xo)          # fluid box [-|xo|,|xo|]^3 -> vacuum for r > R_em
     nrays = cam.npix^2
     img = Vector{SVector{K,Float64}}(undef, nrays)
-    march!((img,), pool, [MarchPart(1:nrays, CameraRays(st, cam),
+    march!((img,), pool, [MarchPart(_frame_items(nothing, cfg, cam.npix), CameraRays(st, cam),
                                     _fused_launch_kv(dgrid, gps, a, r_h, Cf, escape, R_em, nmax))])
     imgmat = reshape(img, cam.npix, cam.npix)
     return [getindex.(imgmat, k) for k in 1:K]
@@ -893,7 +1007,7 @@ function render_gpu_fused_slow(cfg, win::DeviceFluidWindow; devices = default_po
     t0 = Float64(t_obs) + Float64(time_offset) - win.t_a   # X⁰ at which t_emit reaches t_a
     nrays = cam.npix^2
     img = Vector{Float64}(undef, nrays)
-    march!((img,), pool, [MarchPart(queue_items(order, nrays), CameraRays(st, cam),
+    march!((img,), pool, [MarchPart(_frame_items(order, cfg, cam.npix), CameraRays(st, cam),
                                     _fused_launch_sl(win, t0, gp, a, r_h, Cf, escape, R_em,
                                                      nmax, wg))])
     return reshape(img, cam.npix, cam.npix)

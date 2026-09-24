@@ -60,9 +60,14 @@ Each device list gets one persistent `DevicePool`, created on first use: two wor
 tasks per device, each with its own stream and pinned staging buffers. Start Julia with
 at least one more thread than devices (`-t 3` for two GPUs) so the workers of different
 devices run in parallel. Rays are queued in chunks and each worker pulls the next chunk
-when it finishes the last, so a slower or shared device simply takes fewer. Each chunk
-sends only its pixel indices; the camera rays are generated on the device by the same
-`camera_ray` function as the CPU `camera_rays`. Every ray writes its own pixel, so the
+when it finishes the last, so a slower or shared device simply takes fewer. The queue holds
+16×16-pixel tiles, those nearest the photon ring (the longest rays) first
+(`cost_order`), so the slowest work starts early instead of ending the render; pass
+`order` to set another queue order, e.g. `march_sort_order(counts)` from a previous
+frame's trip counts. With `precision = :mixed` the near-ring pixels that need fp64 enter
+the same queue ahead of the fp32 pixels. Each chunk sends only its pixel indices; the
+camera rays are generated on the device by the same `camera_ray` function as the CPU
+`camera_rays`. Every ray writes its own pixel, so the
 image is bitwise identical for any device count and chunking. [Benchmarks](@ref) lists the measured multi-GPU scaling.
 
 A snapshot or `UniformFluidGrid` passed to a driver is uploaded once per pool and reused
