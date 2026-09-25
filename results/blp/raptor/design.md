@@ -235,7 +235,7 @@ The figure drivers set the following (records from ee88885):
 - Θ_e = (m_p/m_e)(p/ρ)/(1 + R) with p = (γ − 1) · Float32(p_dump/(γ − 1)) and γ = 13/9 from the dump;
 - R_low = 1, R_high = 40 fiducial;
 - cut σ > 1 only, with no Θ_e cap, no floor and no excision mask;
-- trilinear interpolation on cell centres inside the owning block (lo < x ≤ hi, finest level wins), clamped at the edges.
+- trilinear interpolation on cell centres inside the owning block, clamped at the edges. The owning block comes from a dense finest-block table (≤ 8e6 cells) or, above that, a hash on (level, lx1, lx2, lx3), both owning lo ≤ x < hi; the linear scan (lo < x ≤ hi, last block wins) is the fallback for meshes neither can index. All three snapshots use the hash.
 
 **Transfer** (`reverse_march.jl`, `transfer.jl:34-170`):
 - a Riemann sum over the stored states, each weighted by the preceding step;
@@ -291,7 +291,7 @@ node named.
 | C20 | excision gas | no mask | no mask | no mask | — |
 | C21 | data reader | BHAC `.dat`, conserved variables | AthenaK `.bin` v1.1 (Float32) and `.athdf` | BLP (M5) | R06 |
 | C22 | interpolation | trilinear, half-cell-shifted weights, clamp at block edge | trilinear on cell centres, clamp, owning block only | BLP (M5) | R06 (point samples) |
-| C23 | block ownership | first leaf with lb ≤ x + 1e−9 < ub (linear scan) | lo < x ≤ hi, finest wins (per-level hash) | BLP (M5) | R06 |
+| C23 | block ownership | first leaf with lb ≤ x + 1e−9 < ub (linear scan) | lo ≤ x < hi (dense table or per-level hash); lo < x ≤ hi, last wins (scan fallback) | BLP (M5) | R06 |
 | C24 | j, α, ρ fits | Dexter16-type I_I/I_Q/I_V, Shcherbakov ρ_Q/ρ_V, GSL Bessel, Planck `exp−1` | M21, A&S Bessels, `expm1`, Θ_e < 0.01 ramps | BLP port (M7); native fits as a separate leg | R03 (coefficient ratios), R07 (native-fit image) |
 | C25 | fluid Q basis | Q ∥ e₁ ⟂ B, j_Q > 0 | code (e₂, −e₁), j_Q < 0 (M21) | physically identical; M7 flips the sign of the Q-type coefficients into RAPTOR's basis | R03 |
 | C26 | camera Stokes basis | Eulerian observer, cam_up = −ẑ; expected Q_R = −Q_IAU | IEEE/IAU (north, east) | IEEE/IAU; RAPTOR output mapped by a fixed sign table fixed in R02 (M8) | R02 |
@@ -348,11 +348,11 @@ behaviour available where a native leg is needed.
   - reads `.bin` v1.1 (the Int32[10] header, 6 bounds and Float32 data per block) and `.athdf` (the `uov`/`B` datasets, `Levels`, `LogicalLocations`), using the variable names from the file header;
   - stores the data as contiguous Float32 arrays [block][var][k][j][i];
   - forms eint = Float32(p/(γ − 1)) in double, as BLP does;
-  - finds blocks through a per-level open-addressing hash on (lx1, lx2, lx3), with ownership lo < x ≤ hi and the finest level winning;
+  - finds blocks through the BlackLightPlus locate paths: the dense finest-block table, else an open-addressing hash on (level, lx1, lx2, lx3) probed coarse to fine (ownership lo ≤ x < hi), else the linear scan;
   - interpolates trilinearly on cell centres inside the owning block, clamped;
   - builds u^μ and b^μ with the AthenaK convention (`primitives.jl`), evaluated with the SKS metric at the sample point.
 
-  Memory target: ≤ 1.1 × the dump size (s093 about 35 GB).
+  Memory: 0.89 × the dump size (s455 and s122 4.0 GB, s093 32.0 GB peak RSS).
 - **M6 plasma model** (model-level `get_fluid_params`):
   - n_e = ρ ρ_unit/m_p;
   - B = √(b²) B_unit;

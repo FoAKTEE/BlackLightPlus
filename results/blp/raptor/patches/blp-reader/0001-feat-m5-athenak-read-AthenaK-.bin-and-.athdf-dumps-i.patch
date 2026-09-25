@@ -1,0 +1,1064 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:30:19 -0700
+Subject: [PATCH 1/4] feat(m5-athenak): read AthenaK .bin and .athdf dumps into
+ Float32 meshblocks
+
+- change: model/athenak/athenak_mesh.[ch] read "Athena binary output version=1.1" and .athdf mhd_w_bcc dumps into one Float32 array [block][prim][k][j][i] (dens, velx, vely, velz, eint, bcc1-3); press -> eint = Float32(press/(gamma - 1)) with the dump's <mhd>/gamma; temperature dropped; non-finite cells zeroed; parallel pread per block (contiguous .athdf datasets by byte offset, else strided H5Dread)
+- change: owning block by the BlackLightPlus meshblock_index paths: dense finest-block table (<= 8e6 cells), else hash on (level, lx1, lx2, lx3) probed coarse to fine, else linear scan; clamped trilinear on cell centres inside the owning block with the BlackLightPlus operation order
+- result: s455 (.bin), s122 (.athdf), s093 (.bin, 38.7 GB) load in 0.31 / 0.32 / 3.6 s at 4.0 / 4.0 / 32.0 GB peak RSS (0.89 x file size) [SOLID]
+- verify: R06 probe at 1e5 points per snapshot: owning block and all eight interpolated primitives bit-identical to BlackLightPlus sample_primitives
+- next: R06 (dag.md)
+---
+ model/athenak/athenak_mesh.c | 913 +++++++++++++++++++++++++++++++++++
+ model/athenak/athenak_mesh.h | 121 +++++
+ 2 files changed, 1034 insertions(+)
+ create mode 100644 model/athenak/athenak_mesh.c
+ create mode 100644 model/athenak/athenak_mesh.h
+
+diff --git a/model/athenak/athenak_mesh.c b/model/athenak/athenak_mesh.c
+new file mode 100644
+index 0000000..82044fe
+--- /dev/null
++++ b/model/athenak/athenak_mesh.c
+@@ -0,0 +1,913 @@
++/*
++ * athenak_mesh.c
++ *
++ * AthenaK `.bin` / `.athdf` reader and meshblock sampler (M5). See
++ * athenak_mesh.h for the layout and the BlackLightPlus correspondence.
++ */
++
++#define _GNU_SOURCE
++#include "athenak_mesh.h"
++
++#include <ctype.h>
++#include <fcntl.h>
++#include <hdf5.h>
++#include <math.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++#ifdef _OPENMP
++#include <omp.h>
++#endif
++
++static const char *PRIM_NAMES[ATHK_NPRIM] = {"dens", "velx", "vely", "velz",
++                                             "eint", "bcc1", "bcc2", "bcc3"};
++
++static double wtime(void) {
++#ifdef _OPENMP
++    return omp_get_wtime();
++#else
++    return (double)clock() / CLOCKS_PER_SEC;
++#endif
++}
++
++static int reader_threads(int nthreads) {
++    if (nthreads > 0)
++        return nthreads;
++#ifdef _OPENMP
++    int n = omp_get_max_threads();
++    return n < 16 ? n : 16;
++#else
++    return 1;
++#endif
++}
++
++/* ------------------------------------------------------------------ params */
++
++static char *strip(char *s) {
++    while (*s && isspace((unsigned char)*s))
++        s++;
++    char *e = s + strlen(s);
++    while (e > s && isspace((unsigned char)e[-1]))
++        *--e = '\0';
++    return s;
++}
++
++/*
++ * Value of `key` in parameter block `<block>` of an AthenaK parameter dump
++ * (one "key = value # comment" per line). Last occurrence wins. Returns 1 and
++ * sets *val when found and numeric.
++ */
++static int param_double(const char *text, const char *block, const char *key,
++                        double *val) {
++    int found = 0;
++    char cur[128] = "";
++    const char *p = text;
++    char line[4096];
++    while (*p) {
++        const char *nl = strchr(p, '\n');
++        size_t len = nl ? (size_t)(nl - p) : strlen(p);
++        if (len >= sizeof line)
++            len = sizeof line - 1;
++        memcpy(line, p, len);
++        line[len] = '\0';
++        p = nl ? nl + 1 : p + strlen(p);
++        char *s = strip(line);
++        size_t sl = strlen(s);
++        if (sl >= 2 && s[0] == '<' && s[sl - 1] == '>') {
++            s[sl - 1] = '\0';
++            snprintf(cur, sizeof cur, "%s", s + 1);
++            continue;
++        }
++        char *eq = strchr(s, '=');
++        if (!eq || cur[0] == '\0' || strcmp(cur, block) != 0)
++            continue;
++        *eq = '\0';
++        char *k = strip(s);
++        char *v = eq + 1;
++        char *hash = strchr(v, '#');
++        if (hash)
++            *hash = '\0';
++        v = strip(v);
++        if (strcmp(k, key) != 0)
++            continue;
++        char *end;
++        double d = strtod(v, &end);
++        if (end != v && *strip(end) == '\0') {
++            *val = d;
++            found = 1;
++        }
++    }
++    return found;
++}
++
++static void apply_params(athk_mesh *m, const char *text) {
++    double g, a;
++    m->gamma_dump = param_double(text, "mhd", "gamma", &g) ? g : NAN;
++    m->spin_a = param_double(text, "coord", "a", &a) ? a : 0.0;
++}
++
++/* --------------------------------------------------------------- utilities */
++
++static int pread_full(int fd, void *buf, size_t n, off_t off) {
++    char *b = (char *)buf;
++    while (n > 0) {
++        ssize_t r = pread(fd, b, n, off);
++        if (r <= 0)
++            return -1;
++        b += r;
++        n -= (size_t)r;
++        off += r;
++    }
++    return 0;
++}
++
++/*
++ * Convert stored press to eint = Float32(press / (gamma - 1)) (Float64
++ * division, one rounding) and zero non-finite values, for one block. `zero`
++ * selects zeroing (BlackLightPlus zeroes in the .bin and press-layout .athdf
++ * paths only).
++ */
++static size_t fix_block(athk_mesh *m, int b, int convert_press, int zero) {
++    size_t bad = 0;
++    double gm1 = m->gamma - 1.0;
++    for (int p = 0; p < ATHK_NPRIM; p++) {
++        float *v = m->data + ((size_t)b * ATHK_NPRIM + p) * m->cells;
++        for (size_t c = 0; c < m->cells; c++) {
++            float x = v[c];
++            if (zero && !isfinite(x)) {
++                x = 0.0f;
++                bad++;
++            }
++            if (p == ATHK_EINT && convert_press)
++                x = (float)((double)x / gm1);
++            v[c] = x;
++        }
++    }
++    return bad;
++}
++
++static int alloc_geometry(athk_mesh *m) {
++    size_t n = (size_t)m->nmb;
++    m->ext_lo = malloc(3 * n * sizeof(double));
++    m->ext_hi = malloc(3 * n * sizeof(double));
++    m->x_left = malloc(3 * n * sizeof(double));
++    m->dx = malloc(3 * n * sizeof(double));
++    m->level = malloc(n * sizeof(int));
++    m->lloc = malloc(3 * n * sizeof(long));
++    m->bytes_data = n * ATHK_NPRIM * m->cells * sizeof(float);
++    m->data = malloc(m->bytes_data);
++    if (!m->ext_lo || !m->ext_hi || !m->x_left || !m->dx || !m->level ||
++        !m->lloc || !m->data) {
++        fprintf(stderr, "athk_load: cannot allocate %zu bytes\n",
++                m->bytes_data);
++        return -1;
++    }
++    return 0;
++}
++
++/* ------------------------------------------------------------------- .bin */
++
++static int load_bin(const char *path, double gamma_override, int nt,
++                    athk_mesh *m) {
++    FILE *fp = fopen(path, "rb");
++    if (!fp) {
++        perror(path);
++        return -1;
++    }
++    char line[8192];
++    if (!fgets(line, sizeof line, fp) ||
++        strncmp(line, "Athena binary output version=1.1", 32) != 0) {
++        fprintf(stderr, "athk_load: %s is not an Athena binary v1.1 file\n",
++                path);
++        fclose(fp);
++        return -1;
++    }
++    int nvars = 0, loc_size = 8, var_size = 4;
++    long H = -1;
++    char varline[8192] = "";
++    m->time = 0.0;
++    while (H < 0) {
++        if (!fgets(line, sizeof line, fp)) {
++            fprintf(stderr, "athk_load: %s: truncated header\n", path);
++            fclose(fp);
++            return -1;
++        }
++        line[strcspn(line, "\n")] = '\0';
++        if (!strncmp(line, "  time=", 7))
++            m->time = strtod(line + 7, NULL);
++        else if (!strncmp(line, "  size of location=", 19))
++            loc_size = atoi(line + 19);
++        else if (!strncmp(line, "  size of variable=", 19))
++            var_size = atoi(line + 19);
++        else if (!strncmp(line, "  number of variables=", 22))
++            nvars = atoi(line + 22);
++        else if (!strncmp(line, "  variables:", 12))
++            snprintf(varline, sizeof varline, "%s", line + 12);
++        else if (!strncmp(line, "  header offset=", 16))
++            H = atol(line + 16);
++    }
++    if ((loc_size != 8 && loc_size != 4) || var_size != 4) {
++        fprintf(stderr, "athk_load: unsupported location/variable size %d/%d\n",
++                loc_size, var_size);
++        fclose(fp);
++        return -1;
++    }
++    char *par = malloc((size_t)H + 1);
++    if (fread(par, 1, (size_t)H, fp) != (size_t)H) {
++        fprintf(stderr, "athk_load: %s: short parameter dump\n", path);
++        free(par);
++        fclose(fp);
++        return -1;
++    }
++    par[H] = '\0';
++    apply_params(m, par);
++    free(par);
++    off_t data_start = ftello(fp);
++    fclose(fp);
++
++    /* variable columns */
++    char names[64][64];
++    int nn = 0;
++    for (char *tok = strtok(varline, " \t"); tok && nn < 64;
++         tok = strtok(NULL, " \t"))
++        snprintf(names[nn++], 64, "%s", tok);
++    if (nn != nvars) {
++        fprintf(stderr, "athk_load: variable-count mismatch (%d vs %d)\n", nn,
++                nvars);
++        return -1;
++    }
++    const char *want[ATHK_NPRIM] = {"dens", "velx", "vely", "velz",
++                                    "press", "bcc1", "bcc2", "bcc3"};
++    int col[ATHK_NPRIM];
++    for (int p = 0; p < ATHK_NPRIM; p++) {
++        col[p] = -1;
++        for (int v = 0; v < nn; v++)
++            if (!strcmp(names[v], want[p]))
++                col[p] = v;
++        if (col[p] < 0) {
++            fprintf(stderr, "athk_load: missing GRMHD variable %s in %s\n",
++                    want[p], path);
++            return -1;
++        }
++    }
++    m->stored_press = 1;
++    m->gamma = gamma_override > 0 ? gamma_override : m->gamma_dump;
++    if (!(m->gamma > 1.0)) {
++        fprintf(stderr, "athk_load: no usable gamma (dump %g, override %g)\n",
++                m->gamma_dump, gamma_override);
++        return -1;
++    }
++
++    int fd = open(path, O_RDONLY);
++    if (fd < 0) {
++        perror(path);
++        return -1;
++    }
++    int32_t hdr[10];
++    if (pread_full(fd, hdr, sizeof hdr, data_start)) {
++        fprintf(stderr, "athk_load: cannot read first block header\n");
++        close(fd);
++        return -1;
++    }
++    m->ni = hdr[1] - hdr[0] + 1;
++    m->nj = hdr[3] - hdr[2] + 1;
++    m->nk = hdr[5] - hdr[4] + 1;
++    m->cells = (size_t)m->ni * m->nj * m->nk;
++    size_t per_mb = 40 + 6 * (size_t)loc_size + m->cells * nvars * 4;
++    struct stat st;
++    fstat(fd, &st);
++    off_t nbytes = st.st_size - data_start;
++    if (nbytes % (off_t)per_mb != 0) {
++        fprintf(stderr, "athk_load: %lld data bytes not a multiple of %zu\n",
++                (long long)nbytes, per_mb);
++        close(fd);
++        return -1;
++    }
++    m->nmb = (int)(nbytes / (off_t)per_mb);
++    if (alloc_geometry(m)) {
++        close(fd);
++        return -1;
++    }
++
++    int err = 0;
++    size_t nbad = 0;
++#pragma omp parallel for schedule(dynamic, 1) num_threads(nt) reduction(+ : err, nbad)
++    for (int b = 0; b < m->nmb; b++) {
++        off_t off = data_start + (off_t)b * (off_t)per_mb;
++        int32_t h[10];
++        double bnd[6];
++        err += pread_full(fd, h, sizeof h, off) != 0;
++        if (loc_size == 8) {
++            err += pread_full(fd, bnd, sizeof bnd, off + 40) != 0;
++        } else {
++            float bf[6];
++            err += pread_full(fd, bf, sizeof bf, off + 40) != 0;
++            for (int q = 0; q < 6; q++)
++                bnd[q] = bf[q];
++        }
++        m->level[b] = h[9];
++        for (int a = 0; a < 3; a++) {
++            m->ext_lo[3 * b + a] = bnd[2 * a];
++            m->ext_hi[3 * b + a] = bnd[2 * a + 1];
++        }
++        off_t cell0 = off + 40 + 6 * (off_t)loc_size;
++        for (int p = 0; p < ATHK_NPRIM; p++)
++            err += pread_full(fd, m->data + ((size_t)b * ATHK_NPRIM + p) *
++                                                m->cells,
++                              m->cells * 4,
++                              cell0 + (off_t)col[p] * (off_t)(m->cells * 4)) !=
++                   0;
++        nbad += fix_block(m, b, 1, 1);
++    }
++    close(fd);
++    if (err) {
++        fprintf(stderr, "athk_load: %d read errors in %s\n", err, path);
++        return -1;
++    }
++    m->nbad = nbad;
++
++    /* spacing, first centre, logical location from bounds (BLP
++     * athenak_bin_snapshot) */
++    double dom[3] = {INFINITY, INFINITY, INFINITY};
++    for (int b = 0; b < m->nmb; b++)
++        for (int a = 0; a < 3; a++)
++            if (m->ext_lo[3 * b + a] < dom[a])
++                dom[a] = m->ext_lo[3 * b + a];
++    int nax[3] = {m->ni, m->nj, m->nk};
++    for (int b = 0; b < m->nmb; b++)
++        for (int a = 0; a < 3; a++) {
++            double lo = m->ext_lo[3 * b + a], hi = m->ext_hi[3 * b + a];
++            double d = (hi - lo) / (double)nax[a];
++            m->dx[3 * b + a] = d;
++            m->x_left[3 * b + a] = lo + d / 2.0;
++            double f = (lo - dom[a]) / (hi - lo);
++            double r = rint(f);
++            if (fabs(f - r) > 1e-6) {
++                fprintf(stderr,
++                        "athk_load: block %d axis %d off the logical grid "
++                        "(%g)\n",
++                        b, a, f);
++                return -1;
++            }
++            m->lloc[3 * b + a] = (long)r;
++        }
++    snprintf(m->format, sizeof m->format, "bin");
++    return 0;
++}
++
++/* ------------------------------------------------------------------ .athdf */
++
++static int read_ds_double(hid_t f, const char *name, double *out, int *is32) {
++    hid_t d = H5Dopen2(f, name, H5P_DEFAULT);
++    if (d < 0)
++        return -1;
++    hid_t t = H5Dget_type(d);
++    *is32 = H5Tget_size(t) == 4;
++    H5Tclose(t);
++    herr_t e = H5Dread(d, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, out);
++    H5Dclose(d);
++    return e < 0 ? -1 : 0;
++}
++
++/* Face and centre arrays of one axis -> ext_lo/hi, x_left, dx
++ * (BLP AthenaKSnapshot: x_left = xv[1], dx = xv[2] - xv[1], ext = xf[1],
++ * xf[end]; the difference is formed in the stored precision). */
++static int athdf_axis(hid_t f, athk_mesh *m, int a, int n) {
++    char fn[8], vn[8];
++    snprintf(fn, sizeof fn, "x%df", a + 1);
++    snprintf(vn, sizeof vn, "x%dv", a + 1);
++    double *xf = malloc((size_t)m->nmb * (n + 1) * sizeof(double));
++    double *xv = malloc((size_t)m->nmb * n * sizeof(double));
++    int f32, v32;
++    if (read_ds_double(f, fn, xf, &f32) || read_ds_double(f, vn, xv, &v32)) {
++        fprintf(stderr, "athk_load: cannot read %s/%s\n", fn, vn);
++        free(xf);
++        free(xv);
++        return -1;
++    }
++    for (int b = 0; b < m->nmb; b++) {
++        m->ext_lo[3 * b + a] = xf[(size_t)b * (n + 1)];
++        m->ext_hi[3 * b + a] = xf[(size_t)b * (n + 1) + n];
++        m->x_left[3 * b + a] = xv[(size_t)b * n];
++        double d = xv[(size_t)b * n + 1] - xv[(size_t)b * n];
++        if (v32)
++            d = (double)((float)xv[(size_t)b * n + 1] -
++                         (float)xv[(size_t)b * n]);
++        m->dx[3 * b + a] = d;
++    }
++    free(xf);
++    free(xv);
++    return 0;
++}
++
++static int read_names(hid_t f, char names[][64], int maxn) {
++    hid_t at = H5Aopen(f, "VariableNames", H5P_DEFAULT);
++    if (at < 0)
++        return -1;
++    hid_t t = H5Aget_type(at);
++    hid_t sp = H5Aget_space(at);
++    int n = (int)H5Sget_simple_extent_npoints(sp);
++    size_t sz = H5Tget_size(t);
++    char *buf = calloc((size_t)n, sz + 1);
++    hid_t mt = H5Tcopy(H5T_C_S1);
++    H5Tset_size(mt, sz);
++    H5Tset_cset(mt, H5Tget_cset(t));
++    H5Aread(at, mt, buf);
++    for (int i = 0; i < n && i < maxn; i++) {
++        size_t l = 0;
++        while (l < sz && buf[i * sz + l] != '\0' && buf[i * sz + l] != ' ')
++            l++;
++        memcpy(names[i], buf + i * sz, l);
++        names[i][l] = '\0';
++    }
++    free(buf);
++    H5Tclose(mt);
++    H5Tclose(t);
++    H5Sclose(sp);
++    H5Aclose(at);
++    return n;
++}
++
++static char *read_header_text(hid_t f) {
++    if (H5Aexists(f, "Header") <= 0)
++        return NULL;
++    hid_t at = H5Aopen(f, "Header", H5P_DEFAULT);
++    hid_t sp = H5Aget_space(at);
++    int n = (int)H5Sget_simple_extent_npoints(sp);
++    char **rows = calloc((size_t)n, sizeof(char *));
++    hid_t ft = H5Aget_type(at);
++    hid_t mt = H5Tcopy(H5T_C_S1);
++    H5Tset_size(mt, H5T_VARIABLE);
++    H5Tset_cset(mt, H5Tget_cset(ft));
++    H5Tclose(ft);
++    char *text = NULL;
++    if (H5Aread(at, mt, rows) >= 0) {
++        size_t len = 1;
++        for (int i = 0; i < n; i++)
++            len += (rows[i] ? strlen(rows[i]) : 0) + 1;
++        text = malloc(len);
++        text[0] = '\0';
++        for (int i = 0; i < n; i++) {
++            if (rows[i])
++                strcat(text, rows[i]);
++            strcat(text, "\n");
++        }
++        H5Dvlen_reclaim(mt, sp, H5P_DEFAULT, rows);
++    }
++    free(rows);
++    H5Tclose(mt);
++    H5Sclose(sp);
++    H5Aclose(at);
++    return text;
++}
++
++/* Contiguous, unfiltered little-endian Float32 dataset: byte offset, else -1. */
++static off_t contiguous_f32_offset(hid_t d) {
++    hid_t pl = H5Dget_create_plist(d);
++    int ok = H5Pget_layout(pl) == H5D_CONTIGUOUS && H5Pget_nfilters(pl) == 0;
++    H5Pclose(pl);
++    hid_t t = H5Dget_type(d);
++    ok = ok && H5Tequal(t, H5T_IEEE_F32LE) > 0;
++    H5Tclose(t);
++    haddr_t a = H5Dget_offset(d);
++    return (ok && a != HADDR_UNDEF) ? (off_t)a : (off_t)-1;
++}
++
++/*
++ * Copy column `v` of dataset `d` (shape (nv, nmb, nk, nj, ni)) into primitive
++ * slot `p` of every block: parallel pread when the dataset is contiguous,
++ * else one strided H5Dread.
++ */
++static int athdf_column(const char *path, hid_t d, int v, int p, int nt,
++                        athk_mesh *m) {
++    off_t base = contiguous_f32_offset(d);
++    if (base >= 0) {
++        int fd = open(path, O_RDONLY);
++        if (fd < 0)
++            return -1;
++        int err = 0;
++        size_t bytes = m->cells * 4;
++#pragma omp parallel for schedule(dynamic, 1) num_threads(nt) reduction(+ : err)
++        for (int b = 0; b < m->nmb; b++)
++            err += pread_full(fd, m->data + ((size_t)b * ATHK_NPRIM + p) *
++                                                m->cells,
++                              bytes,
++                              base + ((off_t)v * m->nmb + b) * (off_t)bytes) !=
++                   0;
++        close(fd);
++        return err ? -1 : 0;
++    }
++    hid_t fs = H5Dget_space(d);
++    hsize_t fstart[5] = {(hsize_t)v, 0, 0, 0, 0};
++    hsize_t fcount[5] = {1, (hsize_t)m->nmb, (hsize_t)m->nk, (hsize_t)m->nj,
++                         (hsize_t)m->ni};
++    H5Sselect_hyperslab(fs, H5S_SELECT_SET, fstart, NULL, fcount, NULL);
++    hsize_t mdims[3] = {(hsize_t)m->nmb, ATHK_NPRIM, m->cells};
++    hid_t ms = H5Screate_simple(3, mdims, NULL);
++    hsize_t mstart[3] = {0, (hsize_t)p, 0};
++    hsize_t mcount[3] = {(hsize_t)m->nmb, 1, m->cells};
++    H5Sselect_hyperslab(ms, H5S_SELECT_SET, mstart, NULL, mcount, NULL);
++    herr_t e = H5Dread(d, H5T_NATIVE_FLOAT, ms, fs, H5P_DEFAULT, m->data);
++    H5Sclose(ms);
++    H5Sclose(fs);
++    return e < 0 ? -1 : 0;
++}
++
++static int load_athdf(const char *path, double gamma_override, int nt,
++                      athk_mesh *m) {
++    hid_t f = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
++    if (f < 0) {
++        fprintf(stderr, "athk_load: cannot open %s\n", path);
++        return -1;
++    }
++    int rc = -1;
++    hid_t du = -1, dB = -1;
++    char *text = read_header_text(f);
++    if (text) {
++        apply_params(m, text);
++        free(text);
++    } else {
++        m->gamma_dump = NAN;
++        m->spin_a = 0.0;
++    }
++    if (H5Aexists(f, "Time") > 0) {
++        hid_t at = H5Aopen(f, "Time", H5P_DEFAULT);
++        H5Aread(at, H5T_NATIVE_DOUBLE, &m->time);
++        H5Aclose(at);
++    }
++    char names[64][64];
++    int nn = read_names(f, names, 64);
++    du = H5Dopen2(f, "uov", H5P_DEFAULT);
++    dB = H5Dopen2(f, "B", H5P_DEFAULT);
++    if (nn < 0 || du < 0 || dB < 0) {
++        fprintf(stderr, "athk_load: %s lacks VariableNames/uov/B\n", path);
++        goto done;
++    }
++    hsize_t dims[5], dimsB[5];
++    hid_t s = H5Dget_space(du);
++    int rk = H5Sget_simple_extent_dims(s, dims, NULL);
++    H5Sclose(s);
++    s = H5Dget_space(dB);
++    int rkB = H5Sget_simple_extent_dims(s, dimsB, NULL);
++    H5Sclose(s);
++    if (rk != 5 || rkB != 5 || dimsB[0] != 3 || dims[0] + 3 != (hsize_t)nn) {
++        fprintf(stderr, "athk_load: unexpected uov/B shapes in %s\n", path);
++        goto done;
++    }
++    int nu = (int)dims[0];
++    /* layout (BLP AthenaKSnapshot / _athdf_press_layout) */
++    int is_eint = nn == ATHK_NPRIM;
++    for (int i = 0; is_eint && i < ATHK_NPRIM; i++)
++        is_eint = !strcmp(names[i], PRIM_NAMES[i]);
++    if (!is_eint) {
++        const char *w5[5] = {"dens", "velx", "vely", "velz", "press"};
++        int ok = nn >= 8;
++        for (int i = 0; ok && i < 5; i++)
++            ok = !strcmp(names[i], w5[i]);
++        for (int i = 5; ok && i < nn - 3; i++)
++            ok = !strcmp(names[i], "temperature");
++        ok = ok && !strcmp(names[nn - 3], "bcc1") &&
++             !strcmp(names[nn - 2], "bcc2") && !strcmp(names[nn - 1], "bcc3");
++        if (!ok) {
++            fprintf(stderr, "athk_load: unexpected primitive order in %s\n",
++                    path);
++            goto done;
++        }
++    }
++    m->stored_press = !is_eint;
++    m->gamma = gamma_override > 0 ? gamma_override : m->gamma_dump;
++    if (m->stored_press && !(m->gamma > 1.0)) {
++        fprintf(stderr, "athk_load: %s stores press; no usable gamma\n", path);
++        goto done;
++    }
++    m->nmb = (int)dims[1];
++    m->nk = (int)dims[2];
++    m->nj = (int)dims[3];
++    m->ni = (int)dims[4];
++    m->cells = (size_t)m->ni * m->nj * m->nk;
++    if (alloc_geometry(m))
++        goto done;
++    int nax[3] = {m->ni, m->nj, m->nk};
++    for (int a = 0; a < 3; a++)
++        if (athdf_axis(f, m, a, nax[a]))
++            goto done;
++    {
++        hid_t d = H5Dopen2(f, "Levels", H5P_DEFAULT);
++        herr_t e = H5Dread(d, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT,
++                           m->level);
++        H5Dclose(d);
++        long long *ll = malloc(3 * (size_t)m->nmb * sizeof(long long));
++        d = H5Dopen2(f, "LogicalLocations", H5P_DEFAULT);
++        e |= H5Dread(d, H5T_NATIVE_LLONG, H5S_ALL, H5S_ALL, H5P_DEFAULT, ll);
++        H5Dclose(d);
++        for (size_t i = 0; i < 3 * (size_t)m->nmb; i++)
++            m->lloc[i] = (long)ll[i];
++        free(ll);
++        if (e < 0) {
++            fprintf(stderr, "athk_load: cannot read Levels/LogicalLocations\n");
++            goto done;
++        }
++    }
++    for (int p = 0; p < 5; p++)
++        if (athdf_column(path, du, p, p, nt, m))
++            goto done;
++    for (int p = 0; p < 3; p++)
++        if (athdf_column(path, dB, p, ATHK_BCC1 + p, nt, m))
++            goto done;
++    (void)nu;
++    size_t nbad = 0;
++    int conv = m->stored_press;
++#pragma omp parallel for schedule(dynamic, 1) num_threads(nt) reduction(+ : nbad)
++    for (int b = 0; b < m->nmb; b++)
++        nbad += fix_block(m, b, conv, conv);
++    m->nbad = nbad;
++    snprintf(m->format, sizeof m->format, "athdf");
++    rc = 0;
++done:
++    if (du >= 0)
++        H5Dclose(du);
++    if (dB >= 0)
++        H5Dclose(dB);
++    H5Fclose(f);
++    return rc;
++}
++
++/* ----------------------------------------------------------- locate build */
++
++static void mesh_bounds(const athk_mesh *m, double lo[3], double hi[3]) {
++    for (int a = 0; a < 3; a++) {
++        lo[a] = INFINITY;
++        hi[a] = -INFINITY;
++    }
++    for (int b = 0; b < m->nmb; b++)
++        for (int a = 0; a < 3; a++) {
++            if (m->ext_lo[3 * b + a] < lo[a])
++                lo[a] = m->ext_lo[3 * b + a];
++            if (m->ext_hi[3 * b + a] > hi[a])
++                hi[a] = m->ext_hi[3 * b + a];
++        }
++}
++
++/* BLP _build_leaf_table. Returns 0 when built. */
++static int build_table(athk_mesh *m) {
++    if (m->nmb < 1)
++        return -1;
++    double fdx[3] = {INFINITY, INFINITY, INFINITY};
++    for (int b = 0; b < m->nmb; b++)
++        for (int a = 0; a < 3; a++) {
++            double w = m->ext_hi[3 * b + a] - m->ext_lo[3 * b + a];
++            if (w < fdx[a])
++                fdx[a] = w;
++        }
++    if (!(fdx[0] > 0.0 && fdx[1] > 0.0 && fdx[2] > 0.0))
++        return -1;
++    mesh_bounds(m, m->tmin, m->tmax);
++    for (int a = 0; a < 3; a++) {
++        m->N[a] = (long)rint((m->tmax[a] - m->tmin[a]) / fdx[a]);
++        if (m->N[a] < 1)
++            return -1;
++    }
++    if (m->N[0] * m->N[1] * m->N[2] > ATHK_LEAF_MAX_CELLS)
++        return -1;
++    int Lmax = m->level[0];
++    for (int b = 1; b < m->nmb; b++)
++        if (m->level[b] > Lmax)
++            Lmax = m->level[b];
++    int32_t *leaf = calloc((size_t)(m->N[0] * m->N[1] * m->N[2]),
++                           sizeof(int32_t));
++    for (int b = 0; b < m->nmb; b++) {
++        int sh = Lmax - m->level[b];
++        long r0[3], r1[3];
++        for (int a = 0; a < 3; a++) {
++            r0[a] = m->lloc[3 * b + a] << sh;
++            r1[a] = (m->lloc[3 * b + a] + 1) << sh;
++            if (r1[a] > m->N[a]) {
++                free(leaf);
++                return -1;
++            }
++        }
++        for (long k = r0[2]; k < r1[2]; k++)
++            for (long j = r0[1]; j < r1[1]; j++)
++                for (long i = r0[0]; i < r1[0]; i++)
++                    leaf[(k * m->N[1] + j) * m->N[0] + i] = b + 1;
++    }
++    m->leaf = leaf;
++    for (int a = 0; a < 3; a++)
++        m->inv_fdx[a] = 1.0 / fdx[a];
++    return 0;
++}
++
++static uint64_t mix64(uint64_t z) {
++    z += 0x9e3779b97f4a7c15ULL;
++    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
++    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
++    return z ^ (z >> 31);
++}
++
++#define LLOC_BITS 19
++static int key_ok(long L, long x1, long x2, long x3) {
++    long lim = 1L << LLOC_BITS;
++    return L >= 0 && L < 64 && x1 >= 0 && x2 >= 0 && x3 >= 0 && x1 < lim &&
++           x2 < lim && x3 < lim;
++}
++static uint64_t pack_key(long L, long x1, long x2, long x3) {
++    return (1ULL << 63) | ((uint64_t)L << (3 * LLOC_BITS)) |
++           ((uint64_t)x1 << (2 * LLOC_BITS)) | ((uint64_t)x2 << LLOC_BITS) |
++           (uint64_t)x3;
++}
++
++static int hash_get(const athk_mesh *m, uint64_t key) {
++    size_t mask = m->hcap - 1;
++    size_t h = (size_t)mix64(key) & mask;
++    while (m->hkey[h]) {
++        if (m->hkey[h] == key)
++            return m->hval[h];
++        h = (h + 1) & mask;
++    }
++    return 0;
++}
++
++/* BLP _build_level_hash. Returns 0 when built. */
++static int build_hash(athk_mesh *m) {
++    if (m->nmb < 1)
++        return -1;
++    double w0[3];
++    for (int a = 0; a < 3; a++)
++        w0[a] = (m->ext_hi[a] - m->ext_lo[a]) * ldexp(1.0, m->level[0]);
++    size_t cap = 16;
++    while (cap < 2 * (size_t)m->nmb)
++        cap <<= 1;
++    m->hcap = cap;
++    m->hkey = calloc(cap, sizeof(uint64_t));
++    m->hval = calloc(cap, sizeof(int32_t));
++    m->nlev = 0;
++    for (int b = 0; b < m->nmb; b++) {
++        int L = m->level[b];
++        for (int a = 0; a < 3; a++) {
++            double wm =
++                (m->ext_hi[3 * b + a] - m->ext_lo[3 * b + a]) * ldexp(1.0, L);
++            if (!(fabs(wm - w0[a]) <= 1e-9 * fabs(w0[a])))
++                goto fail;
++        }
++        long *ll = m->lloc + 3 * b;
++        if (!key_ok(L, ll[0], ll[1], ll[2]))
++            goto fail;
++        uint64_t key = pack_key(L, ll[0], ll[1], ll[2]);
++        size_t h = (size_t)mix64(key) & (cap - 1);
++        while (m->hkey[h] && m->hkey[h] != key)
++            h = (h + 1) & (cap - 1);
++        m->hkey[h] = key; /* a duplicate key keeps the later block (Dict) */
++        m->hval[h] = b + 1;
++        int seen = 0;
++        for (int q = 0; q < m->nlev; q++)
++            seen |= m->lev[q] == L;
++        if (!seen) {
++            if (m->nlev == 64)
++                goto fail;
++            m->lev[m->nlev++] = L;
++        }
++    }
++    for (int q = 1; q < m->nlev; q++) /* ascending */
++        for (int r = q; r > 0 && m->lev[r - 1] > m->lev[r]; r--) {
++            int t = m->lev[r];
++            m->lev[r] = m->lev[r - 1];
++            m->lev[r - 1] = t;
++        }
++    mesh_bounds(m, m->hmin, m->hmax);
++    for (int a = 0; a < 3; a++)
++        m->inv_w0[a] = 1.0 / w0[a];
++    return 0;
++fail:
++    free(m->hkey);
++    free(m->hval);
++    m->hkey = NULL;
++    m->hval = NULL;
++    m->hcap = 0;
++    return -1;
++}
++
++/* ------------------------------------------------------------------ public */
++
++int athk_load(const char *path, double gamma_override, int nthreads,
++              athk_mesh *m) {
++    memset(m, 0, sizeof *m);
++    int nt = reader_threads(nthreads);
++    double t0 = wtime();
++    size_t L = strlen(path);
++    int rc = (L >= 4 && !strcmp(path + L - 4, ".bin"))
++                 ? load_bin(path, gamma_override, nt, m)
++                 : load_athdf(path, gamma_override, nt, m);
++    if (rc) {
++        athk_free(m);
++        return rc;
++    }
++    if (build_table(m) == 0)
++        m->locate_mode = ATHK_LOCATE_TABLE;
++    else if (build_hash(m) == 0)
++        m->locate_mode = ATHK_LOCATE_HASH;
++    else
++        m->locate_mode = ATHK_LOCATE_SCAN;
++    m->load_seconds = wtime() - t0;
++    return 0;
++}
++
++void athk_free(athk_mesh *m) {
++    free(m->data);
++    free(m->ext_lo);
++    free(m->ext_hi);
++    free(m->x_left);
++    free(m->dx);
++    free(m->level);
++    free(m->lloc);
++    free(m->leaf);
++    free(m->hkey);
++    free(m->hval);
++    memset(m, 0, sizeof *m);
++}
++
++int athk_locate(const athk_mesh *m, double x, double y, double z) {
++    if (m->locate_mode == ATHK_LOCATE_TABLE) {
++        double f1 = (x - m->tmin[0]) * m->inv_fdx[0];
++        double f2 = (y - m->tmin[1]) * m->inv_fdx[1];
++        double f3 = (z - m->tmin[2]) * m->inv_fdx[2];
++        if (!(f1 >= 0.0 && f1 < (double)m->N[0] && f2 >= 0.0 &&
++              f2 < (double)m->N[1] && f3 >= 0.0 && f3 < (double)m->N[2]))
++            return -1;
++        long i1 = (long)f1, i2 = (long)f2, i3 = (long)f3;
++        return m->leaf[(i3 * m->N[1] + i2) * m->N[0] + i1] - 1;
++    }
++    if (m->locate_mode == ATHK_LOCATE_HASH) {
++        if (!(m->hmin[0] <= x && x < m->hmax[0] && m->hmin[1] <= y &&
++              y < m->hmax[1] && m->hmin[2] <= z && z < m->hmax[2]))
++            return -1;
++        double f1 = (x - m->hmin[0]) * m->inv_w0[0];
++        double f2 = (y - m->hmin[1]) * m->inv_w0[1];
++        double f3 = (z - m->hmin[2]) * m->inv_w0[2];
++        for (int q = 0; q < m->nlev; q++) {
++            int L = m->lev[q];
++            double s = ldexp(1.0, L);
++            long i1 = (long)(f1 * s), i2 = (long)(f2 * s), i3 = (long)(f3 * s);
++            if (!key_ok(L, i1, i2, i3))
++                continue;
++            int b = hash_get(m, pack_key(L, i1, i2, i3));
++            if (b)
++                return b - 1;
++        }
++        return -1;
++    }
++    int hit = -1;
++    for (int b = 0; b < m->nmb; b++) {
++        const double *lo = m->ext_lo + 3 * b, *hi = m->ext_hi + 3 * b;
++        if (lo[0] < x && x <= hi[0] && lo[1] < y && y <= hi[1] && lo[2] < z &&
++            z <= hi[2])
++            hit = b;
++    }
++    return hit;
++}
++
++int athk_sample(const athk_mesh *m, double x, double y, double z,
++                double prim[ATHK_NPRIM]) {
++    int b = athk_locate(m, x, y, z);
++    if (b < 0) {
++        for (int p = 0; p < ATHK_NPRIM; p++)
++            prim[p] = 0.0;
++        return -1;
++    }
++    const double X[3] = {x, y, z};
++    const int nax[3] = {m->ni, m->nj, m->nk};
++    long i0[3];
++    double d[3];
++    for (int a = 0; a < 3; a++) {
++        double fi = (X[a] - m->x_left[3 * b + a]) / m->dx[3 * b + a];
++        long i = (long)floor(fi);
++        if (i > nax[a] - 2)
++            i = nax[a] - 2;
++        if (i < 0)
++            i = 0;
++        double t = fi - (double)i;
++        t = t > 1.0 ? 1.0 : (t < 0.0 ? 0.0 : t);
++        i0[a] = i;
++        d[a] = t;
++    }
++    size_t ni = (size_t)m->ni, nj = (size_t)m->nj;
++    size_t sj = ni, sk = ni * nj;
++    size_t o = (size_t)i0[2] * sk + (size_t)i0[1] * sj + (size_t)i0[0];
++    for (int p = 0; p < ATHK_NPRIM; p++) {
++        const float *v = m->data + ((size_t)b * ATHK_NPRIM + p) * m->cells + o;
++        double c000 = v[0], c100 = v[1];
++        double c010 = v[sj], c110 = v[sj + 1];
++        double c001 = v[sk], c101 = v[sk + 1];
++        double c011 = v[sk + sj], c111 = v[sk + sj + 1];
++        double c00 = c000 + (c100 - c000) * d[0];
++        double c10 = c010 + (c110 - c010) * d[0];
++        double c01 = c001 + (c101 - c001) * d[0];
++        double c11 = c011 + (c111 - c011) * d[0];
++        double c0 = c00 + (c10 - c00) * d[1];
++        double c1 = c01 + (c11 - c01) * d[1];
++        prim[p] = c0 + (c1 - c0) * d[2];
++    }
++    return b;
++}
+diff --git a/model/athenak/athenak_mesh.h b/model/athenak/athenak_mesh.h
+new file mode 100644
+index 0000000..eadae79
+--- /dev/null
++++ b/model/athenak/athenak_mesh.h
+@@ -0,0 +1,121 @@
++/*
++ * athenak_mesh.h
++ *
++ * AthenaK GRMHD snapshot reader and meshblock sampler (M5).
++ *
++ * Reads AthenaK "Athena binary output version=1.1" `.bin` dumps and `.athdf`
++ * (HDF5) dumps of the `mhd_w_bcc` output group into one contiguous Float32
++ * array laid out [block][prim][k][j][i], with the eight primitives
++ *
++ *     dens, velx, vely, velz, eint, bcc1, bcc2, bcc3
++ *
++ * (normal-frame velocity u^i = W v^i, cell-centred lab field B^i). A stored
++ * pressure is converted once to eint = Float32(press / (gamma - 1)) in double,
++ * with gamma the dump's <mhd>/gamma unless overridden; the temperature column
++ * is dropped; non-finite cells are zeroed.
++ *
++ * Block location and sampling reproduce BlackLightPlus `meshblock_index` and
++ * `sample_primitives` (src/simulation/athenak_reader.jl) operation for
++ * operation, so the owning block and the interpolated primitives are
++ * bit-identical:
++ *   - locate: a dense finest-block index grid when it has at most
++ *     ATHK_LEAF_MAX_CELLS cells, else a hash keyed by (level, lx1, lx2, lx3)
++ *     probed coarse to fine, else a linear scan. The grid and the hash own a
++ *     point by lo <= x < hi (floor of the scaled offset); the scan by
++ *     lo < x <= hi with the last (finest) block winning. The three agree off
++ *     block faces.
++ *   - sample: trilinear on cell centres inside the owning block, the low
++ *     corner clamped to [0, n-2] and the weights to [0, 1] (one-sided at the
++ *     block's outer half cell, no ghost zones).
++ *
++ * The code has no dependence on RAPTOR globals and is used both by the
++ * RAPTOR model plug-in (model.c) and by the stand-alone probe
++ * (tests/athenak_probe.c).
++ */
++
++#ifndef ATHENAK_MESH_H
++#define ATHENAK_MESH_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define ATHK_NPRIM 8
++#define ATHK_DENS 0
++#define ATHK_VELX 1
++#define ATHK_VELY 2
++#define ATHK_VELZ 3
++#define ATHK_EINT 4
++#define ATHK_BCC1 5
++#define ATHK_BCC2 6
++#define ATHK_BCC3 7
++
++/* Dense leaf-table cap, BlackLightPlus `_LEAF_MAX_CELLS`. */
++#define ATHK_LEAF_MAX_CELLS 8000000L
++
++enum athk_locate_mode { ATHK_LOCATE_TABLE = 0, ATHK_LOCATE_HASH = 1,
++                        ATHK_LOCATE_SCAN = 2 };
++
++typedef struct athk_mesh {
++    /* geometry */
++    int nmb;            /* number of meshblocks */
++    int ni, nj, nk;     /* cells per block along x1, x2, x3 */
++    size_t cells;       /* ni * nj * nk */
++    float *data;        /* [nmb][ATHK_NPRIM][nk][nj][ni] */
++    double *ext_lo;     /* [nmb][3] low block face */
++    double *ext_hi;     /* [nmb][3] high block face */
++    double *x_left;     /* [nmb][3] first cell centre */
++    double *dx;         /* [nmb][3] cell spacing */
++    int *level;         /* [nmb] refinement level */
++    long *lloc;         /* [nmb][3] logical location at its level */
++
++    /* dump metadata */
++    double time;        /* dump time */
++    double gamma;       /* adiabatic index used for eint (dump or override) */
++    double gamma_dump;  /* <mhd>/gamma from the dump (NaN if absent) */
++    double spin_a;      /* <coord>/a from the dump (0 if absent) */
++    int stored_press;   /* 1: the dump stores press (converted to eint) */
++    size_t nbad;        /* zeroed non-finite values */
++    char format[8];     /* "bin" or "athdf" */
++
++    /* locate structures */
++    int locate_mode;
++    /* dense table */
++    int32_t *leaf;      /* [N3][N2][N1], 1-based block, 0 = vacuum */
++    long N[3];
++    double tmin[3], tmax[3], inv_fdx[3];
++    /* level hash */
++    uint64_t *hkey;     /* open addressing, 0 = empty slot */
++    int32_t *hval;      /* 1-based block */
++    size_t hcap;        /* power of two */
++    int nlev;
++    int lev[64];        /* levels present, ascending */
++    double hmin[3], hmax[3], inv_w0[3];
++
++    /* load statistics */
++    double load_seconds;
++    size_t bytes_data;  /* size of `data` */
++} athk_mesh;
++
++/*
++ * Load `path` (".bin" or anything else as ".athdf"). gamma_override > 0
++ * replaces the dump's <mhd>/gamma for the press -> eint conversion.
++ * nthreads <= 0 uses min(omp_get_max_threads(), 16) readers. Returns 0 on
++ * success; on failure prints the reason to stderr and returns nonzero.
++ */
++int athk_load(const char *path, double gamma_override, int nthreads,
++              athk_mesh *m);
++
++void athk_free(athk_mesh *m);
++
++/* Owning block (0-based) of CKS position (x, y, z), or -1 outside the mesh. */
++int athk_locate(const athk_mesh *m, double x, double y, double z);
++
++/*
++ * Clamped trilinear sample of the eight primitives at (x, y, z). Returns the
++ * owning block (0-based) and fills prim[ATHK_NPRIM]; returns -1 and zeros
++ * outside the mesh.
++ */
++int athk_sample(const athk_mesh *m, double x, double y, double z,
++                double prim[ATHK_NPRIM]);
++
++#endif /* ATHENAK_MESH_H */

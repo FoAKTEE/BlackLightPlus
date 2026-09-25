@@ -1,0 +1,121 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:33:08 -0700
+Subject: [PATCH 4/4] test(m6-plasma): add the end-to-end get_fluid_params
+ probe for R06
+
+- change: model/athenak/tests/fluid_probe.c runs init_model and get_fluid_params on the compiled SKS metric at the R06 points and records the metric difference against the points file
+- caveat: needs the SKS metric (M1, src/bbh_metric.c on blp-bbh); it does not build on blp-reader alone
+- next: R06 SKS leg (results/blp/raptor/tools/r06_run.sh with RAPTOR_SKS)
+---
+ model/athenak/tests/fluid_probe.c | 101 ++++++++++++++++++++++++++++++
+ 1 file changed, 101 insertions(+)
+ create mode 100644 model/athenak/tests/fluid_probe.c
+
+diff --git a/model/athenak/tests/fluid_probe.c b/model/athenak/tests/fluid_probe.c
+new file mode 100644
+index 0000000..ec5d603
+--- /dev/null
++++ b/model/athenak/tests/fluid_probe.c
+@@ -0,0 +1,101 @@
++/*
++ * fluid_probe.c
++ *
++ * End-to-end probe of the AthenaK model as RAPTOR runs it: init_model and
++ * get_fluid_params on the compiled metric, at the points of an R06 points
++ * file (athenak_probe.c). Needs the superposed Kerr-Schild metric (M1,
++ * src/bbh_metric.c) and a definitions.h with metric (SKS).
++ *
++ * Build (a run directory prepared with setup.sh -c=athenak -m=sks):
++ *   h5cc -std=gnu99 -O2 -fopenmp -I$RAPTOR/src -I. fluid_probe.c \
++ *        $RAPTOR/src/{core,io,GRmath,gr_integrator,rte_integrator,\
++ *        pol_rte_integrator,metric,pol_emission,tetrad,constants,camera,\
++ *        blp_coeffs,bbh_metric}.c model.c athenak_mesh.c athenak_plasma.c \
++ *        -o fluid_probe -lgsl -lgslcblas -lm
++ *
++ * Usage: fluid_probe SNAPSHOT POINTS OUT BBH_IN MBH_G M_UNIT_G R_HIGH
++ * OUT: int64 n, int64 ncol, then n records of ncol float64, columns
++ *   block, emit, U_u[4], U_d[4], B_u[4], B_d[4], n_e, B, theta_e, sigma,
++ *   max|g_dd - gcov|/max|gcov|, max|g_uu - gcon|/max|gcon|
++ * (gcov/gcon: the metric stored in the points file).
++ */
++
++#include "definitions.h"
++#include "functions.h"
++#include "global_vars.h"
++#include "model_definitions.h"
++#include "model_functions.h"
++#include "model_global_vars.h"
++
++#include <stdint.h>
++
++#define NCOL 24
++
++static double maxrel(double a[4][4], const double *b) {
++    double num = 0, den = 0;
++    for (int i = 0; i < 16; i++) {
++        num = fmax(num, fabs(a[i / 4][i % 4] - b[i]));
++        den = fmax(den, fabs(b[i]));
++    }
++    return den > 0 ? num / den : num;
++}
++
++int main(int argc, char **argv) {
++    if (argc < 8) {
++        fprintf(stderr, "usage: fluid_probe SNAPSHOT POINTS OUT BBH_IN MBH_G "
++                        "M_UNIT_G R_HIGH\n");
++        return 2;
++    }
++    snprintf(GRMHD_FILE, sizeof GRMHD_FILE, "%s", argv[1]);
++    MBH = atof(argv[5]);
++    M_UNIT = atof(argv[6]);
++    R_HIGH = atof(argv[7]);
++    R_LOW = 1.0;
++    read_bbh_config(argv[4]);
++    init_model();
++
++    FILE *fp = fopen(argv[2], "rb");
++    int64_t hdr[2];
++    if (!fp || fread(hdr, sizeof(int64_t), 2, fp) != 2 || hdr[1] != 1) {
++        fprintf(stderr, "bad points file %s\n", argv[2]);
++        return 1;
++    }
++    int64_t n = hdr[0];
++    double *in = malloc((size_t)n * 35 * sizeof(double));
++    if (fread(in, sizeof(double), (size_t)n * 35, fp) != (size_t)n * 35)
++        return 1;
++    fclose(fp);
++    double *res = calloc((size_t)n * NCOL, sizeof(double));
++#pragma omp parallel for schedule(dynamic, 256)
++    for (int64_t q = 0; q < n; q++) {
++        const double *r = in + q * 35;
++        double *o = res + q * NCOL;
++        double X[4] = {0., r[0], r[1], r[2]};
++        struct GRMHD mv;
++        memset(&mv, 0, sizeof mv);
++        int emit = get_fluid_params(X, &mv);
++        o[0] = mv.igrid_c;
++        o[1] = emit;
++        for (int i = 0; i < 4; i++) {
++            o[2 + i] = mv.U_u[i];
++            o[6 + i] = mv.U_d[i];
++            o[10 + i] = mv.B_u[i];
++            o[14 + i] = mv.B_d[i];
++        }
++        o[18] = mv.n_e;
++        o[19] = mv.B;
++        o[20] = mv.theta_e;
++        o[21] = mv.sigma;
++        double g_dd[4][4], g_uu[4][4];
++        metric_dd(X, g_dd);
++        metric_uu(X, g_uu);
++        o[22] = maxrel(g_dd, r + 3);
++        o[23] = maxrel(g_uu, r + 19);
++    }
++    fp = fopen(argv[3], "wb");
++    int64_t oh[2] = {n, NCOL};
++    fwrite(oh, sizeof(int64_t), 2, fp);
++    fwrite(res, sizeof(double), (size_t)n * NCOL, fp);
++    fclose(fp);
++    return 0;
++}

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:33:07 -0700
+Subject: [PATCH 3/4] fix(m6-plasma): switch off the model coefficient hook in
+ the athenak setup
+
+- change: setup.sh -c=athenak sets EMIS_MODEL (0) in the copied definitions.h: the blp_analytic definitions enable model_evaluate_coeffs, which the AthenaK model does not define (the build failed to link)
+- verify: setup.sh -c=athenak -m=sks builds on blp-reader merged onto blp-bbh
+---
+ setup.sh | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/setup.sh b/setup.sh
+index f198ab2..846e4ac 100755
+--- a/setup.sh
++++ b/setup.sh
+@@ -87,8 +87,10 @@ then
+                 rsync -v -u $RAPTOR/model/bhac/definitions.h .
+         fi
+         rsync -v -u $RAPTOR/model/athenak/* .
+-        # polarized transfer along the whole ray (the escape radius is 1100 M)
++        # polarized transfer along the whole ray (the escape radius is 1100 M);
++        # coefficients from the emission fits, not from model_evaluate_coeffs
+         sed -i '/#define RT_OUTER_CUTOFF (/s/.*/#define RT_OUTER_CUTOFF (1100.)/' definitions.h
++        sed -i '/#define EMIS_MODEL (/s/.*/#define EMIS_MODEL (0)/' definitions.h
+ else
+  echo "no grmhd model picked. Aborting."
+  exit

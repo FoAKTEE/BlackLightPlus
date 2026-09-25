@@ -90,3 +90,45 @@ keep upstream behaviour; `model/blp_analytic/definitions.h` turns them on.
 BlackLightPlus side lives in `results/blp/raptor/tools/`: `r03_verify.sh`,
 `r04_verify.sh`, `r05_verify.sh` and `r01_verify.sh` export the fork branch with
 `git archive`, build it and run the comparisons.
+
+## Branch `blp-reader`: AthenaK model (M5, M6, R06)
+
+`blp-reader` branches from `b91e937` and holds the AthenaK data layer; its
+series is `patches/blp-reader/` (`BRANCH=blp-reader
+OUT=results/blp/raptor/patches/blp-reader tools/export_patches.sh`). It merges
+onto `blp-bbh` without conflicts.
+
+| file | role |
+|---|---|
+| `model/athenak/athenak_mesh.[ch]` | M5 reader: `.bin` v1.1 and `.athdf` (`mhd_w_bcc`) into Float32 `[block][prim][k][j][i]` (dens, velx, vely, velz, eint, bcc1–3); eint = Float32(press/(γ − 1)) with the dump's `<mhd>/gamma`; owning block and clamped cell-centre trilinear sample by the BlackLightPlus `meshblock_index` / `sample_primitives` rules |
+| `model/athenak/athenak_plasma.[ch]` | M6: `athk_four_vectors` (AthenaK b⁰ = u_i B^i) and `athk_plasma_decode` (n_e, Θ_e, \|B\|, σ, β⁻¹, σ > 1 cut, vacuum gates), the ports of `primitive_four_vectors` and `plasma_decode` |
+| `model/athenak/model.c` | RAPTOR model: `init_model`, `set_units`, `get_fluid_params` on the compiled metric (CKS or SKS) |
+| `model/athenak/tests/athenak_probe.c` | data-layer probe on a points file (R06) |
+| `model/athenak/tests/fluid_probe.c` | `init_model` + `get_fluid_params` on the SKS metric (R06 end-to-end leg; needs M1) |
+| `setup.sh -c=athenak`, `run/makefile` | the run directory takes `model/blp_analytic/definitions.h` when present (else bhac's), sets `RT_OUTER_CUTOFF` 1100 and `EMIS_MODEL` 0; `-m=sks`; `model.mk` adds the model sources |
+
+The emission side consumes the data layer through three calls per sample:
+
+```c
+int b = athk_sample(&athk, x, y, z, prim);              // owning block, 8 primitives
+athk_four_vectors(prim, g_dd, g_uu, &fv);               // u^mu, u_mu, b^mu, b_mu, b^2
+int emit = athk_plasma_decode(&athk_par, prim[ATHK_DENS],
+                              athk_pgas(prim[ATHK_EINT], athk.gamma), fv.b_sq, &pl);
+// pl.n_e_cgs [cm^-3], pl.theta_e, pl.bb_cgs [G]; emit == 0 is vacuum
+```
+
+Run directory and image (after the merge onto `blp-bbh`, with `bbh.in` from the
+snapshot's binary geometry):
+
+```bash
+export RAPTOR=/data/haiyangw/claude/BlackLightPlus/ref-code/jordydavelaar-raptor
+bash $RAPTOR/setup.sh -c=athenak -m=sks -r=pol -i=rk4
+OMP_NUM_THREADS=64 ./RAPTOR model.in /data2/.../torus.mhd_w_bcc.00455.bin 0
+python3 results/blp/raptor/tools/raptor_h5_to_array.py output/img_data_0.h5 56 480 1.3e10 16800 img.npz --constants blp
+```
+
+R06 reproduction (`dag.md` R06): `results/blp/raptor/tools/r06_run.sh TAG
+[threads]` writes the BlackLightPlus reference (`r06_reference.jl`), runs the
+probe and compares (`r06_compare.py`) into `evidence/R06/TAG_samples.json`;
+`RAPTOR_SKS=<blp-reader merged onto blp-bbh>` adds the end-to-end leg.
+`r06_verify.sh` re-runs s455 and s122 on the committed `blp-reader`.

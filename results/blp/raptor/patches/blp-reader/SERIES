@@ -1,0 +1,11 @@
+base b91e937b7b746eb24992b6c1dd8831c5dea0cef1
+head 0c865d945f845658dc28334dd008c64ea720ec52
+tree 41ddffaec76973a84251e2f8473db8eeff16d6d6
+442feb2 feat(m5-athenak): read AthenaK .bin and .athdf dumps into Float32 meshblocks
+ca010b8 feat(m6-plasma): add the AthenaK RAPTOR model with the BlackLightPlus plasma decode
+5e3640b fix(m6-plasma): switch off the model coefficient hook in the athenak setup
+0c865d9 test(m6-plasma): add the end-to-end get_fluid_params probe for R06
+74bc9cc47984bf41c778d3d450b1f4d606f4f0a816a0fc81c0fe1545deeb9fc2  0001-feat-m5-athenak-read-AthenaK-.bin-and-.athdf-dumps-i.patch
+e1685d802cf613f81bbe530978964c98ec1b592507938bac7e61e2e02ff80e22  0002-feat-m6-plasma-add-the-AthenaK-RAPTOR-model-with-the.patch
+0bb2f661c686b64d25b761debaefb0232e4b80cdb6043489ccb381cb88529d40  0003-fix-m6-plasma-switch-off-the-model-coefficient-hook-.patch
+1f31fd42f310b4931b967a20f91fe3204488cd2ac0eef56e61f1d7d28327e563  0004-test-m6-plasma-add-the-end-to-end-get_fluid_params-p.patch

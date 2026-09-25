@@ -1,0 +1,796 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:30:19 -0700
+Subject: [PATCH 2/4] feat(m6-plasma): add the AthenaK RAPTOR model with the
+ BlackLightPlus plasma decode
+
+- change: model/athenak/athenak_plasma.[ch] port primitive_four_vectors (AthenaK b^0 = u_i B^i) and plasma_decode (n_e = rho/m_p, Theta_e = (m_p/m_e)(p/rho)/(1 + R), |B| = sqrt(b^2) B_unit, sigma > 1 cut only, no floors) with the BlackLightPlus operation order, including the fused multiply-add chains of g u and b.b
+- change: model/athenak/model.c implements init_model/set_units/get_fluid_params on the compiled metric (CKS or SKS); tests/athenak_probe.c samples a points file for the R06 comparison
+- change: setup.sh -c=athenak (definitions.h from model/blp_analytic when present, else bhac; RT_OUTER_CUTOFF 1100; -m=sks); run/makefile includes an optional model.mk for model sources
+- result: u^mu, b^mu, b^2, n_e, B, Theta_e, sigma, beta^-1 and the emit/sigma-cut flags bit-identical to BlackLightPlus at 3e5 points on s455, s122, s093; |u.u + 1| <= 8.5e-14, |u.b|/|b| <= 7.3e-14 [SOLID]
+- verify: bhac build unchanged: R01 synthetic image bitwise identical
+- next: end-to-end get_fluid_params on the SKS metric once M1 is merged (R07)
+---
+ model/athenak/athenak_plasma.c      | 121 ++++++++++++++++
+ model/athenak/athenak_plasma.h      | 118 +++++++++++++++
+ model/athenak/model.c               | 128 +++++++++++++++++
+ model/athenak/model.mk              |   3 +
+ model/athenak/model_definitions.h   |  39 +++++
+ model/athenak/model_functions.h     |  10 ++
+ model/athenak/model_global_vars.h   |  23 +++
+ model/athenak/tests/athenak_probe.c | 214 ++++++++++++++++++++++++++++
+ run/makefile                        |   5 +
+ setup.sh                            |  20 ++-
+ 10 files changed, 680 insertions(+), 1 deletion(-)
+ create mode 100644 model/athenak/athenak_plasma.c
+ create mode 100644 model/athenak/athenak_plasma.h
+ create mode 100644 model/athenak/model.c
+ create mode 100644 model/athenak/model.mk
+ create mode 100644 model/athenak/model_definitions.h
+ create mode 100644 model/athenak/model_functions.h
+ create mode 100644 model/athenak/model_global_vars.h
+ create mode 100644 model/athenak/tests/athenak_probe.c
+
+diff --git a/model/athenak/athenak_plasma.c b/model/athenak/athenak_plasma.c
+new file mode 100644
+index 0000000..1aa349b
+--- /dev/null
++++ b/model/athenak/athenak_plasma.c
+@@ -0,0 +1,121 @@
++/*
++ * athenak_plasma.c
++ *
++ * Primitive -> four-vector transform and plasma decode (M6); see
++ * athenak_plasma.h.
++ */
++
++#include "athenak_plasma.h"
++
++#include <math.h>
++#include <string.h>
++
++#ifndef M_PI
++#define M_PI 3.14159265358979323846
++#endif
++
++void athk_plasma_defaults(athk_plasma_params *par) {
++    memset(par, 0, sizeof *par);
++    par->mu = 0.5;
++    par->ne_ni = 1.0;
++    par->use_p = 1;
++    par->rat_low = 1.0;
++    par->rat_high = 40.0;
++    par->gamma = 13.0 / 9.0;
++    par->gamma_i = 5.0 / 3.0;
++    par->gamma_e = 4.0 / 3.0;
++    par->thermal_frac = 1.0;
++    par->cut_sigma_max = 1.0;
++    par->cut_theta_e_min = -1.0;
++    par->cut_theta_e_max = -1.0;
++}
++
++void athk_plasma_units(athk_plasma_params *par, double m_bh_cgs,
++                       double mass_scale_cgs, double G, double c, double mp,
++                       double me) {
++    par->mp = mp;
++    par->me = me;
++    par->cl = c;
++    par->L_unit = G * m_bh_cgs / (c * c);
++    par->T_unit = par->L_unit / c;
++    par->d_unit = mass_scale_cgs / (par->L_unit * par->L_unit * par->L_unit);
++    par->e_unit = par->d_unit * (c * c);
++    par->b_unit = c * sqrt(4.0 * M_PI * par->d_unit);
++}
++
++/* StaticArrays SMatrix * SVector row: muladd chain from the first column. */
++static void matvec(const double g[4][4], const double v[4], double out[4]) {
++    for (int i = 0; i < 4; i++)
++        out[i] = fma(g[i][3], v[3],
++                     fma(g[i][2], v[2], fma(g[i][1], v[1], g[i][0] * v[0])));
++}
++
++void athk_four_vectors(const double prim[8], const double gcov[4][4],
++                       const double gcon[4][4], athk_fourvec *fv) {
++    const double uu1 = prim[1], uu2 = prim[2], uu3 = prim[3];
++    const double bb1 = prim[5], bb2 = prim[6], bb3 = prim[7];
++    double uu0 = sqrt(1 + gcov[1][1] * uu1 * uu1 + 2 * gcov[1][2] * uu1 * uu2 +
++                      2 * gcov[1][3] * uu1 * uu3 + gcov[2][2] * uu2 * uu2 +
++                      2 * gcov[2][3] * uu2 * uu3 + gcov[3][3] * uu3 * uu3);
++    double lapse = 1 / sqrt(-gcon[0][0]);
++    double shift1 = -gcon[0][1] / gcon[0][0];
++    double shift2 = -gcon[0][2] / gcon[0][0];
++    double shift3 = -gcon[0][3] / gcon[0][0];
++
++    fv->ucon[0] = uu0 / lapse;
++    fv->ucon[1] = uu1 - shift1 * uu0 / lapse;
++    fv->ucon[2] = uu2 - shift2 * uu0 / lapse;
++    fv->ucon[3] = uu3 - shift3 * uu0 / lapse;
++    matvec(gcov, fv->ucon, fv->ucov);
++
++    double b0 = fv->ucov[1] * bb1 + fv->ucov[2] * bb2 + fv->ucov[3] * bb3;
++    fv->bcon[0] = b0;
++    fv->bcon[1] = (bb1 + b0 * fv->ucon[1]) / fv->ucon[0];
++    fv->bcon[2] = (bb2 + b0 * fv->ucon[2]) / fv->ucon[0];
++    fv->bcon[3] = (bb3 + b0 * fv->ucon[3]) / fv->ucon[0];
++    matvec(gcov, fv->bcon, fv->bcov);
++
++    /* LinearAlgebra.dot inlined into primitive_four_vectors compiles to a
++     * fused multiply-add chain (the @simd reduction is contracted) */
++    fv->b_sq = fma(fv->bcon[3], fv->bcov[3],
++                   fma(fv->bcon[2], fv->bcov[2],
++                       fma(fv->bcon[1], fv->bcov[1], fv->bcon[0] * fv->bcov[0])));
++}
++
++static double electron_theta(const athk_plasma_params *c, double rho_cgs,
++                             double pgas_cgs, double beta_inv) {
++    double tti_tte = (c->rat_high + c->rat_low * beta_inv * beta_inv) /
++                     (1.0 + beta_inv * beta_inv);
++    double kb_tt_tot_cgs = c->mu * c->mp * pgas_cgs / rho_cgs;
++    double kb_tt_e_cgs;
++    if (c->use_p != 0) {
++        kb_tt_e_cgs = (1.0 + c->ne_ni) / (tti_tte + c->ne_ni) * kb_tt_tot_cgs;
++    } else {
++        kb_tt_e_cgs = (1.0 + c->ne_ni) * kb_tt_tot_cgs / (c->gamma - 1.0);
++        kb_tt_e_cgs /= tti_tte / (c->gamma_i - 1.0) +
++                       c->ne_ni / (c->gamma_e - 1.0);
++    }
++    double theta_e = kb_tt_e_cgs / (c->me * c->cl * c->cl);
++    return c->thermal_frac == 0.0 ? NAN : theta_e;
++}
++
++int athk_plasma_decode(const athk_plasma_params *c, double rho, double pgas,
++                       double b_sq, athk_plasma *pl) {
++    memset(pl, 0, sizeof *pl);
++    if (rho <= 0.0 || pgas <= 0.0)
++        return 0;
++    if (!(b_sq > 0.0)) /* also NaN: no real u^mu where g^00 >= 0 */
++        return 0;
++    pl->rho_cgs = rho * c->d_unit;
++    pl->pgas_cgs = pgas * c->e_unit;
++    double n_cgs = pl->rho_cgs / (c->mu * c->mp);
++    pl->n_e_cgs = n_cgs / (1.0 + 1.0 / c->ne_ni);
++    pl->bb_cgs = sqrt(b_sq) * c->b_unit;
++    pl->sigma = b_sq / rho;
++    pl->beta_inv = b_sq / (2.0 * pgas);
++    pl->theta_e = electron_theta(c, pl->rho_cgs, pl->pgas_cgs, pl->beta_inv);
++    pl->omit = (c->cut_theta_e_min >= 0.0 && pl->theta_e < c->cut_theta_e_min) ||
++               (c->cut_theta_e_max >= 0.0 && pl->theta_e > c->cut_theta_e_max) ||
++               (c->cut_sigma_max >= 0.0 && pl->sigma > c->cut_sigma_max);
++    return !pl->omit;
++}
+diff --git a/model/athenak/athenak_plasma.h b/model/athenak/athenak_plasma.h
+new file mode 100644
+index 0000000..907c758
+--- /dev/null
++++ b/model/athenak/athenak_plasma.h
+@@ -0,0 +1,118 @@
++/*
++ * athenak_plasma.h
++ *
++ * Data-layer plasma model for AthenaK GRMHD samples (M6): the primitive ->
++ * four-vector transform and the code-unit -> cgs plasma decode. Both are
++ * line-by-line ports of BlackLightPlus
++ *   src/simulation/primitives.jl   primitive_four_vectors
++ *   src/radiation/coefficients.jl  plasma_decode, electron_theta,
++ *                                  plasma_cut_omits
++ *   src/radiation/integrator.jl    the vacuum gates of eight_coefficients
++ *   src/simulation/athenak_reader.jl units
++ * with the same floating-point operation order (StaticArrays' g * v and the
++ * inlined b.b are fused multiply-add chains), so the results are
++ * bit-identical.
++ *
++ * Interface for the emission side. A sample at position X is turned into
++ * emission inputs in three steps:
++ *
++ *   athk_sample(mesh, X, prim)                         athenak_mesh.h
++ *   athk_four_vectors(prim, gcov, gcon, &fv)           u^mu, b^mu, b^2
++ *   athk_plasma_decode(&par, rho, pgas, fv.b_sq, &pl)  n_e, Theta_e, |B|
++ *
++ * with pgas = athk_pgas(eint, par.gamma). gcov/gcon are the metric and its
++ * inverse at X (RAPTOR metric_dd / metric_uu). The decode returns 1 when the
++ * sample emits; 0 means vacuum (rho <= 0, pgas <= 0, b^2 <= 0 or a plasma cut),
++ * exactly the samples BlackLightPlus skips. The emission coefficients take
++ * pl.n_e_cgs [cm^-3], pl.theta_e and pl.bb_cgs [G]; the pitch angle and the
++ * fluid-frame frequency take fv.ucon/ucov and fv.bcon/bcov (code units:
++ * multiply b by b_unit for Gauss).
++ *
++ * Model (the BlackLightPlus BBH driver, figures/fig_eht_bbh.jl):
++ *   n_e = rho_cgs / (mu m_p) / (1 + 1/(n_e/n_i)) = rho_cgs / m_p for
++ *         mu = 0.5, n_e/n_i = 1;
++ *   Theta_e = (1 + n_e/n_i)/(R + n_e/n_i) mu m_p p/rho / (m_e c^2)
++ *           = (m_p/m_e)(p/rho)/(1 + R) (use_p = 1),
++ *   R = (R_high + R_low beta_inv^2)/(1 + beta_inv^2), beta_inv = b^2/(2p);
++ *   |B| = sqrt(b^2) B_unit; sigma = b^2/rho;
++ *   cut: sigma > sigma_max (sigma_max = 1); a negative bound disables a cut.
++ * No floors, no Theta_e bounds, no radius masks.
++ */
++
++#ifndef ATHENAK_PLASMA_H
++#define ATHENAK_PLASMA_H
++
++typedef struct athk_fourvec {
++    double ucon[4], ucov[4]; /* u^mu, u_mu */
++    double bcon[4], bcov[4]; /* b^mu, b_mu (code units) */
++    double b_sq;             /* b^mu b_mu */
++} athk_fourvec;
++
++typedef struct athk_plasma_params {
++    /* unit conversion (athk_plasma_units) */
++    double L_unit, T_unit, d_unit, e_unit, b_unit;
++    /* physical constants [cgs] */
++    double mp, me, cl;
++    /* plasma model */
++    double mu, ne_ni;
++    int use_p;
++    double rat_low, rat_high;
++    double gamma, gamma_i, gamma_e;
++    double thermal_frac;
++    /* cuts; a negative value disables the cut */
++    double cut_sigma_max, cut_theta_e_min, cut_theta_e_max;
++} athk_plasma_params;
++
++typedef struct athk_plasma {
++    double rho_cgs, pgas_cgs, n_e_cgs, bb_cgs; /* g/cm^3, erg/cm^3, cm^-3, G */
++    double sigma, beta_inv, theta_e;
++    int omit; /* plasma cut fired */
++} athk_plasma;
++
++/*
++ * Defaults of the BlackLightPlus BBH driver: mu = 0.5, n_e/n_i = 1, use_p,
++ * R_low = 1, R_high = 40, gamma = 13/9, gamma_i = 5/3, gamma_e = 4/3,
++ * thermal only, sigma_max = 1, Theta_e bounds off. Constants and units are
++ * left zero; set them with athk_plasma_units.
++ */
++void athk_plasma_defaults(athk_plasma_params *par);
++
++/*
++ * Units for a black-hole (total) mass m_bh_cgs [g] and density mass scale
++ * mass_scale_cgs [g] (BlackLightPlus `units`):
++ *   L = G M / c^2, T = L / c, d_unit = ms / L^3, e_unit = d_unit c^2,
++ *   b_unit = c sqrt(4 pi d_unit).
++ * Stores G-independent constants mp, me, cl too.
++ */
++void athk_plasma_units(athk_plasma_params *par, double m_bh_cgs,
++                       double mass_scale_cgs, double G, double c, double mp,
++                       double me);
++
++/* p_gas = (gamma - 1) eint (BlackLightPlus pgas_from_eint). */
++static inline double athk_pgas(double eint, double gamma) {
++    return (gamma - 1) * eint;
++}
++
++/*
++ * u^mu and b^mu from the AthenaK normal-frame velocity prim[1..3] and lab
++ * field prim[5..7] (athenak_mesh.h primitive order) with the metric gcov and
++ * its inverse gcon at the sample point:
++ *   W = sqrt(1 + gamma_ij u^i u^j), alpha = 1/sqrt(-g^00),
++ *   beta^i = -g^0i/g^00, u^0 = W/alpha, u^i = u^i - beta^i W/alpha,
++ *   b^0 = u_i B^i, b^i = (B^i + b^0 u^i)/u^0.
++ */
++void athk_four_vectors(const double prim[8], const double gcov[4][4],
++                       const double gcon[4][4], athk_fourvec *fv);
++
++/*
++ * Code-unit -> cgs decode of one sample and the emission gate. Returns 1 when
++ * the sample emits, 0 for vacuum (rho <= 0, pgas <= 0, b_sq <= 0) or a cut
++ * (pl->omit). pl is filled whenever rho > 0, pgas > 0 and b_sq > 0. A NaN
++ * b_sq (the four-vectors do not exist: g^00 >= 0, which the superposed metric
++ * reaches only deep inside a horizon, near a ring singularity) is vacuum;
++ * BlackLightPlus never samples there (its march stops at the horizon).
++ */
++int athk_plasma_decode(const athk_plasma_params *par, double rho, double pgas,
++                       double b_sq, athk_plasma *pl);
++
++#endif /* ATHENAK_PLASMA_H */
+diff --git a/model/athenak/model.c b/model/athenak/model.c
+new file mode 100644
+index 0000000..debb967
+--- /dev/null
++++ b/model/athenak/model.c
+@@ -0,0 +1,128 @@
++/*
++ * model.c — AthenaK GRMHD model for RAPTOR (M5 reader, M6 plasma model)
++ *
++ * Reads an AthenaK `.bin` or `.athdf` snapshot of the `mhd_w_bcc` group
++ * (athenak_mesh.c) and returns per sample the fluid state of the
++ * BlackLightPlus BBH driver (athenak_plasma.c):
++ *   - primitives by clamped trilinear interpolation on cell centres inside the
++ *     owning meshblock (BlackLightPlus ownership and sampling, bit-identical);
++ *   - u^mu, b^mu from the normal-frame velocity and lab field with the
++ *     compiled metric (metric_dd, metric_uu) at the sample point;
++ *   - n_e = rho/m_p, |B| = sqrt(b^2) B_unit,
++ *     Theta_e = (m_p/m_e)(p/rho)/(1 + R(beta)) with p = (gamma - 1) eint and
++ *     the dump's gamma;
++ *   - vacuum where rho <= 0, p <= 0 or b^2 <= 0; emission cut sigma > 1 only.
++ * There are no density or field floors, no Theta_e bounds and no radius
++ * masks. The sample coordinates are Cartesian Kerr-Schild (x, y, z).
++ */
++
++#include "definitions.h"
++#include "functions.h"
++#include "global_vars.h"
++#include "model_definitions.h"
++#include "model_functions.h"
++#include "model_global_vars.h"
++
++#if !(metric == CKS || (defined(SKS) && metric == SKS))
++#error "model athenak samples Cartesian Kerr-Schild positions: use metric CKS or SKS"
++#endif
++
++// GLOBAL VARS
++//////////////
++
++double ****p = NULL;
++
++double L_unit, T_unit;
++double RHO_unit, U_unit, B_unit;
++double Ne_unit, Thetae_unit;
++
++double R0, a, Q, hslope;
++
++athk_mesh athk;
++athk_plasma_params athk_par;
++
++// FUNCTIONS
++////////////
++
++void init_model() {
++    athk_plasma_defaults(&athk_par);
++    athk_par.rat_high = R_HIGH;
++    athk_par.rat_low = R_LOW;
++    athk_par.cut_sigma_max = ATHK_SIGMA_CUT;
++
++    set_units(M_UNIT);
++
++    fprintf(stderr, "\nReading AthenaK snapshot %s...\n", GRMHD_FILE);
++    if (athk_load(GRMHD_FILE, ATHK_GAMMA_OVERRIDE, ATHK_LOAD_THREADS, &athk)) {
++        fprintf(stderr, "AthenaK read failed. Aborting.\n");
++        exit(1);
++    }
++    athk_par.gamma = athk.gamma;
++    a = athk.spin_a; /* single-hole metrics; the binary metric has its own spins */
++    const char *mode[3] = {"table", "hash", "scan"};
++    fprintf(stderr,
++            "AthenaK %s: %d blocks of %dx%dx%d, t = %g, gamma = %.12g, "
++            "locate %s, %.2f GB in %.2f s, %zu non-finite values zeroed\n",
++            athk.format, athk.nmb, athk.ni, athk.nj, athk.nk, athk.time,
++            athk.gamma, mode[athk.locate_mode], athk.bytes_data / 1073741824.,
++            athk.load_seconds, athk.nbad);
++}
++
++void set_units(double M_unit_) {
++    athk_plasma_units(&athk_par, MBH, M_unit_, GGRAV, SPEED_OF_LIGHT,
++                      PROTON_MASS, ELECTRON_MASS);
++    L_unit = athk_par.L_unit;
++    T_unit = athk_par.T_unit;
++    RHO_unit = athk_par.d_unit;
++    U_unit = athk_par.e_unit;
++    B_unit = athk_par.b_unit;
++    Ne_unit = RHO_unit / (athk_par.mu * PROTON_MASS) /
++              (1.0 + 1.0 / athk_par.ne_ni);
++}
++
++// Fluid state at X (t, x, y, z). Returns 1 when the sample emits.
++int get_fluid_params(double X[NDIM], struct GRMHD *modvar) {
++    modvar->n_e = 0.;
++    modvar->B = 0.;
++    modvar->theta_e = 0.;
++    modvar->sigma = 0.;
++    modvar->beta = 0.;
++    modvar->sigma_min = athk_par.cut_sigma_max;
++
++    double prim[ATHK_NPRIM];
++    int b = athk_sample(&athk, X[1], X[2], X[3], prim);
++    modvar->igrid_c = b;
++    if (b < 0)
++        return 0;
++    modvar->dx_local = athk.dx[3 * b];
++
++    double g_dd[NDIM][NDIM], g_uu[NDIM][NDIM];
++    metric_dd(X, g_dd);
++    metric_uu(X, g_uu);
++    athk_fourvec fv;
++    athk_four_vectors(prim, g_dd, g_uu, &fv);
++    for (int i = 0; i < NDIM; i++) {
++        modvar->U_u[i] = fv.ucon[i];
++        modvar->U_d[i] = fv.ucov[i];
++        modvar->B_u[i] = fv.bcon[i];
++        modvar->B_d[i] = fv.bcov[i];
++    }
++
++    athk_plasma pl;
++    double pgas = athk_pgas(prim[ATHK_EINT], athk.gamma);
++    int emit = athk_plasma_decode(&athk_par, prim[ATHK_DENS], pgas, fv.b_sq, &pl);
++    modvar->B = pl.bb_cgs;
++    modvar->theta_e = pl.theta_e;
++    modvar->sigma = pl.sigma;
++    modvar->beta = pl.beta_inv > 0. ? 1. / pl.beta_inv : 0.;
++    if (!emit)
++        return 0;
++    modvar->n_e = pl.n_e_cgs;
++    return 1;
++}
++
++void compute_spec_user(struct Camera *intensityfield,
++                       double energy_spectrum[num_frequencies][nspec]) {
++    (void)intensityfield;
++    (void)energy_spectrum;
++}
+diff --git a/model/athenak/model.mk b/model/athenak/model.mk
+new file mode 100644
+index 0000000..0e06e98
+--- /dev/null
++++ b/model/athenak/model.mk
+@@ -0,0 +1,3 @@
++# Extra sources of the AthenaK model, compiled with the RAPTOR sources
++# (run/makefile includes this file when setup.sh copies it into the run dir).
++MODEL_SOURCES = athenak_mesh.c athenak_plasma.c
+diff --git a/model/athenak/model_definitions.h b/model/athenak/model_definitions.h
+new file mode 100644
+index 0000000..abd437e
+--- /dev/null
++++ b/model/athenak/model_definitions.h
+@@ -0,0 +1,39 @@
++/*
++ * model_definitions.h — AthenaK GRMHD model (M5, M6)
++ *
++ * The fluid state RAPTOR's transfer reads per sample (struct GRMHD) and the
++ * compile-time switches of the AthenaK model.
++ */
++
++#ifndef MODEL_DEFINITIONS_H
++#define MODEL_DEFINITIONS_H
++
++#define SFC 0
++
++#define PLUS 1
++#define MINUS -1
++#define BPOL (PLUS)
++
++/* adiabatic index for press -> eint; <= 0 uses the dump's <mhd>/gamma */
++#define ATHK_GAMMA_OVERRIDE (0.)
++/* emission cut sigma = b^2/rho > ATHK_SIGMA_CUT (negative disables) */
++#define ATHK_SIGMA_CUT (1.0)
++/* reader threads; <= 0 uses min(OMP_NUM_THREADS, 16) */
++#define ATHK_LOAD_THREADS (0)
++
++typedef struct GRMHD {
++    double U_u[4];
++    double B_u[4];
++    double U_d[4];
++    double B_d[4];
++    double n_e;
++    double B;
++    double theta_e;
++    double sigma;
++    double sigma_min;
++    double dx_local;
++    double beta;
++    int igrid_c;
++} GRMHD;
++
++#endif
+diff --git a/model/athenak/model_functions.h b/model/athenak/model_functions.h
+new file mode 100644
+index 0000000..e16da8b
+--- /dev/null
++++ b/model/athenak/model_functions.h
+@@ -0,0 +1,10 @@
++/*
++ * model_functions.h — AthenaK GRMHD model (M5, M6)
++ */
++
++#ifndef MODEL_FUNCTIONS_H
++#define MODEL_FUNCTIONS_H
++
++void set_units(double);
++
++#endif
+diff --git a/model/athenak/model_global_vars.h b/model/athenak/model_global_vars.h
+new file mode 100644
+index 0000000..e05aa3f
+--- /dev/null
++++ b/model/athenak/model_global_vars.h
+@@ -0,0 +1,23 @@
++/*
++ * model_global_vars.h — AthenaK GRMHD model (M5, M6)
++ */
++
++#ifndef MODEL_GLOBAL_VARS_H
++#define MODEL_GLOBAL_VARS_H
++
++#include "athenak_mesh.h"
++#include "athenak_plasma.h"
++
++/* unused; core.c names it in an OpenMP shared() clause */
++extern double ****p;
++
++extern double L_unit, T_unit;
++extern double RHO_unit, U_unit, B_unit;
++extern double Ne_unit, Thetae_unit;
++
++extern double R0, a, Q, hslope;
++
++extern athk_mesh athk;              /* the loaded snapshot */
++extern athk_plasma_params athk_par; /* units, plasma model and cuts */
++
++#endif // MODEL_GLOBAL_VARS_H
+diff --git a/model/athenak/tests/athenak_probe.c b/model/athenak/tests/athenak_probe.c
+new file mode 100644
+index 0000000..e489846
+--- /dev/null
++++ b/model/athenak/tests/athenak_probe.c
+@@ -0,0 +1,214 @@
++/*
++ * athenak_probe.c
++ *
++ * Stand-alone probe of the RAPTOR AthenaK data layer (athenak_mesh.c,
++ * athenak_plasma.c): loads a snapshot, samples it at the points of a points
++ * file and writes the owning block, the interpolated primitives, u^mu, b^mu
++ * and the plasma decode per point. It is the RAPTOR half of the R06 reader
++ * acceptance (results/blp/raptor/tools/r06_*.jl in BlackLightPlus writes the
++ * points and the BlackLightPlus half).
++ *
++ * Build (from this directory):
++ *   h5cc -std=c99 -O2 -fopenmp -I.. athenak_probe.c ../athenak_mesh.c \
++ *        ../athenak_plasma.c -o athenak_probe -lm
++ *
++ * Usage:
++ *   athenak_probe SNAPSHOT --load-only [--threads N] [--gamma G]
++ *   athenak_probe SNAPSHOT POINTS OUT --mbh M_G --ms MS_G [--rhigh R]
++ *                 [--rlow R] [--sigma-cut S] [--gamma G] [--threads N]
++ *
++ * POINTS: int64 n, int64 has_metric, then n records of float64
++ *   x, y, z[, gcov[16], gcon[16]] (row-major, index 0 = t).
++ * OUT: int64 n, int64 ncol, then n records of ncol float64, columns
++ *   block (0-based, -1 outside), rho, u1, u2, u3, eint, b1, b2, b3, pgas,
++ *   ucon[4], ucov[4], bcon[4], bcov[4], b_sq, n_e, B, theta_e, sigma,
++ *   beta_inv, rho_cgs, pgas_cgs, emit, omit, u.u, u.b
++ * (the four-vector and plasma columns need has_metric = 1, else zero).
++ * A JSON summary (load time, peak RSS, locate mode) goes to stdout.
++ * Constants are the BlackLightPlus set (src/constants.jl) with G = 6.6743e-8.
++ */
++
++#define _GNU_SOURCE
++#include <math.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/resource.h>
++#ifdef _OPENMP
++#include <omp.h>
++#endif
++
++#include "athenak_mesh.h"
++#include "athenak_plasma.h"
++
++#define NCOL 38
++
++static double peak_rss_gb(void) {
++    struct rusage ru;
++    getrusage(RUSAGE_SELF, &ru);
++    return ru.ru_maxrss / 1048576.0; /* KiB -> GiB */
++}
++
++int main(int argc, char **argv) {
++    if (argc < 3) {
++        fprintf(stderr, "usage: see athenak_probe.c\n");
++        return 2;
++    }
++    const char *snap = argv[1];
++    int load_only = 0, threads = 0;
++    const char *pts = NULL, *out = NULL;
++    double gamma = 0, mbh = 0, ms = 0;
++    athk_plasma_params par;
++    athk_plasma_defaults(&par);
++    int ai = 2;
++    if (!strcmp(argv[2], "--load-only")) {
++        load_only = 1;
++        ai = 3;
++    } else {
++        if (argc < 4)
++            return 2;
++        pts = argv[2];
++        out = argv[3];
++        ai = 4;
++    }
++    for (; ai < argc; ai++) {
++        const char *a = argv[ai];
++        double v = ai + 1 < argc ? atof(argv[ai + 1]) : 0;
++        if (!strcmp(a, "--threads"))
++            threads = (int)v;
++        else if (!strcmp(a, "--gamma"))
++            gamma = v;
++        else if (!strcmp(a, "--mbh"))
++            mbh = v;
++        else if (!strcmp(a, "--ms"))
++            ms = v;
++        else if (!strcmp(a, "--rhigh"))
++            par.rat_high = v;
++        else if (!strcmp(a, "--rlow"))
++            par.rat_low = v;
++        else if (!strcmp(a, "--sigma-cut"))
++            par.cut_sigma_max = v;
++        else {
++            fprintf(stderr, "unknown option %s\n", a);
++            return 2;
++        }
++        ai++;
++    }
++
++    athk_mesh m;
++    double rss0 = peak_rss_gb();
++    if (athk_load(snap, gamma, threads, &m))
++        return 1;
++    double rss_load = peak_rss_gb();
++    const char *mode[3] = {"table", "hash", "scan"};
++    int lmin = m.level[0], lmax = m.level[0];
++    for (int b = 1; b < m.nmb; b++) {
++        lmin = m.level[b] < lmin ? m.level[b] : lmin;
++        lmax = m.level[b] > lmax ? m.level[b] : lmax;
++    }
++    printf("{\"snapshot\": \"%s\", \"format\": \"%s\", \"nmb\": %d, "
++           "\"block\": [%d, %d, %d], \"levels\": [%d, %d], "
++           "\"locate\": \"%s\", \"gamma\": %.17g, \"gamma_dump\": %.17g, "
++           "\"stored_press\": %d, \"nbad\": %zu, \"time\": %.17g, "
++           "\"load_s\": %.4f, \"data_bytes\": %zu, "
++           "\"peak_rss_gb_before\": %.4f, \"peak_rss_gb_load\": %.4f",
++           snap, m.format, m.nmb, m.ni, m.nj, m.nk, lmin, lmax,
++           mode[m.locate_mode], m.gamma, m.gamma_dump, m.stored_press, m.nbad,
++           m.time, m.load_seconds, m.bytes_data, rss0, rss_load);
++    if (load_only) {
++        printf("}\n");
++        athk_free(&m);
++        return 0;
++    }
++
++    FILE *fp = fopen(pts, "rb");
++    if (!fp) {
++        perror(pts);
++        return 1;
++    }
++    int64_t hdr[2];
++    if (fread(hdr, sizeof(int64_t), 2, fp) != 2)
++        return 1;
++    int64_t n = hdr[0], has_metric = hdr[1];
++    size_t rec = has_metric ? 35 : 3;
++    double *in = malloc((size_t)n * rec * sizeof(double));
++    if (fread(in, sizeof(double), (size_t)n * rec, fp) != (size_t)n * rec) {
++        fprintf(stderr, "short points file\n");
++        return 1;
++    }
++    fclose(fp);
++
++    /* BlackLightPlus constants (src/constants.jl) */
++    const double G = 6.6743e-8, CL = 2.99792458e10, MP = 1.6726e-24,
++                 ME = 9.1094e-28;
++    athk_plasma_units(&par, mbh, ms, G, CL, MP, ME);
++    par.gamma = m.gamma;
++
++    double *res = calloc((size_t)n * NCOL, sizeof(double));
++#ifdef _OPENMP
++    double t0 = omp_get_wtime();
++#endif
++#pragma omp parallel for schedule(dynamic, 256)
++    for (int64_t q = 0; q < n; q++) {
++        const double *r = in + q * rec;
++        double *o = res + q * NCOL;
++        double prim[ATHK_NPRIM];
++        int b = athk_sample(&m, r[0], r[1], r[2], prim);
++        o[0] = b;
++        for (int p = 0; p < ATHK_NPRIM; p++)
++            o[1 + p] = prim[p];
++        double pgas = athk_pgas(prim[ATHK_EINT], m.gamma);
++        o[9] = pgas;
++        if (!has_metric || b < 0)
++            continue;
++        double gcov[4][4], gcon[4][4];
++        for (int i = 0; i < 4; i++)
++            for (int j = 0; j < 4; j++) {
++                gcov[i][j] = r[3 + 4 * i + j];
++                gcon[i][j] = r[19 + 4 * i + j];
++            }
++        athk_fourvec fv;
++        athk_four_vectors(prim, gcov, gcon, &fv);
++        for (int i = 0; i < 4; i++) {
++            o[10 + i] = fv.ucon[i];
++            o[14 + i] = fv.ucov[i];
++            o[18 + i] = fv.bcon[i];
++            o[22 + i] = fv.bcov[i];
++        }
++        o[26] = fv.b_sq;
++        athk_plasma pl;
++        int emit = athk_plasma_decode(&par, prim[ATHK_DENS], pgas, fv.b_sq, &pl);
++        o[27] = pl.n_e_cgs;
++        o[28] = pl.bb_cgs;
++        o[29] = pl.theta_e;
++        o[30] = pl.sigma;
++        o[31] = pl.beta_inv;
++        o[32] = pl.rho_cgs;
++        o[33] = pl.pgas_cgs;
++        o[34] = emit;
++        o[35] = pl.omit;
++        double uu = 0, ub = 0;
++        for (int i = 0; i < 4; i++) {
++            uu += fv.ucon[i] * fv.ucov[i];
++            ub += fv.bcon[i] * fv.ucov[i];
++        }
++        o[36] = uu;
++        o[37] = ub;
++    }
++    double ts = 0;
++#ifdef _OPENMP
++    ts = omp_get_wtime() - t0;
++#endif
++    fp = fopen(out, "wb");
++    int64_t oh[2] = {n, NCOL};
++    fwrite(oh, sizeof(int64_t), 2, fp);
++    fwrite(res, sizeof(double), (size_t)n * NCOL, fp);
++    fclose(fp);
++    printf(", \"npoints\": %lld, \"sample_s\": %.4f, \"peak_rss_gb\": %.4f}\n",
++           (long long)n, ts, peak_rss_gb());
++    free(in);
++    free(res);
++    athk_free(&m);
++    return 0;
++}
+diff --git a/run/makefile b/run/makefile
+index ff88fc5..3356d3b 100644
+--- a/run/makefile
++++ b/run/makefile
+@@ -12,6 +12,11 @@ TARGET=RAPTOR
+ SOURCES=main.c core.c io.c GRmath.c gr_integrator.c rte_integrator.c pol_rte_integrator.c metric.c pol_emission.c tetrad.c model.c constants.c camera.c
+ OBJECTS := $(patsubst %.c,$(OBJDIR)/%.o,$(SOURCES))
+ 
++# a model may add sources (model/<code>/model.mk: MODEL_SOURCES = ...)
++-include model.mk
++SOURCES += $(MODEL_SOURCES)
++OBJECTS += $(patsubst %.c,$(OBJDIR)/%.o,$(MODEL_SOURCES))
++
+ all: create_directories $(SOURCES) $(TARGET)
+ 
+ $(TARGET): $(OBJECTS)
+diff --git a/setup.sh b/setup.sh
+index c01c100..f198ab2 100755
+--- a/setup.sh
++++ b/setup.sh
+@@ -75,12 +75,26 @@ then
+ elif  [ "$CODE" == "hamr" ] ;
+ then
+         rsync -v -u $RAPTOR/model/HAMR/* .
++elif  [ "$CODE" == "athenak" ] ;
++then
++        # AthenaK model: the BlackLightPlus-matched definitions.h (SKS metric,
++        # constants, coefficients) when present, else the bhac one; then the
++        # model files
++        if [ -f $RAPTOR/model/blp_analytic/definitions.h ] ;
++        then
++                rsync -v -u $RAPTOR/model/blp_analytic/definitions.h .
++        else
++                rsync -v -u $RAPTOR/model/bhac/definitions.h .
++        fi
++        rsync -v -u $RAPTOR/model/athenak/* .
++        # polarized transfer along the whole ray (the escape radius is 1100 M)
++        sed -i '/#define RT_OUTER_CUTOFF (/s/.*/#define RT_OUTER_CUTOFF (1100.)/' definitions.h
+ else
+  echo "no grmhd model picked. Aborting."
+  exit
+ fi
+ 
+-if [ "$CODE" == "bhac" ] ;
++if [ "$CODE" == "bhac" ] || [ "$CODE" == "athenak" ] ;
+ then
+ 	if [ "$METRIC" == "mks" ] ;
+ 	then
+@@ -90,6 +104,10 @@ then
+     	then
+ 	    	sed -i  '/#define metric (/s/.*/#define metric (CKS)/' definitions.h
+         fi
++    	if [ "$METRIC" == "sks" ] ;
++    	then
++	    	sed -i  '/#define metric (/s/.*/#define metric (SKS)/' definitions.h
++        fi
+ fi
+ 
+ if [ "$CODE" == "harm3d" ] ;
