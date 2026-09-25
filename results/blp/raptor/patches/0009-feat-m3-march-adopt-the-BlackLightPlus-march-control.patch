@@ -1,0 +1,234 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:02:14 -0700
+Subject: [PATCH 09/11] feat(m3-march): adopt the BlackLightPlus march control,
+ termination and sample set
+
+- change: integrate_geodesic_state (STEP_BBH): RK4 with h = min_A (r_A - r_h,A) / C; captured when the horizon distance is below horizon_eps, non-finite, or the normal-frame energy |k^t|/sqrt(-g^tt) exceeds capture_redshift; escaped when R > escape and increasing; nmax steps; theta-turn cut removed
+- change: the terminal state and its end class (1/2 hole, 3 escape, 4 budget, 5 non-finite) are stored after the last lightpath entry
+- finding: upstream RT pairs state n with the step into it (dl[n-1]) and skips state 0; BlackLightPlus pairs every state with the step taken from it (reverse_march.jl StoredPath). Under STEP_BBH both transfer loops use the BlackLightPlus pairing; the polarized loop transports f over the step between n and n-1 with the stored k, and k is no longer re-nulled [SOLID]
+- result: R04 legs (kerr, s455, s122; 1050 rays each): termination class identical on 100% of rays, sample counts equal on every ray, RK4 order 4.0 (C 40-80) against a Vern7 reference [SOLID]
+- verify: BlackLightPlus results/blp/raptor/tools/r04_rays.jl
+---
+ model/blp_analytic/definitions.h |  5 ++
+ src/functions.h                  | 11 +++++
+ src/gr_integrator.c              | 79 ++++++++++++++++++++++++++++++++
+ src/pol_rte_integrator.c         | 30 ++++++++++++
+ src/rte_integrator.c             | 11 +++++
+ 5 files changed, 136 insertions(+)
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+index aa868bd..f4bb493 100644
+--- a/model/blp_analytic/definitions.h
++++ b/model/blp_analytic/definitions.h
+@@ -137,6 +137,11 @@ typedef struct Camera {
+ // INTEGRATOR PARAMETERS
+ ////////////////////////
+ 
++// BlackLightPlus march control and termination (bbh.in: C, nmax, escape, ...)
++#ifndef STEP_BBH
++#define STEP_BBH (1)
++#endif
++
+ #define RT_OUTER_CUTOFF (1.1e3) // polarized integration over the whole ray (escape radius)
+ 
+ #define delta_num (1.e-4) // Used for numerical derivatives
+diff --git a/src/functions.h b/src/functions.h
+index 203b1fb..58dcba5 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -29,6 +29,13 @@
+ #define SKS_CONNECTION (SKS_CONN_FD)
+ #endif
+ 
++// STEP_BBH = 1: BlackLightPlus march control (M3): h = horizon_distance / C,
++// capture/escape/budget of bbh.in, RT samples paired with the step taken from
++// each state, no re-nulling of k in the polarized march.
++#ifndef STEP_BBH
++#define STEP_BBH (0)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+@@ -134,6 +141,10 @@ void f_geodesic(double *y, double *fvector);
+ void integrate_geodesic(double alpha, double beta, double *lightpath,
+                         int *steps, double cutoff_inner);
+ 
++// STEP_BBH march from a given (x^mu, k^mu) state (gr_integrator.c)
++void integrate_geodesic_state(double photon_u[8], double *lightpath,
++                              int *steps);
++
+ void radiative_transfer_polarized(double *lightpath, int steps,
+                                   double frequency, double *f_x, double *f_y,
+                                   double *p, int PRINT_POLAR, double *IQUV,
+diff --git a/src/gr_integrator.c b/src/gr_integrator.c
+index b62ed37..471721d 100755
+--- a/src/gr_integrator.c
++++ b/src/gr_integrator.c
+@@ -332,9 +332,88 @@ void f_geodesic(double *y, double *fvector) {
+     }
+ }
+ 
++#if (STEP_BBH)
++// BlackLightPlus fixed-control march (spacetimes.jl superposed_control,
++// integrator.jl march_stop): step h = horizon_distance / C; captured when
++// horizon_distance < horizon_eps, non-finite, or the normal-frame energy
++// exceeds capture_redshift; escaped when R > escape and R increases.
++static int bbh_captured(const double X_u[4], const double k_u[4], double *dmin) {
++    double g_uu[4][4];
++    *dmin = horizon_distance(X_u);
++    metric_uu((double *)X_u, g_uu);
++    double En = fabs(k_u[0]) / sqrt(-g_uu[0][0]);
++    return *dmin < bbh.horizon_eps || !isfinite(*dmin) ||
++           !(En <= bbh.capture_redshift);
++}
++
++// End class of a terminal state (BlackLightPlus figure-driver end_class):
++// 1/2 captured by hole 1/2 (nearest horizon), 3 escaped, 4 step budget,
++// 5 non-finite.
++static int bbh_end_class(const double y[8]) {
++    for (int i = 0; i < 8; i++)
++        if (!isfinite(y[i]))
++            return 5;
++    double dmin;
++    if (bbh_captured(y, y + 4, &dmin)) {
++        int best = 0;
++        double dbest = INFINITY;
++        for (int A = 0; A < bbh.n; A++) {
++            double dA = ks_radius_hole(y, A) - horizon_radius_hole(A);
++            if (dA < dbest) {
++                dbest = dA;
++                best = A;
++            }
++        }
++        return best + 1;
++    }
++    if (sqrt(y[1] * y[1] + y[2] * y[2] + y[3] * y[3]) > bbh.escape)
++        return 3;
++    return 4;
++}
++
++// Trace photon_u = (x^mu, k^mu) (received wave vector, integrated with
++// d lambda = -h < 0). lightpath[9 n + 0..7] = state n and lightpath[9 n + 8]
++// = h taken from it, n = 0..steps-1; the terminal state is stored at
++// lightpath[9 steps + 0..7] and minus its end class at lightpath[9 steps + 8].
++void integrate_geodesic_state(double photon_u[8], double *lightpath,
++                              int *steps) {
++    double r_prev = INFINITY;
++    int n = 0;
++    for (int it = 0; it < bbh.nmax; it++) {
++        double dmin;
++        int cap = bbh_captured(photon_u, photon_u + 4, &dmin);
++        double R = sqrt(photon_u[1] * photon_u[1] + photon_u[2] * photon_u[2] +
++                        photon_u[3] * photon_u[3]);
++        if (cap || (R > bbh.escape && R > r_prev))
++            break;
++        r_prev = R;
++        double h = dmin / bbh.C;
++        for (int q = 0; q < 8; q++)
++            lightpath[n * 9 + q] = photon_u[q];
++        lightpath[n * 9 + 8] = h;
++#if (int_method == RK4)
++        rk4_step(photon_u, &f_geodesic, -h);
++#else
++#error "STEP_BBH requires int_method RK4"
++#endif
++        n++;
++    }
++    for (int q = 0; q < 8; q++)
++        lightpath[n * 9 + q] = photon_u[q];
++    lightpath[n * 9 + 8] = -(double)bbh_end_class(photon_u);
++    *steps = n;
++}
++#endif
++
+ // Integrate the null geodesic defined by "photon_u"
+ void integrate_geodesic(double alpha, double beta, double *lightpath,
+                         int *steps, double cutoff_inner) {
++#if (STEP_BBH)
++    double photon_bbh[8];
++    initialize_photon(alpha, beta, photon_bbh, 0.);
++    integrate_geodesic_state(photon_bbh, lightpath, steps);
++    return;
++#endif
+     int q;
+     double t_init = 0.;
+     double dlambda_adaptive = -0.1;
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index 643e12c..d8ce510 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -765,6 +765,35 @@ void radiative_transfer_polarized(double *lightpath, int steps,
+     }
+     modvar.igrid_c = -1;
+ 
++#if (STEP_BBH)
++    // BlackLightPlus sample set (reverse_march.jl StoredPath): every stored
++    // state n = steps-1..0 couples to the plasma over the step taken from it,
++    // h_(n+1) = lightpath[9 n + 8]; f is then transported to state n-1 over
++    // h_n with the stored (unscaled) k. No re-nulling of k.
++    for (path_counter = steps - 1; path_counter >= 0; path_counter--) {
++        LOOP_i {
++            X_u[i] = lightpath[path_counter * 9 + i];
++            k_u[i] = lightpath[path_counter * 9 + 4 + i];
++        }
++        double dl_emit = fabs(lightpath[path_counter * 9 + 8]);
++        double k_emit[4];
++        LOOP_i k_emit[i] = k_u[i];
++        if (get_fluid_params(X_u, &modvar) && get_r(X_u) < RT_OUTER_CUTOFF) {
++            pol_integration_step(modvar, frequency, &dl_emit, C_CONST, X_u,
++                                 k_emit, k_d, &POLARIZATION_ACTIVE, f_u,
++                                 f_tetrad_u, tetrad_d, tetrad_u, S_A, &Iinv,
++                                 &Iinv_pol, tau, tauF);
++        }
++        if (POLARIZATION_ACTIVE && path_counter > 0) {
++            LOOP_i {
++                photon_u_current[i] = X_u[i];
++                photon_u_current[i + 4] = k_u[i];
++            }
++            rk4_step_f(photon_u_current, f_u,
++                       fabs(lightpath[(path_counter - 1) * 9 + 8]));
++        }
++    }
++#else
+     // Move backward along constructed lightpath
+     for (path_counter = steps - 1; path_counter > 0; path_counter--) {
+         // Current position, wave vector, and dlambda
+@@ -810,6 +839,7 @@ void radiative_transfer_polarized(double *lightpath, int steps,
+             rk4_step_f(photon_u_current, f_u, dl_current);
+         }
+     } // End of for(path_counter...
++#endif
+ 
+     // CONSTRUCT FINAL (NON-INVARIANT) STOKES PARAMS SEEN BY OBSERVER
+     /////////////////////////////////////////////////////////////////
+diff --git a/src/rte_integrator.c b/src/rte_integrator.c
+index 9c3bdd2..6d24312 100755
+--- a/src/rte_integrator.c
++++ b/src/rte_integrator.c
+@@ -46,6 +46,16 @@ double radiative_transfer_unpolarized(double *lightpath, int steps,
+     }
+     modvar.igrid_c = -1;
+ 
++#if (STEP_BBH)
++    // BlackLightPlus sample set: every stored state n = steps-1..0, weighted
++    // by the step taken from it (reverse_march.jl StoredPath).
++    for (path_counter = steps - 1; path_counter >= 0; path_counter--) {
++        LOOP_i {
++            X_u[i] = lightpath[path_counter * 9 + i];
++            k_u[i] = lightpath[path_counter * 9 + 4 + i];
++        }
++        dl_current = fabs(lightpath[path_counter * 9 + 8]);
++#else
+     for (path_counter = steps - 1; path_counter > 0; path_counter--) {
+         // Current position, wave vector, and dlambda
+         LOOP_i {
+@@ -53,6 +63,7 @@ double radiative_transfer_unpolarized(double *lightpath, int steps,
+             k_u[i] = lightpath[path_counter * 9 + 4 + i];
+         }
+         dl_current = fabs(lightpath[(path_counter - 1) * 9 + 8]);
++#endif
+ 
+         metric_dd(X_u, g_dd);
+         metric_uu(X_u, g_uu);

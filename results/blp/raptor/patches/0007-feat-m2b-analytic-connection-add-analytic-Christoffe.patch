@@ -1,0 +1,125 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 11:49:07 -0700
+Subject: [PATCH 07/11] feat(m2b-analytic-connection): add analytic Christoffel
+ symbols for SKS
+
+- change: sks_connection_udd forms d_i g_mu nu = sum_A (d_i f_A l l + f_A d_i(l l)) from the implicit Kerr-Schild radius (dr/dx = x r^3/D, dr/dz = z r (r^2+a^2)/D, D = r^4 + a^2 z^2) and contracts it with the exact Woodbury inverse
+- change: SKS_CONNECTION selects SKS_CONN_FD (M2a, default) or SKS_CONN_ANALYTIC (M2b) in f_geodesic and f_parallel
+- result: FD and analytic connections agree to 8e-12 relative at probe points near both holes [PRELIMINARY]
+- next: R04 comparison of both against the BlackLightPlus forward-AD Christoffels
+---
+ src/bbh_metric.c         | 55 ++++++++++++++++++++++++++++++++++++++++
+ src/functions.h          |  8 ++++++
+ src/gr_integrator.c      |  2 ++
+ src/pol_rte_integrator.c |  2 ++
+ 4 files changed, 67 insertions(+)
+
+diff --git a/src/bbh_metric.c b/src/bbh_metric.c
+index bc56ff1..902f6cc 100644
+--- a/src/bbh_metric.c
++++ b/src/bbh_metric.c
+@@ -201,3 +201,58 @@ double normal_frame_energy_u(const double X_u[4], const double k_u[4]) {
+     sks_metric_uu(X_u, g_uu);
+     return fabs(k_u[0]) / sqrt(-g_uu[0][0]);
+ }
++
++// Spatial derivatives of one hole's Kerr-Schild term: dr[i], df[i] and
++// dl[i][mu] = d l_mu / d x^(i+1), i = 0..2, from the implicit radius
++// (x^2 + y^2)/(r^2 + a^2) + z^2/r^2 = 1:
++//   dr/dx = x r^3 / D, dr/dy = y r^3 / D, dr/dz = z r (r^2 + a^2) / D,
++//   D = r^4 + a^2 z^2,  f = 2 m r^3 / D   (DD below: D is a model macro).
++static void ks_term_derivs(double X, double Y, double Z, double M, double a,
++                           double *f, double l[4], double df[3],
++                           double dl[3][4]) {
++    double r;
++    ks_term(X, Y, Z, M, a, &r, f, l);
++    double a2 = a * a, r2 = r * r;
++    double s = r2 + a2;
++    double DD = r2 * r2 + a2 * Z * Z;
++    double dr[3] = {X * r2 * r / DD, Y * r2 * r / DD, Z * r * s / DD};
++    for (int i = 0; i < 3; i++) {
++        double dD = 4.0 * r2 * r * dr[i] + (i == 2 ? 2.0 * a2 * Z : 0.0);
++        df[i] = 2.0 * M * (3.0 * r2 * dr[i] * DD - r2 * r * dD) / (DD * DD);
++        double ds = 2.0 * r * dr[i];
++        double ex = (i == 0), ey = (i == 1), ez = (i == 2);
++        dl[i][0] = 0.0;
++        dl[i][1] = (dr[i] * X + r * ex + a * ey) / s - (r * X + a * Y) * ds / (s * s);
++        dl[i][2] = (dr[i] * Y + r * ey - a * ex) / s - (r * Y - a * X) * ds / (s * s);
++        dl[i][3] = ez / r - Z * dr[i] / r2;
++    }
++}
++
++// Analytic Christoffel symbols of the superposed metric (M2b):
++// d_i g_mu nu = sum_A (d_i f_A l_mu l_nu + f_A (d_i l_mu l_nu + l_mu d_i l_nu)),
++// Gamma^a_bc = 1/2 g^ad (d_b g_dc + d_c g_db - d_d g_bc), with the exact inverse.
++void sks_connection_udd(const double X_u[4], double gamma_udd[4][4][4]) {
++    double dg[4][4][4]; // dg[i][mu][nu] = d_i g_mu nu
++    LOOP_ijk dg[i][j][k] = 0.0;
++    for (int A = 0; A < bbh.n; A++) {
++        double f, l[4], df[3], dl[3][4];
++        ks_term_derivs(X_u[1] - bbh.c[A][0], X_u[2] - bbh.c[A][1],
++                       X_u[3] - bbh.c[A][2], bbh.m[A], bbh.a[A], &f, l, df, dl);
++        for (int i = 0; i < 3; i++)
++            for (int mu = 0; mu < 4; mu++)
++                for (int nu = 0; nu < 4; nu++)
++                    dg[i + 1][mu][nu] += df[i] * l[mu] * l[nu] +
++                                         f * (dl[i][mu] * l[nu] + l[mu] * dl[i][nu]);
++    }
++    double g_uu[4][4];
++    sks_metric_uu(X_u, g_uu);
++    for (int al = 0; al < 4; al++)
++        for (int be = 0; be < 4; be++)
++            for (int ga = be; ga < 4; ga++) {
++                double s = 0.0;
++                for (int d = 0; d < 4; d++)
++                    s += g_uu[al][d] * (dg[be][d][ga] + dg[ga][d][be] - dg[d][be][ga]);
++                gamma_udd[al][be][ga] = 0.5 * s;
++                gamma_udd[al][ga][be] = 0.5 * s;
++            }
++}
+diff --git a/src/functions.h b/src/functions.h
+index e035a8f..203b1fb 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -21,6 +21,14 @@
+ #define EMIS_BLP (0) // BlackLightPlus thermal coefficients (blp_coeffs.c)
+ #endif
+ 
++// SKS Christoffel symbols: 4th-order finite differences of metric_dd (M2a,
++// default) or the analytic derivatives of the superposition (M2b).
++#define SKS_CONN_FD (0)
++#define SKS_CONN_ANALYTIC (1)
++#ifndef SKS_CONNECTION
++#define SKS_CONNECTION (SKS_CONN_FD)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+diff --git a/src/gr_integrator.c b/src/gr_integrator.c
+index 772a73f..b62ed37 100755
+--- a/src/gr_integrator.c
++++ b/src/gr_integrator.c
+@@ -316,6 +316,8 @@ void f_geodesic(double *y, double *fvector) {
+     // Obtain the Christoffel symbols at the current location
+ #if (metric == MKSBHAC || metric == MKSHARM)
+     connection_udd(X_u, gamma_udd);
++#elif (metric == SKS && SKS_CONNECTION == SKS_CONN_ANALYTIC)
++    sks_connection_udd(X_u, gamma_udd);
+ #else
+     connection_num_udd(X_u, gamma_udd);
+ #endif
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index 1afc5b8..643e12c 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -33,6 +33,8 @@ void f_parallel(double y[], double complex f_u[], double fvector[],
+     // Obtain the Christoffel symbols at the current location
+ #if (metric == MKSBHAC || metric == MKSHARM)
+     connection_udd(X_u, gamma_udd);
++#elif (metric == SKS && SKS_CONNECTION == SKS_CONN_ANALYTIC)
++    sks_connection_udd(X_u, gamma_udd);
+ #else
+     connection_num_udd(X_u, gamma_udd);
+ #endif

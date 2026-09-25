@@ -1,0 +1,342 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 11:40:40 -0700
+Subject: [PATCH 02/11] feat(m9-constants): add the blp_analytic model headers
+ with BlackLightPlus constants
+
+- change: model/blp_analytic/definitions.h takes the BlackLightPlus CGS set (e 4.8032e-10, m_e 9.1094e-28, m_p 1.6726e-24, k 1.3807e-16, h 6.6261e-27, G 6.6743e-8, M_sun 1.98847e33, pc 3.0856775814913673e18)
+- change: metric id SKS (9) selected; POL overridable with -DPOL; RT_OUTER_CUTOFF 1.1e3 so the polarized march covers the ray up to the escape radius
+- change: model_definitions.h, model_functions.h, model_global_vars.h copied from model/bhac (GRMHD struct and globals the core expects)
+- next: R03 (M7 coefficient port)
+---
+ model/blp_analytic/definitions.h       | 187 +++++++++++++++++++++++++
+ model/blp_analytic/model_definitions.h |  59 ++++++++
+ model/blp_analytic/model_functions.h   |  29 ++++
+ model/blp_analytic/model_global_vars.h |  22 +++
+ 4 files changed, 297 insertions(+)
+ create mode 100644 model/blp_analytic/definitions.h
+ create mode 100644 model/blp_analytic/model_definitions.h
+ create mode 100644 model/blp_analytic/model_functions.h
+ create mode 100755 model/blp_analytic/model_global_vars.h
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+new file mode 100644
+index 0000000..55e4c96
+--- /dev/null
++++ b/model/blp_analytic/definitions.h
+@@ -0,0 +1,187 @@
++/*
++ * Radboud Polarized Integrator
++ * Copyright 2014-2021 Black Hole Cam (ERC Synergy Grant)
++ * Authors: Thomas Bronzwaer, Jordy Davelaar, Monika Moscibrodzka, Ziri Younsi
++ *
++ * RAPTOR uses cgs units for light transport calculations.
++ * Entries marked [BL] are only applicable to Boyer-Lindquist coordinates.
++ */
++
++#ifndef DEFINITIONS_H
++#define DEFINITIONS_H
++
++#include <complex.h>
++#include <hdf5.h>
++#include <math.h>
++#include <stdbool.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <time.h>
++
++#ifndef M_PI
++#define M_PI 3.14159265358979323846
++#endif
++
++#define DEBUG (1)
++
++#define NDIM 4
++#define NPRIM 8
++
++#define IMGFILE (1)
++#define SPECFILE (1)
++#define RAD_TRANS (1)
++#ifndef POL
++#define POL (1)
++#endif
++
++#define num_frequencies 1
++
++#define FREQFILE (0)
++#define FREQLOG (1)
++
++#define FREQS (FREQLOG)
++
++#define EMISUSER (0)
++
++#define UNIF (1)
++
++#define AMR 0
++#define SMR 1
++
++#define num_pixels_1d 10
++#define tot_pixels 100
++
++#define USERSPEC (0)
++#define nspec 4
++
++typedef struct Camera {
++    double IQUV[tot_pixels][num_frequencies][4]; // intensity
++    double tau[tot_pixels][num_frequencies];     // intensity
++    double tauF[tot_pixels][num_frequencies];    // intensity
++    double pdf[tot_pixels][num_frequencies];    // intensity
++    double avg[tot_pixels][num_frequencies];    // intensity
++    double alpha[tot_pixels];                    // impact parameter
++    double beta[tot_pixels];                     // impact parameter
++    double lcorner[2];                           // lower left corner of a block
++    double dx[2];                                // pixel spacing of block
++    int level;
++    int ind[2];
++} Camera;
++
++#define sign(x) (((x) < 0) ? -1 : ((x) > 0))
++
++// DISTRIBUTION CHOISES
++//////////////////
++#define KAPPA (0) // kappa distribution
++#define TH (1)    // thermal distribution
++#define POWER (2) // Power-law distribution
++#define DF (TH)   // Distribution function
++#define kappa 5.0
++#define power 2.5
++#define gamma_min 1.
++#define gamma_max 1000.
++
++#define DEXTER (0) // use Dexter fit for rho_V_thermal
++
++// METRIC PARAMETERS
++////////////////////
++
++// coordinate and metric choices
++#define CAR (0) // Minkowski
++#define BL (1)  // Boyer-Lindquist,               x1=r, x2=th, and x3=phi
++#define MBL (2) // modified Boyer-Lindquist, x1=log(r), x2=th, and x3=phi
++#define KS (3)  // Kerr-Schild,                   x1=r, x2=th, and x3=phi
++#define MKS (4) // modified Kerr-Schild,          x1=log(r), x2=th, and x3=phi
++#define MKSHARM                                                                \
++    (5) // HARM3D MKS coords        x1=log(r), x2=th/pi, and x3=phi/2pi
++#define MKSBHAC                                                                \
++    (6) // BHAC style MKS coords          x1=log(r), x2=th/pi, and x3=phi
++#define MKSN (7) //  modified Kerr-Schild-Newman,  x1=log(r), x2=th, and x3=phi
++#define CKS (8)  //  modified Kerr-Schild-Newman,  x1=log(r), x2=th, and x3=phi
++#define SKS (9)  //  superposed Kerr-Schild binary, Cartesian (t, x, y, z)
++
++// Metric
++#define metric (SKS)
++#if (metric == BL || metric == KS || metric == CKS || metric == SKS)
++#define logscale (0) // Standard BL/KS coordinates; no logarithmic radius
++#elif (metric == MBL || metric == MKS || metric == MKSHARM ||                  \
++       metric == MKSBHAC || metric == MKSN)
++#define logscale (1) // Modified BL/KS coordinates; logarithmic radius
++#endif
++
++// MODEL PARAMETERS
++///////////////////
++
++#define SIGMA_CUT (1)
++#define THETAE_MAX (100)
++#define THETAE_MIN (1e-3)
++
++#define LIGHT_TRANSPORT                                                        \
++    (1) // Toggle light transport calculation on/off for integration debugging
++
++// OBSERVER PARAMETERS
++//////////////////////
++#define rcam (1e4) //(500.)    // Camera distance from the sing.(units of Rg)
++
++#define max_order (100) // Maximimum order of lensed images 0 = direct only
++
++// INTEGRATOR PARAMETERS
++////////////////////////
++
++#define RT_OUTER_CUTOFF (1.1e3) // polarized integration over the whole ray (escape radius)
++
++#define delta_num (1.e-4) // Used for numerical derivatives
++#define max_steps (1e4)   // Maximum number of integration steps
++
++#define cutoff_outer (1.1 * rcam) // Outer cutoff, near flat spacetime, in M
++#define horizon_marg (1.e-2) // Stop tracing at this distance from E.H. [BL]
++#define RK2 (1)              //
++#define VER (2)              //
++#define RK4 (3)              //
++#define RK45 (4)             //
++#define int_method (RK4)
++
++// CONSTANTS
++////////////
++
++// PHYSICAL CONSTANTS
++// BlackLightPlus values (src/constants.jl; M_sun and pc from the figure drivers).
++#define ELECTRON_CHARGE (4.8032e-10)
++#define ELECTRON_MASS (9.1094e-28)
++#define PROTON_MASS (1.6726e-24)
++#define BOLTZMANN_CONSTANT (1.3807e-16)
++#define SPEED_OF_LIGHT (2.99792458e10)
++#define PLANCK_CONSTANT (6.6261e-27)
++#define MPCL2 (0.0015033)
++#define GGRAV (6.6743e-8)
++#ifndef MSUN
++#define MSUN (1.98847e33)
++#endif
++#define KPCTOCM (3.0856775814913673e21)
++#define MPoME (PROTON_MASS / ELECTRON_MASS)
++
++// MACROS
++/////////
++
++#define DIM 4
++#define LOOP_i for (int i = 0; i < DIM; i++)
++#define LOOP_ij                                                                \
++    for (int i = 0; i < DIM; i++)                                              \
++        for (int j = 0; j < DIM; j++)
++#define LOOP_kl                                                                \
++    for (int k = 0; k < DIM; k++)                                              \
++        for (int l = 0; l < DIM; l++)
++#define LOOP_ijk                                                               \
++    for (int i = 0; i < DIM; i++)                                              \
++        for (int j = 0; j < DIM; j++)                                          \
++            for (int k = 0; k < DIM; k++)
++#define LOOP_ijkl                                                              \
++    for (int i = 0; i < DIM; i++)                                              \
++        for (int j = 0; j < DIM; j++)                                          \
++            for (int k = 0; k < DIM; k++)                                      \
++                for (int l = 0; l < DIM; l++)
++
++#endif // DEFINITIONS_H
+diff --git a/model/blp_analytic/model_definitions.h b/model/blp_analytic/model_definitions.h
+new file mode 100644
+index 0000000..3853a38
+--- /dev/null
++++ b/model/blp_analytic/model_definitions.h
+@@ -0,0 +1,59 @@
++/*
++ * model_definitions.h
++ *
++ * Written by J. Davelaar 2022
++ *
++ */
++
++#ifndef MODEL_DEFINITIONS_H
++#define MODEL_DEFINITIONS_H
++
++#define SFC 0
++
++#define KRHO 0
++#define UU 1
++#define U1 2
++#define U2 3
++#define U3 4
++#define B1 5
++#define B2 6
++#define B3 7
++
++#define D 0
++#define S1 1
++#define S2 2
++#define S3 3
++#define TAU 4
++#define DS 8
++extern int LFAC;
++extern int XI;
++
++#define NP 8
++
++#define NSPIN 3
++
++#define PLUS 1
++#define MINUS -1
++#define BPOL (PLUS)
++
++typedef struct GRMHD {
++    double U_u[4];
++    double B_u[4];
++    double U_d[4];
++    double B_d[4];
++    double n_e;
++    double B;
++    double theta_e;
++    double sigma;
++    double sigma_min;
++    double dx_local;
++    double beta;
++    int igrid_c;
++} GRMHD;
++
++typedef struct block {
++    int ind[3], level, size[3];
++    double lb[3], dxc_block[3];
++} block;
++
++#endif
+diff --git a/model/blp_analytic/model_functions.h b/model/blp_analytic/model_functions.h
+new file mode 100644
+index 0000000..8de488d
+--- /dev/null
++++ b/model/blp_analytic/model_functions.h
+@@ -0,0 +1,29 @@
++/*
++ * model_functions.h
++ *
++ * Written by J. Davelaar 2022
++ *
++ */
++
++#ifndef MODEL_FUNCTIONS_H
++#define MODEL_FUNCTIONS_H
++
++void set_units(double);
++
++void init_bhac_amr_data(char *fname);
++
++void init_storage();
++
++double interp_scalar_2D(double ***var, int i, int j, int k, double coeff[4]);
++
++void Xtoij(double *X, int *i, int *j, double *del);
++
++double interp_scalar(double **var, int c, double coeff[4]);
++
++void lower(double *ucon, double Gcov[NDIM][NDIM], double *ucov);
++
++double get_detgamma(double x, double y, double z);
++
++int find_igrid(double x[4], struct block *block_info, double ***Xc);
++
++#endif
+diff --git a/model/blp_analytic/model_global_vars.h b/model/blp_analytic/model_global_vars.h
+new file mode 100755
+index 0000000..80d67dd
+--- /dev/null
++++ b/model/blp_analytic/model_global_vars.h
+@@ -0,0 +1,22 @@
++/*
++ * model_global_vars.h
++ *
++ * Written by J. Davelaar 2022
++ *
++ */
++
++#ifndef MODEL_GLOBAL_VARS_H
++#define MODEL_GLOBAL_VARS_H
++
++extern double ****p;
++
++extern double L_unit, T_unit;
++extern double RHO_unit, U_unit, B_unit;
++extern double Ne_unit, Thetae_unit;
++
++extern double R0, a, Q, hslope;
++extern double stopx[4], startx[4], dx[4];
++
++extern double ***Xgrid;
++extern struct block *block_info;
++#endif // MODEL_GLOBAL_VARS_H

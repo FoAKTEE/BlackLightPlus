@@ -1,0 +1,57 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:02:59 -0700
+Subject: [PATCH 10/11] test(m4-camera): expose RAPTOR's camera image states to
+ the R05 camera check
+
+- change: raptor_camera_image builds the upstream camera (10x10 blocks) for an npix^2 image and returns the initialize_photon state of every pixel in the BlackLightPlus camera_rays order
+- next: the R05 check compares these states with BlackLightPlus camera_rays at 480^2 and i = 17, 60, 90; it fails until the plane-parallel camera (M4) exists
+---
+ tests/ray_dump.c | 27 +++++++++++++++++++++++++++
+ 1 file changed, 27 insertions(+)
+
+diff --git a/tests/ray_dump.c b/tests/ray_dump.c
+index 7fbc5db..4802994 100644
+--- a/tests/ray_dump.c
++++ b/tests/ray_dump.c
+@@ -19,6 +19,14 @@
+  * The initial (x^mu, k^mu) of initialize_photon for image coordinates
+  * (alpha, beta) (M4 plane-parallel camera when CAMERA_PP).
+  *
++ *   void raptor_camera_image(int npix, double fov, double inc_deg,
++ *                            double *states)
++ * Builds RAPTOR's camera (init_camera: 10x10-pixel blocks, pixel centres
++ * (k + 1/2) px - fov/2) for an npix^2 image and writes the initialize_photon
++ * state (x^mu, k^mu) of every pixel to states[8 (ia npix + ib) + 0..7],
++ * alpha index ia outer and beta index ib inner (the BlackLightPlus
++ * camera_rays order).
++ *
+  * CLI: ray_dump < states.txt > dump.bin, one state "x0 x1 x2 x3 k0 k1 k2 k3"
+  * per line; per ray writes int32 steps, int32 end_class, then
+  * (steps + 1) x 9 float64 lightpath entries.
+@@ -53,6 +61,25 @@ void raptor_camera_state(double alpha, double beta, double state_out[8]) {
+     initialize_photon(alpha, beta, state_out, 0.);
+ }
+ 
++void raptor_camera_image(int npix, double fov, double inc_deg, double *states) {
++    struct Camera *cam;
++    IMG_WIDTH = IMG_HEIGHT = npix;
++    CAM_SIZE_X = CAM_SIZE_Y = fov;
++    INCLINATION = inc_deg;
++    MBH = 1.0e9 * MSUN;          // sets R_GRAV (pixel solid angle only)
++    SOURCE_DIST = 1.0e4 * KPCTOCM;
++    R_GRAV = GGRAV * MBH / SPEED_OF_LIGHT / SPEED_OF_LIGHT;
++    init_camera(&cam);
++    for (int b = 0; b < tot_blocks; b++)
++        for (int p = 0; p < tot_pixels; p++) {
++            int ia = cam[b].ind[0] * num_pixels_1d + p / num_pixels_1d;
++            int ib = cam[b].ind[1] * num_pixels_1d + p % num_pixels_1d;
++            initialize_photon(cam[b].alpha[p], cam[b].beta[p],
++                              states + 8 * (ia * npix + ib), 0.);
++        }
++    free(cam);
++}
++
+ #ifndef RAY_DUMP_LIBRARY
+ int main(void) {
+     read_bbh_config(getenv("RAPTOR_BBH") ? getenv("RAPTOR_BBH") : "bbh.in");

@@ -63,3 +63,30 @@ $NV/nvc -mp -O2 -c99 -I$SRC -I. -I/usr/include/hdf5/serial \
   $SRC/{main,core,io,GRmath,gr_integrator,rte_integrator,pol_rte_integrator,metric,pol_emission,tetrad,constants,camera}.c model.c \
   -o RAPTOR_nvc -lgsl -lgslcblas -L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5 -lm
 ```
+
+## Compile-time switches and the analytic model
+
+The modifications are guarded by switches whose defaults (`src/functions.h`)
+keep upstream behaviour; `model/blp_analytic/definitions.h` turns them on.
+
+| switch | default | blp_analytic | modification |
+|---|---|---|---|
+| `metric == SKS` | — | on | M1 superposed Kerr–Schild binary from `bbh.in` (`$RAPTOR_BBH`) |
+| `SKS_CONNECTION` | `SKS_CONN_FD` | FD | M2a finite differences, `SKS_CONN_ANALYTIC` = M2b |
+| `STEP_BBH` | 0 | 1 | M3 march control, termination and transfer sample set |
+| `CAMERA_PP` | 0 | 1 | M4 plane-parallel camera at `cam_dist` |
+| `EMIS_BLP` | 0 | 1 | M7 BlackLightPlus thermal coefficients |
+
+`model/blp_analytic/definitions.h` also carries the BlackLightPlus constants (M9).
+`bbh.in` holds `nholes`, `mass`, `spin`, `center1`, `center2`, `C`, `nmax`,
+`escape`, `horizon_eps`, `capture_redshift` and `cam_dist`.
+
+## Unit-test drivers
+
+`tests/build_tests.sh <dir>` builds the drivers against `model/blp_analytic`:
+`coeff_table` (R03), `metric_dump` and `metric_dump_cks` (R04 metric level),
+`ray_dump` and the `ccall` libraries `libraptor_sks_fd.so`,
+`libraptor_sks_an.so`, `libraptor_cks.so` (R04 rays, R05 camera). The
+BlackLightPlus side lives in `results/blp/raptor/tools/`: `r03_verify.sh`,
+`r04_verify.sh`, `r05_verify.sh` and `r01_verify.sh` export the fork branch with
+`git archive`, build it and run the comparisons.

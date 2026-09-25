@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 11:45:54 -0700
+Subject: [PATCH 04/11] test(m1-metric): add the metric and connection probe
+ for R04
+
+- change: tests/metric_dump.c prints g_dd, g_uu, the finite-difference connection (M2a) and the analytic connection (M2b) at points read from stdin, for the binary of $RAPTOR_BBH
+- change: tests/build_tests.sh links the unit drivers against every core source and model/blp_analytic
+- next: fails to build until the SKS metric (M1) and its analytic connection (M2b) exist
+---
+ tests/build_tests.sh | 21 +++++++++++++++++----
+ tests/metric_dump.c  | 35 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 52 insertions(+), 4 deletions(-)
+ create mode 100644 tests/metric_dump.c
+
+diff --git a/tests/build_tests.sh b/tests/build_tests.sh
+index 5644adc..cee0ec3 100755
+--- a/tests/build_tests.sh
++++ b/tests/build_tests.sh
+@@ -7,10 +7,23 @@ OUT=${1:?output directory}
+ shift || true
+ mkdir -p "$OUT"
+ CC=${CC:-gcc}
+-INC="-I$HERE/src -I$HERE/model/blp_analytic -I/usr/include/hdf5/serial"
+-CFLAGS="-O2 -std=gnu99 -Wall -Wno-unused-but-set-variable -Wno-unused-variable $*"
+-LIBS="-lgsl -lgslcblas -lm"
++H5INC=${H5INC:--I/usr/include/hdf5/serial}
++H5LIB=${H5LIB:--L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5}
++INC="-I$HERE/src -I$HERE/model/blp_analytic $H5INC"
++CFLAGS="-O2 -std=gnu99 -fopenmp -Wall -Wno-unused-but-set-variable -Wno-unused-variable $*"
++LIBS="-lgsl -lgslcblas $H5LIB -lm"
++# every core source except main.c, plus the analytic model
++CORE=""
++for f in core io GRmath gr_integrator rte_integrator pol_rte_integrator metric \
++         pol_emission tetrad constants camera blp_coeffs bbh_metric; do
++    CORE="$CORE $HERE/src/$f.c"
++done
++CORE="$CORE $HERE/model/blp_analytic/model.c"
+ 
+ $CC $CFLAGS $INC "$HERE/tests/coeff_table.c" "$HERE/src/blp_coeffs.c" \
+-    "$HERE/src/pol_emission.c" -o "$OUT/coeff_table" $LIBS
++    "$HERE/src/pol_emission.c" -o "$OUT/coeff_table" -lgsl -lgslcblas -lm
+ echo "built $OUT/coeff_table"
++for t in metric_dump; do
++    $CC $CFLAGS $INC "$HERE/tests/$t.c" $CORE -o "$OUT/$t" $LIBS
++    echo "built $OUT/$t"
++done
+diff --git a/tests/metric_dump.c b/tests/metric_dump.c
+new file mode 100644
+index 0000000..a972776
+--- /dev/null
++++ b/tests/metric_dump.c
+@@ -0,0 +1,35 @@
++/*
++ * metric_dump.c -- metric and connection probe (dag.md R04 comparison 1).
++ *
++ * Reads the binary configuration from $RAPTOR_BBH (default bbh.in) and points
++ * "t x y z" (one per line) from stdin. For every point prints one CSV row:
++ *   t,x,y,z, g_dd (16, row-major), g_uu (16), Gamma_FD (64), Gamma_AN (64)
++ * with Gamma[a][b][c] = Gamma^a_{bc} flattened a-major: the finite-difference
++ * connection (connection_num_udd, M2a) and the analytic one
++ * (sks_connection_udd, M2b).
++ */
++#include "definitions.h"
++#include "functions.h"
++#include "global_vars.h"
++#include "model_definitions.h"
++#include "model_functions.h"
++#include "model_global_vars.h"
++
++int main(void) {
++    read_bbh_config(getenv("RAPTOR_BBH") ? getenv("RAPTOR_BBH") : "bbh.in");
++    double X[4];
++    while (scanf("%lf %lf %lf %lf", &X[0], &X[1], &X[2], &X[3]) == 4) {
++        double g[4][4], gi[4][4], gfd[4][4][4], gan[4][4][4];
++        metric_dd(X, g);
++        metric_uu(X, gi);
++        connection_num_udd(X, gfd);
++        sks_connection_udd(X, gan);
++        printf("%.17g,%.17g,%.17g,%.17g", X[0], X[1], X[2], X[3]);
++        LOOP_ij printf(",%.17g", g[i][j]);
++        LOOP_ij printf(",%.17g", gi[i][j]);
++        LOOP_ijk printf(",%.17g", gfd[i][j][k]);
++        LOOP_ijk printf(",%.17g", gan[i][j][k]);
++        printf("\n");
++    }
++    return 0;
++}

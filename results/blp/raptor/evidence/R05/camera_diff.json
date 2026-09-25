@@ -1,0 +1,25 @@
+{
+  "i17": {
+    "max_abs_dk_con": 4.440892099e-16,
+    "max_abs_dk_cov": 6.661338148e-16,
+    "max_rel_dx": 2.442490654e-15,
+    "npix": 480,
+    "pass": true
+  },
+  "i60": {
+    "max_abs_dk_con": 4.440892099e-16,
+    "max_abs_dk_cov": 6.661338148e-16,
+    "max_rel_dx": 2.442490654e-15,
+    "npix": 480,
+    "pass": true
+  },
+  "i90": {
+    "max_abs_dk_con": 4.440892099e-16,
+    "max_abs_dk_cov": 6.661338148e-16,
+    "max_rel_dx": 2.442490654e-15,
+    "npix": 480,
+    "pass": true
+  },
+  "leg": "s455 (d = 1000, FOV 56)",
+  "pass": true
+}

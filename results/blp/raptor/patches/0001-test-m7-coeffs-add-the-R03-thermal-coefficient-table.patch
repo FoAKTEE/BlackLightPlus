@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 11:40:25 -0700
+Subject: [PATCH 01/11] test(m7-coeffs): add the R03 thermal coefficient table
+ driver
+
+- change: tests/coeff_table.c prints the eight invariant thermal coefficients of the EMIS_BLP port and of the native fits on the R03 grid (9 frequencies, 3 fields, 41 theta_e, 37 pitch angles)
+- change: tests/build_tests.sh builds the unit drivers against model/blp_analytic
+- next: R03 fails to build until blp_coeffs.c (M7) and the blp_analytic definitions (M9) exist
+---
+ tests/build_tests.sh | 16 +++++++++++
+ tests/coeff_table.c  | 65 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 81 insertions(+)
+ create mode 100755 tests/build_tests.sh
+ create mode 100644 tests/coeff_table.c
+
+diff --git a/tests/build_tests.sh b/tests/build_tests.sh
+new file mode 100755
+index 0000000..5644adc
+--- /dev/null
++++ b/tests/build_tests.sh
+@@ -0,0 +1,16 @@
++#!/bin/bash
++# Build the blp-bbh unit-test drivers against model/blp_analytic.
++# Usage: tests/build_tests.sh <outdir> [extra CFLAGS...]
++set -euo pipefail
++HERE=$(cd "$(dirname "$0")/.." && pwd)
++OUT=${1:?output directory}
++shift || true
++mkdir -p "$OUT"
++CC=${CC:-gcc}
++INC="-I$HERE/src -I$HERE/model/blp_analytic -I/usr/include/hdf5/serial"
++CFLAGS="-O2 -std=gnu99 -Wall -Wno-unused-but-set-variable -Wno-unused-variable $*"
++LIBS="-lgsl -lgslcblas -lm"
++
++$CC $CFLAGS $INC "$HERE/tests/coeff_table.c" "$HERE/src/blp_coeffs.c" \
++    "$HERE/src/pol_emission.c" -o "$OUT/coeff_table" $LIBS
++echo "built $OUT/coeff_table"
+diff --git a/tests/coeff_table.c b/tests/coeff_table.c
+new file mode 100644
+index 0000000..80644f7
+--- /dev/null
++++ b/tests/coeff_table.c
+@@ -0,0 +1,65 @@
++/*
++ * coeff_table.c -- thermal synchrotron coefficient table (dag.md R03).
++ *
++ * Evaluates, on the R03 grid, the eight invariant thermal coefficients
++ * (j_I, j_Q, j_V, a_I, a_Q, a_V, rho_Q, rho_V) of
++ *   - EMIS_BLP: the BlackLightPlus / Marszewski+2021 port (blp_coeffs.c),
++ *     in RAPTOR's fluid basis (Q along e_1 = perpendicular to B);
++ *   - EMIS_NATIVE: the upstream RAPTOR thermal fits (pol_emission.c),
++ * in invariant form j/nu^2, alpha nu, rho nu. One CSV row per grid cell:
++ *   nu, B, theta_e, theta_B, 8 x EMIS_BLP, 8 x EMIS_NATIVE   (%.17g)
++ *
++ * Grid: nu = {86, 230, 345} GHz x {0.3, 1, 3}; n_e = 1e5 cm^-3;
++ * B = {1, 10, 100} G; theta_e = 10^(-2.5 + 0.125 i), i = 0..40;
++ * theta_B = pi k / 38, k = 1..37.
++ *
++ * Build: tests/build_tests.sh (links src/blp_coeffs.c and src/pol_emission.c
++ * against model/blp_analytic/definitions.h).
++ */
++#include "definitions.h"
++#include "functions.h"
++
++int main(void) {
++    const double nu0[3] = {86.0e9, 230.0e9, 345.0e9};
++    const double fac[3] = {0.3, 1.0, 3.0};
++    const double Bs[3] = {1.0, 10.0, 100.0};
++    const double n_e = 1.0e5;
++
++    printf("nu,B,theta_e,theta_B,"
++           "blp_jI,blp_jQ,blp_jV,blp_aI,blp_aQ,blp_aV,blp_rQ,blp_rV,"
++           "nat_jI,nat_jQ,nat_jV,nat_aI,nat_aQ,nat_aV,nat_rQ,nat_rV\n");
++    for (int in = 0; in < 3; in++)
++        for (int f = 0; f < 3; f++) {
++            double nu = nu0[in] * fac[f];
++            for (int ib = 0; ib < 3; ib++)
++                for (int it = 0; it <= 40; it++) {
++                    double te = pow(10.0, -2.5 + 0.125 * it);
++                    for (int k = 1; k <= 37; k++) {
++                        double th = M_PI * k / 38.0;
++                        double b[8];
++                        blp_coeffs_raptor_basis(n_e, te, Bs[ib], nu, th, b);
++
++                        double jI = j_I_thermal(te, n_e, nu, Bs[ib], th);
++                        double jQ = j_Q_thermal(te, n_e, nu, Bs[ib], th);
++                        double jV = j_V_thermal(te, n_e, nu, Bs[ib], th);
++                        double aI = a_I_thermal(te, n_e, nu, Bs[ib], th, jI);
++                        double aQ = a_Q_thermal(te, n_e, nu, Bs[ib], th, jQ);
++                        double aV = a_V_thermal(te, n_e, nu, Bs[ib], th, jV);
++                        double rQ = rho_Q_thermal(te, n_e, nu, Bs[ib], th);
++                        double rV = rho_V_thermal(te, n_e, nu, Bs[ib], th);
++                        double nat[8] = {jI / (nu * nu), jQ / (nu * nu),
++                                         jV / (nu * nu), aI * nu,
++                                         aQ * nu,        aV * nu,
++                                         rQ * nu,        rV * nu};
++
++                        printf("%.17g,%.17g,%.17g,%.17g", nu, Bs[ib], te, th);
++                        for (int c = 0; c < 8; c++)
++                            printf(",%.17g", b[c]);
++                        for (int c = 0; c < 8; c++)
++                            printf(",%.17g", nat[c]);
++                        printf("\n");
++                    }
++                }
++        }
++    return 0;
++}

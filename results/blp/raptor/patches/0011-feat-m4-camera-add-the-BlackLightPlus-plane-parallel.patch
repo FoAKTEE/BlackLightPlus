@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:04:04 -0700
+Subject: [PATCH 11/11] feat(m4-camera): add the BlackLightPlus plane-parallel
+ camera (CAMERA_PP)
+
+- change: initialize_photon places the pixel at x = (t, d sin i - beta cos i, alpha, d cos i + beta sin i), lowers the provisional k^mu = (1, sin i, 0, cos i) with metric_dd, keeps k_i, re-solves k_t < 0 on the null cone (k_t = -1) and returns k^mu = g^{mu nu} k_nu for the d lambda < 0 trace; d = bbh.in cam_dist
+- result: at 480^2, i = 17/60/90 deg on the s455 binary, RAPTOR's camera states match BlackLightPlus camera_rays to 2.4e-15 (x, relative) and 6.7e-16 (k_mu) [SOLID]
+- verify: BlackLightPlus results/blp/raptor/tools/r05_camera.jl
+---
+ model/blp_analytic/definitions.h |  5 +++
+ src/functions.h                  |  5 +++
+ src/metric.c                     | 52 ++++++++++++++++++++++++++++++++
+ 3 files changed, 62 insertions(+)
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+index f4bb493..e07314a 100644
+--- a/model/blp_analytic/definitions.h
++++ b/model/blp_analytic/definitions.h
+@@ -130,6 +130,11 @@ typedef struct Camera {
+ 
+ // OBSERVER PARAMETERS
+ //////////////////////
++
++// BlackLightPlus plane-parallel camera at bbh.in cam_dist (M4)
++#ifndef CAMERA_PP
++#define CAMERA_PP (1)
++#endif
+ #define rcam (1e4) //(500.)    // Camera distance from the sing.(units of Rg)
+ 
+ #define max_order (100) // Maximimum order of lensed images 0 = direct only
+diff --git a/src/functions.h b/src/functions.h
+index 58dcba5..3c881b6 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -36,6 +36,11 @@
+ #define STEP_BBH (0)
+ #endif
+ 
++// CAMERA_PP = 1: BlackLightPlus plane-parallel camera at bbh.cam_dist (M4).
++#ifndef CAMERA_PP
++#define CAMERA_PP (0)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+diff --git a/src/metric.c b/src/metric.c
+index aa7f3cd..1fed8ac 100755
+--- a/src/metric.c
++++ b/src/metric.c
+@@ -1152,6 +1152,58 @@ void connection_udd(double X_u[4], double gamma[4][4][4]) {
+ // The photons all start at the camera location
+ void initialize_photon(double alpha, double beta, double photon_u[8],
+                        double t_init) {
++#if (CAMERA_PP)
++    // Plane-parallel camera (BlackLightPlus camera_ray, arXiv:2304.03804 eqs.
++    // 5-7) at distance d = bbh.cam_dist and inclination i: pixel position
++    // x = (t, d sin i - beta cos i, alpha, d cos i + beta sin i); the
++    // provisional received k^mu = (1, sin i, 0, cos i) is lowered, its spatial
++    // k_i kept and k_t < 0 re-solved on the null cone, normalised to k_t = -1.
++    // k^mu = g^{mu nu} k_nu is the received future-directed vector, traced
++    // with d lambda < 0.
++    {
++        double inc = INCLINATION * (M_PI / 180.);
++        double si = sin(inc), ci = cos(inc), d = bbh.cam_dist;
++        double X[4] = {t_init, -beta * ci + d * si, alpha, beta * si + d * ci};
++        double kcon[4] = {1.0, si, 0.0, ci};
++        double g[4][4], gi[4][4], k[4], kd[4], ku[4];
++        metric_dd(X, g);
++        metric_uu(X, gi);
++        LOOP_i {
++            k[i] = 0.;
++            for (int j = 0; j < 4; j++)
++                k[i] += g[i][j] * kcon[j];
++        }
++        double A = gi[0][0];
++        double B = 2 * (gi[0][1] * k[1] + gi[0][2] * k[2] + gi[0][3] * k[3]);
++        double C = 0.;
++        for (int i = 1; i < 4; i++)
++            for (int j = 1; j < 4; j++)
++                C += gi[i][j] * k[i] * k[j];
++        double disc = B * B - 4 * A * C;
++        double pt = (-B - sqrt(disc)) / (2 * A);
++        if (!(pt < 0))
++            pt = (-B + sqrt(disc)) / (2 * A);
++        if (!(pt < 0)) {
++            fprintf(stderr, "initialize_photon: no k_t < 0 null root at the "
++                            "camera (inside an ergosphere)\n");
++            exit(1);
++        }
++        kd[0] = pt / (-pt);
++        kd[1] = k[1] / (-pt);
++        kd[2] = k[2] / (-pt);
++        kd[3] = k[3] / (-pt);
++        LOOP_i {
++            ku[i] = 0.;
++            for (int j = 0; j < 4; j++)
++                ku[i] += gi[i][j] * kd[j];
++        }
++        LOOP_i {
++            photon_u[i] = X[i];
++            photon_u[i + 4] = ku[i];
++        }
++        return;
++    }
++#endif
+ 
+     double mu0 = cos(INCLINATION / 180. * M_PI);
+     double Xcam_u[4] = {t_init, logscale ? log(rcam) : rcam, acos(mu0), 0};

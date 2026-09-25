@@ -1,0 +1,10 @@
+{
+ "ref": {
+  "flux_Jy": 1.373950532749594e-06,
+  "flux_rel_to_R01": 3.877503504945423e-07,
+  "reassembled_sum_Jy": 1.3739505327495966e-06,
+  "reassembly_rel": 1.7763568394002505e-15,
+  "pass": true
+ },
+ "pass": true
+}

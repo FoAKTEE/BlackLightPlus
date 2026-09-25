@@ -1,0 +1,376 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 11:43:17 -0700
+Subject: [PATCH 03/11] feat(m7-coeffs): port the BlackLightPlus thermal
+ coefficients as EMIS_BLP
+
+- change: src/blp_coeffs.c ports thermal_synchrotron_polarized (M21 j_I/j_Q/j_V, Kirchhoff with expm1, rho_Q/rho_V with A&S Bessels, theta_e < 0.01 ramps) operation by operation, in invariant form
+- change: Q-type coefficients (j_Q, alpha_Q, rho_Q) change sign into RAPTOR's e_1-perpendicular-to-B basis; the alpha_P > alpha_I rescale of the BlackLightPlus segment is applied in evaluate_coeffs_blp
+- change: evaluate_coeffs_single dispatches to evaluate_coeffs_blp when EMIS_BLP (default 0 in functions.h, 1 in model/blp_analytic); run/makefile compiles blp_coeffs.c
+- result: R03 table (40959 cells) max relative difference to BlackLightPlus 2.3e-13 (j), 1.1e-13 (alpha), 6.2e-14 (rho_Q), 1.5e-14 (rho_V); no sign or zero mismatches [SOLID]
+- verify: tests/coeff_table + BlackLightPlus results/blp/raptor/tools/r03_verify.sh
+---
+ model/blp_analytic/definitions.h |   6 +
+ run/makefile                     |   2 +-
+ src/blp_coeffs.c                 | 259 +++++++++++++++++++++++++++++++
+ src/functions.h                  |  27 ++++
+ src/pol_rte_integrator.c         |   5 +
+ 5 files changed, 298 insertions(+), 1 deletion(-)
+ create mode 100644 src/blp_coeffs.c
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+index 55e4c96..aa868bd 100644
+--- a/model/blp_analytic/definitions.h
++++ b/model/blp_analytic/definitions.h
+@@ -86,6 +86,12 @@ typedef struct Camera {
+ 
+ #define DEXTER (0) // use Dexter fit for rho_V_thermal
+ 
++// EMIS_BLP = 1: BlackLightPlus thermal coefficients (blp_coeffs.c, M7);
++// EMIS_BLP = 0: the upstream RAPTOR fits (EMIS_NATIVE).
++#ifndef EMIS_BLP
++#define EMIS_BLP (1)
++#endif
++
+ // METRIC PARAMETERS
+ ////////////////////
+ 
+diff --git a/run/makefile b/run/makefile
+index ff88fc5..5d3c0c7 100644
+--- a/run/makefile
++++ b/run/makefile
+@@ -9,7 +9,7 @@ OBJDIR=build
+ 
+ TARGET=RAPTOR
+ 
+-SOURCES=main.c core.c io.c GRmath.c gr_integrator.c rte_integrator.c pol_rte_integrator.c metric.c pol_emission.c tetrad.c model.c constants.c camera.c
++SOURCES=main.c core.c io.c GRmath.c gr_integrator.c rte_integrator.c pol_rte_integrator.c metric.c pol_emission.c tetrad.c model.c constants.c camera.c blp_coeffs.c
+ OBJECTS := $(patsubst %.c,$(OBJDIR)/%.o,$(SOURCES))
+ 
+ all: create_directories $(SOURCES) $(TARGET)
+diff --git a/src/blp_coeffs.c b/src/blp_coeffs.c
+new file mode 100644
+index 0000000..5bbdc0e
+--- /dev/null
++++ b/src/blp_coeffs.c
+@@ -0,0 +1,259 @@
++/*
++ * blp_coeffs.c -- EMIS_BLP: thermal synchrotron coefficients of BlackLightPlus
++ * (src/radiation/coefficients.jl, thermal_synchrotron_polarized), after the
++ * Marszewski et al. 2021 fits ("M" equation tags): j_I, j_Q, j_V (M 28, 30),
++ * Kirchhoff absorptivities with expm1 (M 31), rho_Q and rho_V (M 33-37),
++ * Abramowitz & Stegun 9.8 Bessel polynomials and the theta_e < 0.01 ramps.
++ * The expressions follow the Julia source operation by operation.
++ *
++ * All returns are Lorentz invariants: j/nu^2, alpha nu, rho nu (CGS constants
++ * of definitions.h; the blp_analytic model carries the BlackLightPlus set, M9).
++ *
++ * Fluid Stokes basis. BlackLightPlus returns j_Q < 0 for emission polarized
++ * perpendicular to B (its Q axis is the projected field). RAPTOR's fluid tetrad
++ * has e_1 perpendicular to B and e_2 along it, a basis rotated by 90 degrees,
++ * so Q -> -Q and U -> -U: the Q-type coefficients (j_Q, alpha_Q, rho_Q) change
++ * sign, rho_V and the V-type coefficients do not (design.md C25).
++ */
++#include "definitions.h"
++#include "functions.h"
++
++// Abramowitz & Stegun 9.8 polynomial Bessel fits (BlackLightPlus bessel_*).
++static double blp_bessel_i0(double x) {
++    double ax = fabs(x);
++    if (ax < 3.75) {
++        double t2 = (x / 3.75) * (x / 3.75);
++        return 1.0 +
++               t2 * (3.5156229 +
++                     t2 * (3.0899424 +
++                           t2 * (1.2067492 +
++                                 t2 * (0.2659732 +
++                                       t2 * (0.0360768 + t2 * 0.0045813)))));
++    }
++    double t = 3.75 / ax;
++    return (exp(ax) / sqrt(ax)) *
++           (0.39894228 +
++            t * (0.01328592 +
++                 t * (0.00225319 +
++                      t * (-0.00157565 +
++                           t * (0.00916281 +
++                                t * (-0.02057706 +
++                                     t * (0.02635537 +
++                                          t * (-0.01647633 +
++                                               t * 0.00392377))))))));
++}
++
++static double blp_bessel_i1(double x) {
++    double ax = fabs(x);
++    double ans;
++    if (ax < 3.75) {
++        double t2 = (x / 3.75) * (x / 3.75);
++        ans = ax * (0.5 +
++                    t2 * (0.87890594 +
++                          t2 * (0.51498869 +
++                                t2 * (0.15084934 +
++                                      t2 * (0.02658733 +
++                                            t2 * (0.00301532 +
++                                                  t2 * 0.00032411))))));
++    } else {
++        double t = 3.75 / ax;
++        ans = 0.02282967 + t * (-0.02895312 + t * (0.01787654 - t * 0.00420059));
++        ans = 0.39894228 +
++              t * (-0.03988024 +
++                   t * (-0.00362018 +
++                        t * (0.00163801 + t * (-0.01031555 + t * ans))));
++        ans *= exp(ax) / sqrt(ax);
++    }
++    return x < 0.0 ? -ans : ans;
++}
++
++double blp_bessel_k0(double x) {
++    if (x <= 2.0) {
++        double t = x * x / 4.0;
++        return -log(x / 2.0) * blp_bessel_i0(x) +
++               (-0.57721566 +
++                t * (0.42278420 +
++                     t * (0.23069756 +
++                          t * (0.03488590 +
++                               t * (0.00262698 +
++                                    t * (0.00010750 + t * 0.00000740))))));
++    }
++    double t = 2.0 / x;
++    return (exp(-x) / sqrt(x)) *
++           (1.25331414 +
++            t * (-0.07832358 +
++                 t * (0.02189568 +
++                      t * (-0.01062446 +
++                           t * (0.00587872 +
++                                t * (-0.00251540 + t * 0.00053208))))));
++}
++
++double blp_bessel_k1(double x) {
++    if (x <= 2.0) {
++        double t = x * x / 4.0;
++        return log(x / 2.0) * blp_bessel_i1(x) +
++               (1.0 / x) *
++                   (1.0 +
++                    t * (0.15443144 +
++                         t * (-0.67278579 +
++                              t * (-0.18156897 +
++                                   t * (-0.01919402 +
++                                        t * (-0.00110404 +
++                                             t * (-0.00004686)))))));
++    }
++    double t = 2.0 / x;
++    return (exp(-x) / sqrt(x)) *
++           (1.25331414 +
++            t * (0.23498619 +
++                 t * (-0.03655620 +
++                      t * (0.01504268 +
++                           t * (-0.00780353 +
++                                t * (0.00325614 + t * (-0.00068245)))))));
++}
++
++// Theta_e below which the thermal Faraday factors take their cold limits, and
++// the lower edge of the rho_Q smoothstep window (BlackLightPlus K_THETA_E_*).
++#define BLP_THETA_E_ZERO (0.01)
++#define BLP_THETA_E_BLEND_LO (0.005)
++
++static double blp_theta_e_blend(double theta_e) {
++    double t = (theta_e - BLP_THETA_E_BLEND_LO) /
++               (BLP_THETA_E_ZERO - BLP_THETA_E_BLEND_LO);
++    t = t < 0.0 ? 0.0 : (t > 1.0 ? 1.0 : t);
++    return t * t * (3.0 - 2.0 * t);
++}
++
++// BlackLightPlus thermal_synchrotron_polarized with thermal_frac = 1, in the
++// BlackLightPlus basis: out = (j_i, j_q, j_v, alpha_i, alpha_q, alpha_v, rho_q,
++// rho_v). cos_theta_b is signed along the received photon direction.
++void blp_thermal_synchrotron_polarized(double n_e, double theta_e, double bb,
++                                       double nu, double sin_theta_b,
++                                       double cos_theta_b, double out[8]) {
++    for (int c = 0; c < 8; c++)
++        out[c] = 0.0;
++    if (n_e <= 0.0 || theta_e <= 0.0 || bb <= 0.0 || nu <= 0.0 ||
++        sin_theta_b <= 0.0)
++        return;
++
++    const double CL = SPEED_OF_LIGHT, EE = ELECTRON_CHARGE, ME = ELECTRON_MASS,
++                 HPL = PLANCK_CONSTANT;
++    const double SQRT2 = sqrt(2.0);
++
++    double nu_c = EE * bb / (2.0 * M_PI * ME * CL);
++    double sin2 = sin_theta_b * sin_theta_b;
++    double nu_s = 2.0 / 9.0 * nu_c * theta_e * theta_e * sin_theta_b;
++    double nu_2 = nu * nu;
++
++    double xx = nu / nu_s;
++    double xx_1_2 = sqrt(xx);
++    double xx_1_3 = cbrt(xx);
++    double xx_1_6 = sqrt(xx_1_3);
++    double coefficient = 1.0 * n_e * EE * EE * nu_c / (CL * nu_2) * exp(-xx_1_3);
++    double var_a = SQRT2 * M_PI / 27.0 * sin_theta_b;
++    double var_b = pow(2.0, 11.0 / 12.0);
++    double var_c = xx_1_2 + var_b * xx_1_6;
++
++    // Emissivities (M 28, 30).
++    double j_i = coefficient * var_a * var_c * var_c;
++    double te96 = pow(theta_e, 0.96);
++    double var_d = (7.0 * te96 + 35.0) / (10.0 * te96 + 75.0) * var_b;
++    double var_e = xx_1_2 + var_d * xx_1_6;
++    double var_f = cos_theta_b / theta_e;
++    double var_g = M_PI / 3.0 + M_PI / 3.0 * xx_1_3 + 2.0 / 300.0 * xx_1_2 +
++                   2.0 / 19.0 * M_PI * xx_1_3 * xx_1_3;
++    double j_q = -coefficient * var_a * var_e * var_e;
++    double j_v = coefficient * var_f * var_g;
++
++    // Absorptivities from Kirchhoff's law (M 31).
++    double kb_tt_e = theta_e * ME * CL * CL;
++    double b_nu_nu_3 = 2.0 * HPL / (CL * CL) / expm1(HPL * nu / kb_tt_e);
++    double alpha_i = j_i / b_nu_nu_3;
++    double alpha_q = j_q / b_nu_nu_3;
++    double alpha_v = j_v / b_nu_nu_3;
++    if (!isfinite(1.0 / (alpha_i * alpha_i))) {
++        alpha_i = 0.0;
++        alpha_q = 0.0;
++        alpha_v = 0.0;
++    }
++
++    // Rotativities (M 33-37): rho_V cold limit below theta_e = 0.01, rho_Q
++    // conversion factor ramped over [0.005, 0.01].
++    double coefficient_q =
++        -1.0 * n_e * EE * EE * nu_c * nu_c * sin2 / (ME * CL * nu_2);
++    double coefficient_v =
++        1.0 * 2.0 * n_e * EE * EE * nu_c * cos_theta_b / (ME * CL * nu);
++    double factor_q = 0.0;
++    double factor_v = 1.0;
++    if (theta_e >= BLP_THETA_E_BLEND_LO) {
++        double inv_theta_e = 1.0 / theta_e;
++        double kk_0 = blp_bessel_k0(inv_theta_e);
++        double kk_1 = blp_bessel_k1(inv_theta_e);
++        double kk_2 = kk_0 + (2.0 / inv_theta_e) * kk_1;
++        double xx_neg_1_2 = 1.0 / xx_1_2;
++        double va = 2.011 * exp(-19.78 * pow(xx, -0.5175));
++        double vb = cos(39.89 * xx_neg_1_2) * exp(-70.16 * pow(xx, -0.6));
++        double vc = 0.011 * exp(-1.69 * xx_neg_1_2);
++        double vd = 0.003135 * pow(xx, 4.0 / 3.0);
++        double ve = 0.5 * (1.0 + tanh(10.0 * log(0.6648 * xx_neg_1_2)));
++        double f_0 = va - vb - vc;
++        double f_m = f_0 + (vc - vd) * ve;
++        factor_q = blp_theta_e_blend(theta_e) * f_m * (kk_1 / kk_2 + 6.0 * theta_e);
++        if (theta_e >= BLP_THETA_E_ZERO) {
++            double delta_jj_5 = 0.4379 * log(1.0 + 1.3414 * pow(xx, -0.7515));
++            factor_v = (kk_0 - delta_jj_5) / kk_2;
++            factor_v = (factor_v < 0.0 || factor_v > 1.0) ? 1.0 : factor_v;
++        }
++    }
++    double rho_q = coefficient_q * factor_q;
++    double rho_v = coefficient_v * factor_v;
++
++    out[0] = j_i;
++    out[1] = j_q;
++    out[2] = j_v;
++    out[3] = alpha_i;
++    out[4] = alpha_q;
++    out[5] = alpha_v;
++    out[6] = rho_q;
++    out[7] = rho_v;
++}
++
++// The same coefficients in RAPTOR's fluid basis (Q-type signs flipped),
++// out = (jI, jQ, jV, aI, aQ, aV, rQ, rV), from the pitch angle theta_B.
++void blp_coeffs_raptor_basis(double n_e, double theta_e, double bb, double nu,
++                             double theta_b, double out[8]) {
++    blp_thermal_synchrotron_polarized(n_e, theta_e, bb, nu, sin(theta_b),
++                                      cos(theta_b), out);
++    out[1] = -out[1];
++    out[4] = -out[4];
++    out[6] = -out[6];
++}
++
++// EMIS_BLP entry of the transfer: invariant coefficients in RAPTOR's basis at
++// fluid-frame frequency nu_p, with the BlackLightPlus alpha_P > alpha_I
++// rescale (transfer.jl stokes_segment) applied to the absorptivities.
++void evaluate_coeffs_blp(double *jI, double *jQ, double *jU, double *jV,
++                         double *rQ, double *rU, double *rV, double *aI,
++                         double *aQ, double *aU, double *aV, double nu_p,
++                         struct GRMHD modvar, double pitch_ang) {
++    double c[8];
++    blp_coeffs_raptor_basis(modvar.n_e, modvar.theta_e, modvar.B, nu_p,
++                            pitch_ang, c);
++    *jI = c[0];
++    *jQ = c[1];
++    *jU = 0.;
++    *jV = c[2];
++    *aI = c[3];
++    *aQ = c[4];
++    *aU = 0.;
++    *aV = c[5];
++    *rQ = c[6];
++    *rU = 0.;
++    *rV = c[7];
++
++    double alpha_p = sqrt((*aQ) * (*aQ) + (*aV) * (*aV));
++    if (*aI > 0.0 && alpha_p > *aI) {
++        double sc = *aI / alpha_p;
++        *aQ *= sc;
++        *aV *= sc;
++    }
++}
+diff --git a/src/functions.h b/src/functions.h
+index 47a3ddb..318f7d0 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -12,6 +12,15 @@
+ #ifndef FUNCTIONS_H
+ #define FUNCTIONS_H
+ 
++// blp-bbh compile-time switches; a model's definitions.h overrides the
++// defaults, which keep upstream behaviour.
++#ifndef SKS
++#define SKS (9) // superposed Kerr-Schild binary metric id
++#endif
++#ifndef EMIS_BLP
++#define EMIS_BLP (0) // BlackLightPlus thermal coefficients (blp_coeffs.c)
++#endif
++
+ // CORE.C
+ /////////
+ 
+@@ -270,6 +279,24 @@ double a_V(double theta_e, double n_e, double nu, double B, double theta_B,
+ double rho_Q(double theta_e, double n_e, double nu, double B, double theta_B);
+ double rho_V(double theta_e, double n_e, double nu, double B, double theta_B);
+ 
++// BLP_COEFFS.C
++////////////////
++
++double blp_bessel_k0(double x);
++double blp_bessel_k1(double x);
++
++void blp_thermal_synchrotron_polarized(double n_e, double theta_e, double bb,
++                                       double nu, double sin_theta_b,
++                                       double cos_theta_b, double out[8]);
++
++void blp_coeffs_raptor_basis(double n_e, double theta_e, double bb, double nu,
++                             double theta_b, double out[8]);
++
++void evaluate_coeffs_blp(double *jI, double *jQ, double *jU, double *jV,
++                         double *rQ, double *rU, double *rV, double *aI,
++                         double *aQ, double *aU, double *aV, double nu_p,
++                         struct GRMHD modvar, double pitch_ang);
++
+ // UTILITIES.C
+ //////////////
+ 
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index 8d3956f..1afc5b8 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -310,6 +310,11 @@ void evaluate_coeffs_single(double *jI, double *jQ, double *jU, double *jV,
+                             double *rQ, double *rU, double *rV, double *aI,
+                             double *aQ, double *aU, double *aV, double nu_p,
+                             struct GRMHD modvar, double pitch_ang) {
++#if (EMIS_BLP)
++    evaluate_coeffs_blp(jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV, nu_p,
++                        modvar, pitch_ang);
++    return;
++#endif
+ 
+     *jI = j_I(modvar.theta_e, modvar.n_e, nu_p, modvar.B, pitch_ang);
+     *jQ = j_Q(modvar.theta_e, modvar.n_e, nu_p, modvar.B, pitch_ang);

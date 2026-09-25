@@ -1,0 +1,171 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 11:52:30 -0700
+Subject: [PATCH 08/11] test(m3-march): add the ray-dump interface and the R04
+ test builds
+
+- change: tests/ray_dump.c traces a given (x^mu, k_mu) state with integrate_geodesic_state and returns the stored (x, k, |h|) per state, the terminal state and its end class; library entry for ccall plus a binary-dump CLI; raptor_camera_state exposes initialize_photon
+- change: tests/build_tests.sh also builds the upstream-CKS metric probe (a = 0.9375) and the ray-dump libraries (SKS M2a, SKS M2b, CKS)
+- change: model/blp_analytic/model.c takes the global spin from BLP_ANALYTIC_SPIN (CKS reference builds)
+- next: fails to link until integrate_geodesic_state (M3) exists
+---
+ model/blp_analytic/model.c |  5 ++-
+ tests/build_tests.sh       | 34 ++++++++++++++----
+ tests/ray_dump.c           | 72 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 104 insertions(+), 7 deletions(-)
+ create mode 100644 tests/ray_dump.c
+
+diff --git a/model/blp_analytic/model.c b/model/blp_analytic/model.c
+index 94551e0..6d8a437 100644
+--- a/model/blp_analytic/model.c
++++ b/model/blp_analytic/model.c
+@@ -20,7 +20,10 @@ double L_unit, T_unit;
+ double RHO_unit, U_unit, B_unit;
+ double Ne_unit, Thetae_unit;
+ 
+-double R0 = 0., a = 0., Q = 0., hslope = 1.;
++#ifndef BLP_ANALYTIC_SPIN
++#define BLP_ANALYTIC_SPIN (0.) // global Kerr spin (upstream metrics only)
++#endif
++double R0 = 0., a = BLP_ANALYTIC_SPIN, Q = 0., hslope = 1.;
+ double stopx[4], startx[4], dx[4];
+ double ***Xgrid = NULL;
+ struct block *block_info = NULL;
+diff --git a/tests/build_tests.sh b/tests/build_tests.sh
+index 2253a9f..de2d258 100755
+--- a/tests/build_tests.sh
++++ b/tests/build_tests.sh
+@@ -1,6 +1,12 @@
+ #!/bin/bash
+ # Build the blp-bbh unit-test drivers against model/blp_analytic.
+ # Usage: tests/build_tests.sh <outdir> [extra CFLAGS...]
++#   coeff_table            R03 coefficient table
++#   metric_dump[_cks]      R04 metric/connection probe (SKS; upstream CKS a = 0.9375)
++#   ray_dump               R04 ray-dump CLI (SKS, finite-difference connection)
++#   libraptor_sks_fd.so    ray-dump library, SKS with the M2a connection
++#   libraptor_sks_an.so    ray-dump library, SKS with the M2b connection
++#   libraptor_cks.so       ray-dump library, upstream CKS Kerr (a = 0.9375)
+ set -euo pipefail
+ HERE=$(cd "$(dirname "$0")/.." && pwd)
+ OUT=${1:?output directory}
+@@ -9,9 +15,9 @@ mkdir -p "$OUT"
+ CC=${CC:-gcc}
+ H5INC=${H5INC:--I/usr/include/hdf5/serial}
+ H5LIB=${H5LIB:--L/usr/lib/x86_64-linux-gnu/hdf5/serial -lhdf5}
+-INC="-I$HERE/src -I$HERE/model/blp_analytic $H5INC"
+ CFLAGS="-O2 -std=gnu99 -fopenmp -Wall -Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-result $*"
+ LIBS="-lgsl -lgslcblas $H5LIB -lm"
++SKSINC="-I$HERE/src -I$HERE/model/blp_analytic $H5INC"
+ # every core source except main.c, plus the analytic model
+ CORE=""
+ for f in core io GRmath gr_integrator rte_integrator pol_rte_integrator metric \
+@@ -20,10 +26,26 @@ for f in core io GRmath gr_integrator rte_integrator pol_rte_integrator metric \
+ done
+ CORE="$CORE $HERE/model/blp_analytic/model.c"
+ 
+-$CC $CFLAGS $INC "$HERE/tests/coeff_table.c" "$HERE/src/blp_coeffs.c" \
++# upstream single-hole CKS headers: the blp_analytic headers with metric (CKS)
++CKSDEF="$OUT/cks_defs"
++mkdir -p "$CKSDEF"
++cp "$HERE"/model/blp_analytic/*.h "$CKSDEF/"
++sed -i 's/^#define metric (SKS)$/#define metric (CKS)/' "$CKSDEF/definitions.h"
++grep -q '^#define metric (CKS)$' "$CKSDEF/definitions.h"
++CKSINC="-I$HERE/src -I$CKSDEF $H5INC -DBLP_ANALYTIC_SPIN=0.9375"
++
++$CC $CFLAGS $SKSINC "$HERE/tests/coeff_table.c" "$HERE/src/blp_coeffs.c" \
+     "$HERE/src/pol_emission.c" -o "$OUT/coeff_table" -lgsl -lgslcblas -lm
+ echo "built $OUT/coeff_table"
+-for t in metric_dump; do
+-    $CC $CFLAGS $INC "$HERE/tests/$t.c" $CORE -o "$OUT/$t" $LIBS
+-    echo "built $OUT/$t"
+-done
++
++$CC $CFLAGS $SKSINC "$HERE/tests/metric_dump.c" $CORE -o "$OUT/metric_dump" $LIBS
++$CC $CFLAGS $CKSINC "$HERE/tests/metric_dump.c" $CORE -o "$OUT/metric_dump_cks" $LIBS
++echo "built $OUT/metric_dump $OUT/metric_dump_cks"
++
++$CC $CFLAGS $SKSINC "$HERE/tests/ray_dump.c" $CORE -o "$OUT/ray_dump" $LIBS
++LIBFLAGS="-fPIC -shared -DRAY_DUMP_LIBRARY"
++$CC $CFLAGS $LIBFLAGS $SKSINC "$HERE/tests/ray_dump.c" $CORE -o "$OUT/libraptor_sks_fd.so" $LIBS
++$CC $CFLAGS $LIBFLAGS $SKSINC -DSKS_CONNECTION=1 "$HERE/tests/ray_dump.c" $CORE \
++    -o "$OUT/libraptor_sks_an.so" $LIBS
++$CC $CFLAGS $LIBFLAGS $CKSINC "$HERE/tests/ray_dump.c" $CORE -o "$OUT/libraptor_cks.so" $LIBS
++echo "built $OUT/ray_dump $OUT/libraptor_{sks_fd,sks_an,cks}.so"
+diff --git a/tests/ray_dump.c b/tests/ray_dump.c
+new file mode 100644
+index 0000000..7fbc5db
+--- /dev/null
++++ b/tests/ray_dump.c
+@@ -0,0 +1,72 @@
++/*
++ * ray_dump.c -- geodesic ray-dump interface (dag.md R04).
++ *
++ * Library entry (built into tests/libraptor_*.so for ccall from the
++ * BlackLightPlus comparison scripts) and a command-line driver.
++ *
++ *   int raptor_trace_state(const double state_in[8], double *lightpath,
++ *                          int *steps, int *end_class)
++ * state_in = (x^mu, k_mu): position and the covariant received wave vector
++ * (future-directed, k_t = -1 at the camera). k^mu = g^{mu nu} k_nu is traced
++ * backward (d lambda < 0) by integrate_geodesic_state (M3). On return
++ * lightpath[9 n + 0..7] = (x^mu, k^mu) of state n = 0..steps-1 and
++ * lightpath[9 n + 8] = |h|, the affine step taken from state n; the terminal
++ * state is lightpath[9 steps + 0..7]. end_class: 1/2 captured by hole 1/2,
++ * 3 escaped, 4 step budget, 5 non-finite. lightpath must hold
++ * 9 (nmax + 1) doubles. Returns steps.
++ *
++ *   void raptor_camera_state(double alpha, double beta, double state_out[8])
++ * The initial (x^mu, k^mu) of initialize_photon for image coordinates
++ * (alpha, beta) (M4 plane-parallel camera when CAMERA_PP).
++ *
++ * CLI: ray_dump < states.txt > dump.bin, one state "x0 x1 x2 x3 k0 k1 k2 k3"
++ * per line; per ray writes int32 steps, int32 end_class, then
++ * (steps + 1) x 9 float64 lightpath entries.
++ */
++#include "definitions.h"
++#include "functions.h"
++#include "global_vars.h"
++#include "model_definitions.h"
++#include "model_functions.h"
++#include "model_global_vars.h"
++
++void raptor_load_bbh(const char *path) { read_bbh_config(path); }
++
++int raptor_trace_state(const double state_in[8], double *lightpath, int *steps,
++                       int *end_class) {
++    double photon_u[8], X[4], kd[4], ku[4];
++    for (int i = 0; i < 4; i++) {
++        X[i] = state_in[i];
++        kd[i] = state_in[4 + i];
++    }
++    raise_index(X, kd, ku);
++    for (int i = 0; i < 4; i++) {
++        photon_u[i] = X[i];
++        photon_u[4 + i] = ku[i];
++    }
++    integrate_geodesic_state(photon_u, lightpath, steps);
++    *end_class = (int)(-lightpath[9 * (*steps) + 8]);
++    return *steps;
++}
++
++void raptor_camera_state(double alpha, double beta, double state_out[8]) {
++    initialize_photon(alpha, beta, state_out, 0.);
++}
++
++#ifndef RAY_DUMP_LIBRARY
++int main(void) {
++    read_bbh_config(getenv("RAPTOR_BBH") ? getenv("RAPTOR_BBH") : "bbh.in");
++    double *lp = malloc(9 * (bbh.nmax + 1) * sizeof(double));
++    double s[8];
++    while (scanf("%lf %lf %lf %lf %lf %lf %lf %lf", &s[0], &s[1], &s[2], &s[3],
++                 &s[4], &s[5], &s[6], &s[7]) == 8) {
++        int steps, cls;
++        raptor_trace_state(s, lp, &steps, &cls);
++        int hdr[2] = {steps, cls};
++        fwrite(hdr, sizeof(int), 2, stdout);
++        fwrite(lp, sizeof(double), 9 * (steps + 1), stdout);
++    }
++    free(lp);
++    return 0;
++}
++#endif

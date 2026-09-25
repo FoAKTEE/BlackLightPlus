@@ -1,3 +1,25 @@
 base b91e937b7b746eb24992b6c1dd8831c5dea0cef1
-head b91e937b7b746eb24992b6c1dd8831c5dea0cef1
-tree bed88ff1de740e89161f1bfcc19a0770c41e7707
+head 4965d55018bb9493d3ab1f437dca1398c4775249
+tree ed057eff964886067f0a673f5505e88b2ecfea19
+720a111 test(m7-coeffs): add the R03 thermal coefficient table driver
+ed64b3a feat(m9-constants): add the blp_analytic model headers with BlackLightPlus constants
+066295b feat(m7-coeffs): port the BlackLightPlus thermal coefficients as EMIS_BLP
+49448b2 test(m1-metric): add the metric and connection probe for R04
+7833602 feat(m1-metric): add the superposed Kerr-Schild binary metric SKS
+87883ff feat(m2a-fd-connection): use an absolute finite-difference step for SKS
+7e3b422 feat(m2b-analytic-connection): add analytic Christoffel symbols for SKS
+3e3f887 test(m3-march): add the ray-dump interface and the R04 test builds
+445ddb1 feat(m3-march): adopt the BlackLightPlus march control, termination and sample set
+1a3714a test(m4-camera): expose RAPTOR's camera image states to the R05 camera check
+4965d55 feat(m4-camera): add the BlackLightPlus plane-parallel camera (CAMERA_PP)
+632c7170f8a1bb82e83850490dc963ec98580cb2c16d91660627468489df3ef0  0001-test-m7-coeffs-add-the-R03-thermal-coefficient-table.patch
+26c124b1e96faf136851bb6ab9b604f688253421ae7d458b4299a8bcf34c56ff  0002-feat-m9-constants-add-the-blp_analytic-model-headers.patch
+f741168dbb1b3849d6bd2a572e5d5b49fd6347c103bcef02a1da53c8486b5d63  0003-feat-m7-coeffs-port-the-BlackLightPlus-thermal-coeff.patch
+2266c42025a0ebfd0011b33afefe4eb600517ed8dce4a04c2443bcab3e7ba745  0004-test-m1-metric-add-the-metric-and-connection-probe-f.patch
+6e8de86da62ca86187036052122b23f5b6fb5ca3143ab77a85ae5d6255c67186  0005-feat-m1-metric-add-the-superposed-Kerr-Schild-binary.patch
+c6f2533078b0287c0a67fd3c2234f4f71b1a876e24531d0feabb83fb45d935d9  0006-feat-m2a-fd-connection-use-an-absolute-finite-differ.patch
+f9359f80e916ac8b3fe176baf6e56356a5e62e879e634ad755c9b3e988af8b0b  0007-feat-m2b-analytic-connection-add-analytic-Christoffe.patch
+7fff33b556933f30eb13d86318acbb545a0a0aeb450bf6d95fb9aeaf71a6d7f6  0008-test-m3-march-add-the-ray-dump-interface-and-the-R04.patch
+182f4d34538e46e95b405389465857541a497f9b2a4a9a821d586ebdabd50094  0009-feat-m3-march-adopt-the-BlackLightPlus-march-control.patch
+153410fe85ef4164c6c5b1ac52801de175697d80455346db16e27ccba958b605  0010-test-m4-camera-expose-RAPTOR-s-camera-image-states-t.patch
+d2b4ba64b3509fc969dfb69d16af9b80936c10f9074ceb7e1d1b7750371cc7ad  0011-feat-m4-camera-add-the-BlackLightPlus-plane-parallel.patch
