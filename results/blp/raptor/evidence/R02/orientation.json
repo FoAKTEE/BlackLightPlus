@@ -1,0 +1,106 @@
+{
+  "pass": true,
+  "test1_pass": true,
+  "test1_slabs": {
+    "B_away_V_negative": {
+      "I_ratio": 1.000000033,
+      "blp": [1.044582924e-11, -6.747295292e-12, 5.488030872e-14, -6.91284731e-12],
+      "blp_expected": true,
+      "evpa_blp_deg": 89.76699251,
+      "evpa_raptor_deg": 89.76699357,
+      "pass": true,
+      "raptor": [1.044582958e-11, -6.747295406e-12, 5.488005872e-14, -6.912847568e-12],
+      "raptor_expected": true,
+      "signs_agree": true
+    },
+    "B_north_Q_negative": {
+      "I_ratio": 1.000000046,
+      "blp": [1.585059217e-11, -9.860752279e-12, 4.716082729e-15, 2.887696154e-14],
+      "blp_expected": true,
+      "evpa_blp_deg": 89.98629863,
+      "evpa_raptor_deg": 89.98629863,
+      "pass": true,
+      "raptor": [1.58505929e-11, -9.860752984e-12, 4.716084989e-15, 2.887696366e-14],
+      "raptor_expected": true,
+      "signs_agree": true
+    },
+    "B_northwest_U_positive": {
+      "I_ratio": 1.000000046,
+      "blp": [1.58576042e-11, -2.864541486e-15, 9.864710039e-12, 4.08463326e-14],
+      "blp_expected": true,
+      "evpa_blp_deg": 45.00831885,
+      "evpa_raptor_deg": 45.00831884,
+      "pass": true,
+      "raptor": [1.585760492e-11, -2.86453897e-15, 9.864710744e-12, 4.08463356e-14],
+      "raptor_expected": true,
+      "signs_agree": true
+    },
+    "B_toward_V_positive": {
+      "I_ratio": 1.000000033,
+      "blp": [1.04012942e-11, -6.721015132e-12, -4.825323289e-14, 6.933535343e-12],
+      "blp_expected": true,
+      "evpa_blp_deg": -89.79432727,
+      "evpa_raptor_deg": -89.79432833,
+      "pass": true,
+      "raptor": [1.040129454e-11, -6.721015242e-12, -4.825298352e-14, 6.9335356e-12],
+      "raptor_expected": true,
+      "signs_agree": true
+    },
+    "faraday_RM_negative_west": {
+      "I_ratio": 1.000000068,
+      "blp": [1.619245054e-11, -7.336830099e-12, 6.624789116e-12, -3.144529286e-13],
+      "blp_expected": true,
+      "evpa_blp_deg": 68.95977436,
+      "evpa_raptor_deg": 69.01852809,
+      "pass": true,
+      "raptor": [1.619245164e-11, -7.350368354e-12, 6.609698443e-12, -3.144367035e-13],
+      "raptor_expected": true,
+      "signs_agree": true
+    },
+    "faraday_RM_positive_east": {
+      "I_ratio": 1.000000059,
+      "blp": [1.607826668e-11, -7.329918886e-12, -6.618429596e-12, 2.578445799e-13],
+      "blp_expected": true,
+      "evpa_blp_deg": -68.96003065,
+      "evpa_raptor_deg": -69.01899324,
+      "pass": true,
+      "raptor": [1.607826764e-11, -7.343505402e-12, -6.603311399e-12, 2.578318724e-13],
+      "raptor_expected": true,
+      "signs_agree": true
+    }
+  },
+  "test2_orientation_check": {
+    "blp": {
+      "I_sum": 0.0008753471875,
+      "Q_over_I": -0.65036495,
+      "U_over_I": 0.2401844574,
+      "V_over_I": 0.002039914473,
+      "east_over_west_I": 2.543172193,
+      "net_evpa_deg": 79.86522448
+    },
+    "blp_recorded_index_json": {
+      "Q_over_I": -0.65036495,
+      "U_over_I": 0.2401844574,
+      "east_over_west_I": 2.543172193,
+      "net_evpa_deg": 79.86522448
+    },
+    "evpa_diff_deg": 4.175242196e-07,
+    "pass": true,
+    "raptor": {
+      "I_sum": 0.0008753471855,
+      "Q_over_I": -0.650364967,
+      "U_over_I": 0.2401844744,
+      "V_over_I": 0.002039914506,
+      "east_over_west_I": 2.543172183,
+      "net_evpa_deg": 79.86522406
+    },
+    "rel_diff": {
+      "I_sum": 2.356400963e-09,
+      "Q_over_I": 2.611305749e-08,
+      "U_over_I": 7.095948451e-08,
+      "east_over_west_I": 3.911032165e-09
+    },
+    "signs_agree": true
+  },
+  "test2_pass": true
+}

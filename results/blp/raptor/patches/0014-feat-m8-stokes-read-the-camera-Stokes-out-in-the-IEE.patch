@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:33:56 -0700
+Subject: [PATCH 14/16] feat(m8-stokes): read the camera Stokes out in the
+ IEEE/IAU convention (STOKES_IAU)
+
+- finding: with the upstream readout (cam_up = -z, Kerr observer) RAPTOR returns Q = -Q_IAU, U = -U_IAU and V = V_IEEE on every R02 slab and on the orientation-check ring: its observer tetrad (e_1 = west, e_2 = north) is the IAU (north, east) basis rotated by 90 degrees [SOLID]
+- change: STOKES_IAU builds the camera tetrad on the normal observer n = -lapse g^{0 mu} with up = image north (0, -cos i, 0, sin i), and reads f out in the (e_2, -e_1) = (north, east) basis
+- result: R02 tests 1 and 2: every sign agrees with BlackLightPlus; ring east/west 2.5432, Q/I -0.6504, U/I +0.2402, EVPA 79.87 deg, all within 7e-8 relative of BlackLightPlus [SOLID]
+- verify: BlackLightPlus results/blp/raptor/tools/r02_orientation.jl
+---
+ model/blp_analytic/definitions.h |  5 +++++
+ src/functions.h                  |  6 ++++++
+ src/pol_rte_integrator.c         | 25 ++++++++++++++++++++++++-
+ 3 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+index 7e388f8..1aa287a 100644
+--- a/model/blp_analytic/definitions.h
++++ b/model/blp_analytic/definitions.h
+@@ -134,6 +134,11 @@ typedef struct Camera {
+ // OBSERVER PARAMETERS
+ //////////////////////
+ 
++// IEEE/IAU camera Stokes readout (M8)
++#ifndef STOKES_IAU
++#define STOKES_IAU (1)
++#endif
++
+ // BlackLightPlus plane-parallel camera at bbh.in cam_dist (M4)
+ #ifndef CAMERA_PP
+ #define CAMERA_PP (1)
+diff --git a/src/functions.h b/src/functions.h
+index 84d11b7..6582e8a 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -47,6 +47,12 @@
+ #define EMIS_MODEL (0)
+ #endif
+ 
++// STOKES_IAU = 1: camera Stokes readout in the IEEE/IAU convention (M8):
++// normal observer, up = image north, basis (north, east).
++#ifndef STOKES_IAU
++#define STOKES_IAU (0)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index 02080fe..4845b68 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -721,19 +721,42 @@ void pol_integration_step(struct GRMHD modvar, double frequency,
+ void construct_f_obs_tetrad_u(double *X_u, double *k_u, double complex *f_u,
+                               double complex *f_obs_tetrad_u) {
+ 
++#if (STOKES_IAU)
++    // Camera frame of BlackLightPlus: the normal (Eulerian) observer
++    // n^mu = -lapse g^{0 mu} and up = image north, the camera's +beta
++    // direction (0, -cos i, 0, sin i).
++    double g_uu_cam[4][4];
++    metric_uu(X_u, g_uu_cam);
++    double lapse = 1. / sqrt(-g_uu_cam[0][0]);
++    double U_obs_u[4] = {1. / lapse, g_uu_cam[0][1] / g_uu_cam[0][0] / lapse,
++                         g_uu_cam[0][2] / g_uu_cam[0][0] / lapse,
++                         g_uu_cam[0][3] / g_uu_cam[0][0] / lapse};
++    double inc = INCLINATION * (M_PI / 180.);
++    double cam_up_u[4] = {0., -cos(inc), 0., sin(inc)};
++#else
+     double cam_up_u[4] = {0., 0., 0., -1.};
+     double U_obs_u[4] = {0., 0., 0., 0.};
++    construct_U_vector(X_u, U_obs_u);
++#endif
+     double obs_tetrad_u[4][4], obs_tetrad_d[4][4];
+     LOOP_ij obs_tetrad_u[i][j] = 0.;
+     LOOP_ij obs_tetrad_d[i][j] = 0.;
+ 
+-    construct_U_vector(X_u, U_obs_u);
+     create_observer_tetrad(X_u, k_u, U_obs_u, cam_up_u, obs_tetrad_u);
+     create_tetrad_d(X_u, obs_tetrad_u, obs_tetrad_d);
+ 
+     // Convert f_u to f_obs_tetrad_u
+     LOOP_i f_obs_tetrad_u[i] = 0.;
+     LOOP_ij f_obs_tetrad_u[i] += obs_tetrad_d[j][i] * f_u[j];
++
++#if (STOKES_IAU)
++    // The observer tetrad has e_2 = up (north) and e_1 = west. IEEE/IAU Stokes
++    // refer to (north, east) = (e_2, -e_1): a 90 degree rotation of the
++    // readout basis, Q -> -Q, U -> -U, V unchanged (sign table of R02).
++    double complex f1 = f_obs_tetrad_u[1], f2 = f_obs_tetrad_u[2];
++    f_obs_tetrad_u[1] = f2;
++    f_obs_tetrad_u[2] = -f1;
++#endif
+ }
+ 
+ void radiative_transfer_polarized(double *lightpath, int steps,

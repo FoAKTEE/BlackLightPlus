@@ -1,6 +1,7 @@
 base b91e937b7b746eb24992b6c1dd8831c5dea0cef1
-head 4965d55018bb9493d3ab1f437dca1398c4775249
-tree ed057eff964886067f0a673f5505e88b2ecfea19
+head e0f0570ef54be09ae2635a1a01b1751322b53f50
+tree 513d3876d1a8bddad8d89e5482552bba14829c7c
+excluded blp-reader 0c865d945f845658dc28334dd008c64ea720ec52
 720a111 test(m7-coeffs): add the R03 thermal coefficient table driver
 ed64b3a feat(m9-constants): add the blp_analytic model headers with BlackLightPlus constants
 066295b feat(m7-coeffs): port the BlackLightPlus thermal coefficients as EMIS_BLP
@@ -12,14 +13,24 @@ ed64b3a feat(m9-constants): add the blp_analytic model headers with BlackLightPl
 445ddb1 feat(m3-march): adopt the BlackLightPlus march control, termination and sample set
 1a3714a test(m4-camera): expose RAPTOR's camera image states to the R05 camera check
 4965d55 feat(m4-camera): add the BlackLightPlus plane-parallel camera (CAMERA_PP)
-632c7170f8a1bb82e83850490dc963ec98580cb2c16d91660627468489df3ef0  0001-test-m7-coeffs-add-the-R03-thermal-coefficient-table.patch
-26c124b1e96faf136851bb6ab9b604f688253421ae7d458b4299a8bcf34c56ff  0002-feat-m9-constants-add-the-blp_analytic-model-headers.patch
-f741168dbb1b3849d6bd2a572e5d5b49fd6347c103bcef02a1da53c8486b5d63  0003-feat-m7-coeffs-port-the-BlackLightPlus-thermal-coeff.patch
-2266c42025a0ebfd0011b33afefe4eb600517ed8dce4a04c2443bcab3e7ba745  0004-test-m1-metric-add-the-metric-and-connection-probe-f.patch
-6e8de86da62ca86187036052122b23f5b6fb5ca3143ab77a85ae5d6255c67186  0005-feat-m1-metric-add-the-superposed-Kerr-Schild-binary.patch
-c6f2533078b0287c0a67fd3c2234f4f71b1a876e24531d0feabb83fb45d935d9  0006-feat-m2a-fd-connection-use-an-absolute-finite-differ.patch
-f9359f80e916ac8b3fe176baf6e56356a5e62e879e634ad755c9b3e988af8b0b  0007-feat-m2b-analytic-connection-add-analytic-Christoffe.patch
-7fff33b556933f30eb13d86318acbb545a0a0aeb450bf6d95fb9aeaf71a6d7f6  0008-test-m3-march-add-the-ray-dump-interface-and-the-R04.patch
-182f4d34538e46e95b405389465857541a497f9b2a4a9a821d586ebdabd50094  0009-feat-m3-march-adopt-the-BlackLightPlus-march-control.patch
-153410fe85ef4164c6c5b1ac52801de175697d80455346db16e27ccba958b605  0010-test-m4-camera-expose-RAPTOR-s-camera-image-states-t.patch
-d2b4ba64b3509fc969dfb69d16af9b80936c10f9074ceb7e1d1b7750371cc7ad  0011-feat-m4-camera-add-the-BlackLightPlus-plane-parallel.patch
+840784d test(m8-stokes): add the R02 analytic scenes and the single-pixel transfer library
+82b8ba2 fix(m8-stokes): reset the analytic scene to its defaults on every read
+b9d7443 feat(m8-stokes): read the camera Stokes out in the IEEE/IAU convention (STOKES_IAU)
+82c904f fix(m7-coeffs): mirror the BlackLightPlus emission admissibility rescale
+aaa32ce fix(rte): add the emission of absorption-free segments in the unpolarized transfer
+44b44cef300cf2822fe946923c2cc0078ff78d0fbbdf4f6c7ba9266901d4fba3  0001-test-m7-coeffs-add-the-R03-thermal-coefficient-table.patch
+02876b6c4a9f712371a1a6ce56bd15f751827853537fb59e9eec9c66a2576a81  0002-feat-m9-constants-add-the-blp_analytic-model-headers.patch
+5cd3a9c70fc10ebef2e2c83a154c8d0481f8415a85ac84f63f76784107750d79  0003-feat-m7-coeffs-port-the-BlackLightPlus-thermal-coeff.patch
+a2ff09337b1b7420d43c3c5782d988d366929135350da1e2a4eacec87de5f804  0004-test-m1-metric-add-the-metric-and-connection-probe-f.patch
+e5a7e8beb228dd80dd938788fa862b47fe501f4e22ed1be6a36af4bb54810750  0005-feat-m1-metric-add-the-superposed-Kerr-Schild-binary.patch
+36d217ed0f4f55682ba73e5e414a6a25950a1006d1922b5cad5d2dae14fe1fb0  0006-feat-m2a-fd-connection-use-an-absolute-finite-differ.patch
+ec3744cf6ed589eaebe998b5e4a50f1ff11b819afa90a83ef8fe122826e4ba34  0007-feat-m2b-analytic-connection-add-analytic-Christoffe.patch
+ba38b346d88a46fca9f253013dd14be7e1362992f4193dbc2f1fdd250c7c6f70  0008-test-m3-march-add-the-ray-dump-interface-and-the-R04.patch
+4f0b51b9019b4af0af875f382f65b4b945a915d391676029784c04ab9ddedcb1  0009-feat-m3-march-adopt-the-BlackLightPlus-march-control.patch
+412a0357c1c1707345d2419aeec4b0acb35bb8b874fe992aaf74fbfcd758692b  0010-test-m4-camera-expose-RAPTOR-s-camera-image-states-t.patch
+e003631655a4f7a51a8754f5735a5e9788e94f7cf4ea710c2b97cb944fe0d75c  0011-feat-m4-camera-add-the-BlackLightPlus-plane-parallel.patch
+ad25ad356f91321d2505097a51ba1c1df044463c2d792c79959f6832b707fbc6  0012-test-m8-stokes-add-the-R02-analytic-scenes-and-the-s.patch
+369344c48d78c43a519ca8b24e7f72b2bc8fb34817de6a700751567fc67aa46b  0013-fix-m8-stokes-reset-the-analytic-scene-to-its-defaul.patch
+9419651d7152e295323ab51d098be5281cd012c9d5efe800e7166d2004e2c160  0014-feat-m8-stokes-read-the-camera-Stokes-out-in-the-IEE.patch
+b3ea73c75982c3a301bad16ced7f15ca695e8e49834df4fe834389cb180deb68  0015-fix-m7-coeffs-mirror-the-BlackLightPlus-emission-adm.patch
+3b4b51b902f6f183656a98f9415a1d75fe28a7ac61c19dfcbd9dc4cf15f505c9  0016-fix-rte-add-the-emission-of-absorption-free-segments.patch

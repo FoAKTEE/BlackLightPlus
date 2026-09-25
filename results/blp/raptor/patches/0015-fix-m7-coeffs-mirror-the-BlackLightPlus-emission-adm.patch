@@ -1,0 +1,42 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:34:42 -0700
+Subject: [PATCH 15/16] fix(m7-coeffs): mirror the BlackLightPlus emission
+ admissibility rescale
+
+- why: BlackLightPlus 2fab069 rescales j_P > j_I onto j_P = j_I in stokes_segment (the M21 fits leave the Stokes cone at small pitch angles)
+- change: evaluate_coeffs_blp rescales (j_Q, j_V) onto the cone with j_I and the direction kept, next to the alpha_P > alpha_I rescale
+- result: R02 Faraday-screen slab V/I 0.0160 in both codes (0.1604 in RAPTOR before, where the field-aligned screen emits |j_V| = 10.7 j_I) [SOLID]
+---
+ src/blp_coeffs.c | 11 +++++++++--
+ 1 file changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/src/blp_coeffs.c b/src/blp_coeffs.c
+index 5bbdc0e..f9b1ae5 100644
+--- a/src/blp_coeffs.c
++++ b/src/blp_coeffs.c
+@@ -229,8 +229,9 @@ void blp_coeffs_raptor_basis(double n_e, double theta_e, double bb, double nu,
+ }
+ 
+ // EMIS_BLP entry of the transfer: invariant coefficients in RAPTOR's basis at
+-// fluid-frame frequency nu_p, with the BlackLightPlus alpha_P > alpha_I
+-// rescale (transfer.jl stokes_segment) applied to the absorptivities.
++// fluid-frame frequency nu_p, with the BlackLightPlus admissibility rescales
++// (transfer.jl stokes_segment): alpha_P > alpha_I onto alpha_P = alpha_I and
++// j_P > j_I onto j_P = j_I, direction kept.
+ void evaluate_coeffs_blp(double *jI, double *jQ, double *jU, double *jV,
+                          double *rQ, double *rU, double *rV, double *aI,
+                          double *aQ, double *aU, double *aV, double nu_p,
+@@ -250,6 +251,12 @@ void evaluate_coeffs_blp(double *jI, double *jQ, double *jU, double *jV,
+     *rU = 0.;
+     *rV = c[7];
+ 
++    double j_p = sqrt((*jQ) * (*jQ) + (*jV) * (*jV));
++    if (*jI > 0.0 && j_p > *jI) {
++        double sj = *jI / j_p;
++        *jQ *= sj;
++        *jV *= sj;
++    }
+     double alpha_p = sqrt((*aQ) * (*aQ) + (*aV) * (*aV));
+     if (*aI > 0.0 && alpha_p > *aI) {
+         double sc = *aI / alpha_p;

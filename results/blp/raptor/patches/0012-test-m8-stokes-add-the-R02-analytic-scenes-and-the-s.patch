@@ -1,0 +1,428 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:24:47 -0700
+Subject: [PATCH 12/16] test(m8-stokes): add the R02 analytic scenes and the
+ single-pixel transfer library
+
+- change: model/blp_analytic reads a scene file ($RAPTOR_SCENE): the test_ray_orientation.jl slab and Faraday screen, the orientation-check prograde ring (fig_eht_bbh.jl), and the Gold et al. 2020 analytic emitter; thermal scenes decode BlackLightPlus primitives (primitive_four_vectors, plasma_decode) with the SKS metric
+- change: EMIS_MODEL hook lets a model supply the transfer coefficients (model_evaluate_coeffs); on in model/blp_analytic for the Gold scene
+- change: tests/pixel_rt.c (libraptor_rt_pol.so, libraptor_rt_unpol.so) returns the observed IQUV of one image point through integrate_geodesic and the polarized or unpolarized transfer
+- next: R02 sign tests fix the camera Stokes readout (M8)
+---
+ model/blp_analytic/definitions.h |   3 +
+ model/blp_analytic/model.c       | 256 ++++++++++++++++++++++++++++++-
+ src/functions.h                  |  12 ++
+ src/pol_rte_integrator.c         |   5 +
+ tests/build_tests.sh             |   5 +
+ tests/pixel_rt.c                 |  48 ++++++
+ 6 files changed, 325 insertions(+), 4 deletions(-)
+ create mode 100644 tests/pixel_rt.c
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+index e07314a..7e388f8 100644
+--- a/model/blp_analytic/definitions.h
++++ b/model/blp_analytic/definitions.h
+@@ -92,6 +92,9 @@ typedef struct Camera {
+ #define EMIS_BLP (1)
+ #endif
+ 
++// the analytic scenes may supply their own coefficients (Gold et al. 2020)
++#define EMIS_MODEL (1)
++
+ // METRIC PARAMETERS
+ ////////////////////
+ 
+diff --git a/model/blp_analytic/model.c b/model/blp_analytic/model.c
+index 6d8a437..d510ded 100644
+--- a/model/blp_analytic/model.c
++++ b/model/blp_analytic/model.c
+@@ -1,7 +1,33 @@
+ /*
+  * model/blp_analytic -- analytic plasma scenes on the superposed Kerr-Schild
+- * metric, for the RAPTOR vs BlackLightPlus unit and image comparisons.
+- * This version is vacuum everywhere (geodesic tests).
++ * metric, for the RAPTOR vs BlackLightPlus unit and image comparisons
++ * (dag.md R02). The scene is read from $RAPTOR_SCENE (default scene.in); with
++ * no scene file the model is vacuum.
++ *
++ * Thermal scenes give BlackLightPlus primitives (rho, p_gas, normal-frame
++ * velocity uu^i, lab field B^i, code units) and decode them as BlackLightPlus
++ * does (primitives.jl primitive_four_vectors, coefficients.jl plasma_decode):
++ *   u^0 = W / lapse, u^i = uu^i - shift^i W / lapse, b^0 = u_i B^i,
++ *   b^i = (B^i + b^0 u^i) / u^0;  n_e = rho d_unit / m_p (mu = 1/2, n_e = n_i);
++ *   B = sqrt(b.b) b_unit;  Theta_e = (m_p / m_e)(p / rho) / (1 + R(beta)),
++ *   R = (R_high + R_low beta_inv^2) / (1 + beta_inv^2), beta_inv = b^2 / (2 p);
++ *   p passes through eint = p / (gamma - 1) as in the BlackLightPlus sampler.
++ *   scene slab   test_ray_orientation.jl: slab 400 < x, y, z < 600
++ *                (rho 1, p 1e-3, uu, B), optional Faraday screen
++ *                650 < x < 700 (rho screen_rho, p 1e-3 screen_rho, B screen)
++ *   scene ring   fig_eht_bbh.jl orientation_check: prograde Keplerian ring
++ *                6 < R < 12, |z| < 1, v = R^-1/2, B = (0, 0, 0.3), p/rho 0.1
++ * The Gold et al. 2020 analytic model is a scalar emitter:
++ *   scene gold   n = exp(-[(r/10)^2 + z^2]/2), z = h cos(theta),
++ *                u_mu = ubar (-1, 0, 0, l) in Boyer-Lindquist,
++ *                l = l0 R^(1+q) / (1 + R), R = r sin(theta), q = 1/2;
++ *                j = Cn0 n (nu/nu_p)^-alpha, a = A Cn0 n (nu/nu_p)^-(beta+alpha)
++ *                (evaluated by model_evaluate_coeffs, EMIS_MODEL).
++ * Scene keys: scene, d_unit, b_unit (default from M_UNIT), gamma, rat_low,
++ * rat_high, sigma_cut (< 0 disables), slab_uu, slab_bb, screen, screen_bb,
++ * screen_rho, gold_A, gold_alpha, gold_beta, gold_h, gold_l0, gold_Cn0,
++ * gold_nup. The single Kerr hole of the ring and gold scenes is hole 1 of
++ * bbh.in (mass 1, spin a, at the origin).
+  */
+ 
+ #include "definitions.h"
+@@ -29,6 +55,63 @@ double ***Xgrid = NULL;
+ struct block *block_info = NULL;
+ int LFAC, XI;
+ 
++// SCENE
++////////
++
++#define SCENE_VACUUM 0
++#define SCENE_SLAB 1
++#define SCENE_RING 2
++#define SCENE_GOLD 3
++
++static struct {
++    int kind;
++    double d_unit, b_unit, gamma, rat_low, rat_high, sigma_cut;
++    double slab_uu[3], slab_bb[3], screen_bb[3], screen_rho;
++    int screen;
++    double A, alpha, beta, h, l0, Cn0, nup;
++} sc = {SCENE_VACUUM, -1., -1., 5. / 3., 1., 1., -1.,
++        {0., 0., 0.}, {0., 0., 0.01}, {0., 0., 0.}, 200., 0,
++        0., 0., 2.5, 0., 0., 3.e-18, 230.e9};
++
++static void read_scene(const char *path) {
++    FILE *fp = fopen(path, "r");
++    if (fp == NULL)
++        return;
++    char line[512], key[64], val[64];
++    while (fgets(line, sizeof line, fp)) {
++        if (line[0] == '#' || sscanf(line, "%63s", key) != 1)
++            continue;
++        const char *v = line + strcspn(line, " \t");
++        if (!strcmp(key, "scene")) {
++            sscanf(v, "%63s", val);
++            sc.kind = !strcmp(val, "slab")   ? SCENE_SLAB
++                      : !strcmp(val, "ring") ? SCENE_RING
++                      : !strcmp(val, "gold") ? SCENE_GOLD
++                                             : SCENE_VACUUM;
++        }
++#define RD1(name, field)                                                       \
++    else if (!strcmp(key, name)) sscanf(v, "%lf", &sc.field);
++#define RD3(name, field)                                                       \
++    else if (!strcmp(key, name))                                               \
++        sscanf(v, "%lf %lf %lf", &sc.field[0], &sc.field[1], &sc.field[2]);
++        RD1("d_unit", d_unit) RD1("b_unit", b_unit) RD1("gamma", gamma)
++        RD1("rat_low", rat_low) RD1("rat_high", rat_high)
++        RD1("sigma_cut", sigma_cut) RD3("slab_uu", slab_uu)
++        RD3("slab_bb", slab_bb) RD3("screen_bb", screen_bb)
++        RD1("screen_rho", screen_rho) RD1("gold_A", A) RD1("gold_alpha", alpha)
++        RD1("gold_beta", beta) RD1("gold_h", h) RD1("gold_l0", l0)
++        RD1("gold_Cn0", Cn0) RD1("gold_nup", nup)
++        else if (!strcmp(key, "screen")) sscanf(v, "%d", &sc.screen);
++        else {
++            fprintf(stderr, "read_scene: unknown key %s\n", key);
++            exit(1);
++        }
++#undef RD1
++#undef RD3
++    }
++    fclose(fp);
++}
++
+ // FUNCTIONS
+ ////////////
+ 
+@@ -41,9 +124,174 @@ void set_units(double M_unit_) {
+     Ne_unit = RHO_unit / PROTON_MASS;
+ }
+ 
+-void init_model() { set_units(M_UNIT); }
++void init_model() {
++    read_scene(getenv("RAPTOR_SCENE") ? getenv("RAPTOR_SCENE") : "scene.in");
++    set_units(M_UNIT);
++    if (sc.d_unit > 0) {
++        RHO_unit = sc.d_unit;
++        U_unit = RHO_unit * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
++        B_unit = SPEED_OF_LIGHT * sqrt(4. * M_PI * RHO_unit);
++    }
++    if (sc.b_unit > 0)
++        B_unit = sc.b_unit;
++}
++
++// BlackLightPlus primitive decode at X: fills modvar, returns 0 for vacuum.
++static int thermal_sample(double X[4], double rho, double pgas, const double uu[3],
++                          const double bb[3], struct GRMHD *modvar) {
++    if (rho <= 0. || (bb[0] == 0. && bb[1] == 0. && bb[2] == 0.))
++        return 0;
++    double eint = pgas / (sc.gamma - 1);
++    pgas = (sc.gamma - 1) * eint;
++    if (pgas <= 0.)
++        return 0;
++    double g[4][4], gi[4][4];
++    metric_dd(X, g);
++    metric_uu(X, gi);
++    double uu0 = sqrt(1 + g[1][1] * uu[0] * uu[0] + 2 * g[1][2] * uu[0] * uu[1] +
++                      2 * g[1][3] * uu[0] * uu[2] + g[2][2] * uu[1] * uu[1] +
++                      2 * g[2][3] * uu[1] * uu[2] + g[3][3] * uu[2] * uu[2]);
++    double lapse = 1 / sqrt(-gi[0][0]);
++    double shift[3] = {-gi[0][1] / gi[0][0], -gi[0][2] / gi[0][0],
++                       -gi[0][3] / gi[0][0]};
++    double ucon[4] = {uu0 / lapse, uu[0] - shift[0] * uu0 / lapse,
++                      uu[1] - shift[1] * uu0 / lapse,
++                      uu[2] - shift[2] * uu0 / lapse};
++    double ucov[4], bcon[4], bcov[4];
++    LOOP_i {
++        ucov[i] = 0.;
++        for (int j = 0; j < 4; j++)
++            ucov[i] += g[i][j] * ucon[j];
++    }
++    double b0 = ucov[1] * bb[0] + ucov[2] * bb[1] + ucov[3] * bb[2];
++    bcon[0] = b0;
++    for (int i = 1; i < 4; i++)
++        bcon[i] = (bb[i - 1] + b0 * ucon[i]) / ucon[0];
++    double b_sq = 0.;
++    LOOP_i {
++        bcov[i] = 0.;
++        for (int j = 0; j < 4; j++)
++            bcov[i] += g[i][j] * bcon[j];
++        b_sq += bcon[i] * bcov[i];
++    }
++    if (b_sq <= 0.)
++        return 0;
+ 
+-int get_fluid_params(double X[NDIM], struct GRMHD *modvar) { return 0; }
++    double rho_cgs = rho * RHO_unit;
++    double pgas_cgs = pgas * RHO_unit * SPEED_OF_LIGHT * SPEED_OF_LIGHT;
++    double n_cgs = rho_cgs / (0.5 * PROTON_MASS);
++    double n_e = n_cgs / (1.0 + 1.0 / 1.0);
++    double sigma = b_sq / rho;
++    double beta_inv = b_sq / (2.0 * pgas);
++    double tti_tte = (sc.rat_high + sc.rat_low * beta_inv * beta_inv) /
++                     (1.0 + beta_inv * beta_inv);
++    double kb_tt_tot = 0.5 * PROTON_MASS * pgas_cgs / rho_cgs;
++    double kb_tt_e = (1.0 + 1.0) / (tti_tte + 1.0) * kb_tt_tot;
++    double theta_e = kb_tt_e / (ELECTRON_MASS * SPEED_OF_LIGHT * SPEED_OF_LIGHT);
++    if (sc.sigma_cut >= 0. && sigma > sc.sigma_cut)
++        return 0;
++
++    LOOP_i {
++        modvar->U_u[i] = ucon[i];
++        modvar->U_d[i] = ucov[i];
++        modvar->B_u[i] = bcon[i];
++        modvar->B_d[i] = bcov[i];
++    }
++    modvar->n_e = n_e;
++    modvar->B = sqrt(b_sq) * B_unit;
++    modvar->theta_e = theta_e;
++    modvar->sigma = sigma;
++    modvar->beta = 1. / beta_inv;
++    return 1;
++}
++
++// Boyer-Lindquist inverse metric components (t, phi) of the single hole.
++static void bl_inverse_tphi(double r, double th, double a_, double *gtt,
++                            double *gtp, double *gpp) {
++    double s = sin(th), c = cos(th);
++    double sig = r * r + a_ * a_ * c * c, del = r * r - 2. * r + a_ * a_;
++    double A_ = (r * r + a_ * a_) * (r * r + a_ * a_) - a_ * a_ * del * s * s;
++    *gtt = -A_ / (sig * del);
++    *gtp = -2. * a_ * r / (sig * del);
++    *gpp = (del - a_ * a_ * s * s) / (sig * del * s * s);
++}
++
++static int gold_sample(double X[4], struct GRMHD *modvar) {
++    double aa = bbh.a[0];
++    double r = ks_radius_hole(X, 0);
++    if (!(r > horizon_radius_hole(0)))
++        return 0;
++    double cth = X[3] / r;
++    double th = acos(cth);
++    double Rcyl = r * sin(th);
++    double z = sc.h * cth;
++    double n = exp(-0.5 * ((r / 10.) * (r / 10.) + z * z));
++    double l = sc.l0 / (1. + Rcyl) * pow(Rcyl, 1.5);
++    double gtt, gtp, gpp;
++    bl_inverse_tphi(r, th, aa, &gtt, &gtp, &gpp);
++    double den = gtt - 2. * gtp * l + gpp * l * l;
++    if (!(den < 0.))
++        return 0;
++    double ubar = sqrt(-1. / den);
++    double ut = gtt * (-ubar) + gtp * (ubar * l);
++    double uph = gtp * (-ubar) + gpp * (ubar * l);
++    double x = X[1] - bbh.c[0][0], y = X[2] - bbh.c[0][1];
++    modvar->U_u[0] = ut;
++    modvar->U_u[1] = -y * uph;
++    modvar->U_u[2] = x * uph;
++    modvar->U_u[3] = 0.;
++    LOOP_i modvar->B_u[i] = 0.;
++    modvar->n_e = n; // dimensionless density n / n_0
++    modvar->B = 0.;
++    modvar->theta_e = 0.;
++    return 1;
++}
++
++int get_fluid_params(double X[NDIM], struct GRMHD *modvar) {
++    const double z3[3] = {0., 0., 0.};
++    switch (sc.kind) {
++    case SCENE_SLAB: {
++        int inyz = 400. < X[2] && X[2] < 600. && 400. < X[3] && X[3] < 600.;
++        if (inyz && 400. < X[1] && X[1] < 600.)
++            return thermal_sample(X, 1.0, 1.0e-3, sc.slab_uu, sc.slab_bb, modvar);
++        if (sc.screen && inyz && 650. < X[1] && X[1] < 700.)
++            return thermal_sample(X, sc.screen_rho, 1.0e-3 * sc.screen_rho, z3,
++                                  sc.screen_bb, modvar);
++        return 0;
++    }
++    case SCENE_RING: {
++        double R = hypot(X[1], X[2]);
++        if (6.0 < R && R < 12.0 && fabs(X[3]) < 1.0) {
++            double v = 1 / sqrt(R), W = 1 / sqrt(1 - v * v);
++            double uu[3] = {-W * v * X[2] / R, W * v * X[1] / R, 0.0};
++            double bb[3] = {0.0, 0.0, 0.3};
++            return thermal_sample(X, 1.0, 0.1, uu, bb, modvar);
++        }
++        return 0;
++    }
++    case SCENE_GOLD:
++        return gold_sample(X, modvar);
++    default:
++        return 0;
++    }
++}
++
++// EMIS_MODEL hook: the Gold et al. 2020 scalar emitter (invariant j/nu^2,
++// alpha nu at fluid-frame frequency nu_p). Returns 0 for the thermal scenes.
++int model_evaluate_coeffs(double *jI, double *jQ, double *jU, double *jV,
++                          double *rQ, double *rU, double *rV, double *aI,
++                          double *aQ, double *aU, double *aV, double nu_p,
++                          struct GRMHD modvar, double pitch_ang) {
++    if (sc.kind != SCENE_GOLD)
++        return 0;
++    double f = nu_p / sc.nup;
++    double j = sc.Cn0 * modvar.n_e * pow(f, -sc.alpha);
++    double al = sc.A * sc.Cn0 * modvar.n_e * pow(f, -(sc.beta + sc.alpha));
++    *jI = j / (nu_p * nu_p);
++    *aI = al * nu_p;
++    *jQ = *jU = *jV = *rQ = *rU = *rV = *aQ = *aU = *aV = 0.;
++    return 1;
++}
+ 
+ void compute_spec_user(struct Camera *intensityfield,
+                        double energy_spectrum[num_frequencies][nspec]) {}
+diff --git a/src/functions.h b/src/functions.h
+index 3c881b6..84d11b7 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -41,6 +41,12 @@
+ #define CAMERA_PP (0)
+ #endif
+ 
++// EMIS_MODEL = 1: the model may supply the transfer coefficients through
++// model_evaluate_coeffs (returns 1 when it does), e.g. analytic emitters.
++#ifndef EMIS_MODEL
++#define EMIS_MODEL (0)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+@@ -329,6 +335,12 @@ void sks_metric_uu(const double X_u[4], double g_uu[4][4]);
+ void sks_connection_udd(const double X_u[4], double gamma_udd[4][4][4]);
+ double normal_frame_energy_u(const double X_u[4], const double k_u[4]);
+ 
++// Model-supplied coefficients (EMIS_MODEL)
++int model_evaluate_coeffs(double *jI, double *jQ, double *jU, double *jV,
++                          double *rQ, double *rU, double *rV, double *aI,
++                          double *aQ, double *aU, double *aV, double nu_p,
++                          struct GRMHD modvar, double pitch_ang);
++
+ // BLP_COEFFS.C
+ ////////////////
+ 
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index d8ce510..02080fe 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -312,6 +312,11 @@ void evaluate_coeffs_single(double *jI, double *jQ, double *jU, double *jV,
+                             double *rQ, double *rU, double *rV, double *aI,
+                             double *aQ, double *aU, double *aV, double nu_p,
+                             struct GRMHD modvar, double pitch_ang) {
++#if (EMIS_MODEL)
++    if (model_evaluate_coeffs(jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV, nu_p,
++                              modvar, pitch_ang))
++        return;
++#endif
+ #if (EMIS_BLP)
+     evaluate_coeffs_blp(jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV, nu_p,
+                         modvar, pitch_ang);
+diff --git a/tests/build_tests.sh b/tests/build_tests.sh
+index de2d258..a8dddd7 100755
+--- a/tests/build_tests.sh
++++ b/tests/build_tests.sh
+@@ -49,3 +49,8 @@ $CC $CFLAGS $LIBFLAGS $SKSINC -DSKS_CONNECTION=1 "$HERE/tests/ray_dump.c" $CORE
+     -o "$OUT/libraptor_sks_an.so" $LIBS
+ $CC $CFLAGS $LIBFLAGS $CKSINC "$HERE/tests/ray_dump.c" $CORE -o "$OUT/libraptor_cks.so" $LIBS
+ echo "built $OUT/ray_dump $OUT/libraptor_{sks_fd,sks_an,cks}.so"
++
++# single-pixel image values (R02): polarized and unpolarized builds
++$CC $CFLAGS $LIBFLAGS $SKSINC "$HERE/tests/pixel_rt.c" $CORE -o "$OUT/libraptor_rt_pol.so" $LIBS
++$CC $CFLAGS $LIBFLAGS $SKSINC -DPOL=0 "$HERE/tests/pixel_rt.c" $CORE -o "$OUT/libraptor_rt_unpol.so" $LIBS
++echo "built $OUT/libraptor_rt_{pol,unpol}.so"
+diff --git a/tests/pixel_rt.c b/tests/pixel_rt.c
+new file mode 100644
+index 0000000..ecd2ab9
+--- /dev/null
++++ b/tests/pixel_rt.c
+@@ -0,0 +1,48 @@
++/*
++ * pixel_rt.c -- single-pixel RAPTOR image values for arbitrary image-plane
++ * coordinates (dag.md R02), as a library for ccall.
++ *
++ *   void raptor_rt_setup(const char *model_in)
++ * reads model.in (read_model), bbh.in ($RAPTOR_BBH) and the scene
++ * ($RAPTOR_SCENE), and sets the constants, as main() does.
++ *
++ *   int raptor_rt_pixel(double alpha, double beta, double iquv[4])
++ * traces the pixel (integrate_geodesic: camera, march) and runs the transfer
++ * at FREQ_MIN: radiative_transfer_polarized when POL, else
++ * radiative_transfer_unpolarized; iquv is the observed (I, Q, U, V) in cgs
++ * (invariant times nu^3), the values main() stores before the 1e23 Jansky
++ * factor. Returns the number of stored states.
++ */
++#include "definitions.h"
++#include "functions.h"
++#include "global_vars.h"
++#include "model_definitions.h"
++#include "model_functions.h"
++#include "model_global_vars.h"
++
++void raptor_rt_setup(const char *model_in) {
++    char *argv[4] = {"raptor", (char *)model_in, "none", "0"};
++    read_model(argv);
++    init_model();
++    set_constants();
++}
++
++int raptor_rt_pixel(double alpha, double beta, double iquv[4]) {
++    int steps = 0;
++    double *lp = malloc(9 * max_steps * sizeof(double));
++    integrate_geodesic(alpha, beta, lp, &steps, CUTOFF_INNER);
++    for (int s = 0; s < 4; s++)
++        iquv[s] = 0.;
++#if (POL)
++    double f_x = 0., f_y = 0., pp = 0., tau = 0., tauF = 0.;
++    radiative_transfer_polarized(lp, steps, FREQ_MIN, &f_x, &f_y, &pp, 0, iquv,
++                                 &tau, &tauF);
++#else
++    double IQUV[num_frequencies][4] = {{0.}}, tau[num_frequencies] = {0.};
++    double freqs[num_frequencies] = {FREQ_MIN};
++    radiative_transfer_unpolarized(lp, steps, freqs, IQUV, tau);
++    iquv[0] = IQUV[0][0] * pow(FREQ_MIN, 3.);
++#endif
++    free(lp);
++    return steps;
++}

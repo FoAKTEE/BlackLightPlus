@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:02:14 -0700
-Subject: [PATCH 09/11] feat(m3-march): adopt the BlackLightPlus march control,
+Subject: [PATCH 09/16] feat(m3-march): adopt the BlackLightPlus march control,
  termination and sample set
 
 - change: integrate_geodesic_state (STEP_BBH): RK4 with h = min_A (r_A - r_h,A) / C; captured when the horizon distance is below horizon_eps, non-finite, or the normal-frame energy |k^t|/sqrt(-g^tt) exceeds capture_redshift; escaped when R > escape and increasing; nmax steps; theta-turn cut removed

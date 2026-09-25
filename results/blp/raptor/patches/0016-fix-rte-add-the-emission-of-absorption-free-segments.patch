@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:37:34 -0700
+Subject: [PATCH 16/16] fix(rte): add the emission of absorption-free segments
+ in the unpolarized transfer
+
+- finding: radiative_transfer_unpolarized kept I unchanged when alpha_I = 0 (S = j/alpha undefined), dropping all emission of absorption-free samples; the Gold et al. 2020 tests T1-T3 (A = 0) gave a blank image [SOLID]
+- change: alpha_I = 0 now takes the exact limit I + j dl_s C_const; samples with j = 0 are unchanged
+- result: R02 Gold T1-T5 at 60^2, C = 80: fluxes and images agree with BlackLightPlus to <= 1.6e-8 (L1) [PRELIMINARY]
+---
+ src/rte_integrator.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/rte_integrator.c b/src/rte_integrator.c
+index 6d24312..3483946 100755
+--- a/src/rte_integrator.c
++++ b/src/rte_integrator.c
+@@ -133,8 +133,8 @@ double radiative_transfer_unpolarized(double *lightpath, int steps,
+                 if (jI == jI) {
+                     double Ii = Icurrent;
+                     double S = j_inv / K_inv;
+-                    if (K_inv == 0)
+-                        Icurrent = Ii;
++                    if (K_inv == 0) // emission only: the alpha -> 0 limit
++                        Icurrent = Ii + j_inv * dl_current_s * C;
+                     else if (dtau < 1.e-5)
+                         Icurrent = Ii - (Ii - S) * (0.166666667 * dtau *
+                                                     (6. - dtau * (3. - dtau)));

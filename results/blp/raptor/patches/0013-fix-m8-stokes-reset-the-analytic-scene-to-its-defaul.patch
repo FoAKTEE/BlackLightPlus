@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 12:27:49 -0700
+Subject: [PATCH 13/16] fix(m8-stokes): reset the analytic scene to its
+ defaults on every read
+
+- finding: a second raptor_rt_setup in one process kept the previous scene's d_unit and b_unit when the new scene file omitted them (the ring ran with the slab's 1e-31 g cm^-3), 5 orders of magnitude low in I [SOLID]
+- change: read_scene starts from scene_defaults
+---
+ model/blp_analytic/model.c | 14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/model/blp_analytic/model.c b/model/blp_analytic/model.c
+index d510ded..aca454b 100644
+--- a/model/blp_analytic/model.c
++++ b/model/blp_analytic/model.c
+@@ -63,17 +63,23 @@ int LFAC, XI;
+ #define SCENE_RING 2
+ #define SCENE_GOLD 3
+ 
+-static struct {
++struct Scene {
+     int kind;
+     double d_unit, b_unit, gamma, rat_low, rat_high, sigma_cut;
+     double slab_uu[3], slab_bb[3], screen_bb[3], screen_rho;
+     int screen;
+     double A, alpha, beta, h, l0, Cn0, nup;
+-} sc = {SCENE_VACUUM, -1., -1., 5. / 3., 1., 1., -1.,
+-        {0., 0., 0.}, {0., 0., 0.01}, {0., 0., 0.}, 200., 0,
+-        0., 0., 2.5, 0., 0., 3.e-18, 230.e9};
++};
++static const struct Scene scene_defaults = {
++    SCENE_VACUUM, -1., -1., 5. / 3., 1., 1., -1.,
++    {0., 0., 0.}, {0., 0., 0.01}, {0., 0., 0.}, 200., 0,
++    0., 0., 2.5, 0., 0., 3.e-18, 230.e9};
++static struct Scene sc;
+ 
++// Every call starts from the defaults, so keys absent from the file never
++// inherit a previous scene's values.
+ static void read_scene(const char *path) {
++    sc = scene_defaults;
+     FILE *fp = fopen(path, "r");
+     if (fp == NULL)
+         return;

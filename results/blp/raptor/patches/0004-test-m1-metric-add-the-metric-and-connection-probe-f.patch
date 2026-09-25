@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:45:54 -0700
-Subject: [PATCH 04/11] test(m1-metric): add the metric and connection probe
+Subject: [PATCH 04/16] test(m1-metric): add the metric and connection probe
  for R04
 
 - change: tests/metric_dump.c prints g_dd, g_uu, the finite-difference connection (M2a) and the analytic connection (M2b) at points read from stdin, for the binary of $RAPTOR_BBH

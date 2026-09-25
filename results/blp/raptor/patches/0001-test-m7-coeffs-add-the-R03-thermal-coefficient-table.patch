@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:40:25 -0700
-Subject: [PATCH 01/11] test(m7-coeffs): add the R03 thermal coefficient table
+Subject: [PATCH 01/16] test(m7-coeffs): add the R03 thermal coefficient table
  driver
 
 - change: tests/coeff_table.c prints the eight invariant thermal coefficients of the EMIS_BLP port and of the native fits on the R03 grid (9 frequencies, 3 fields, 41 theta_e, 37 pitch angles)

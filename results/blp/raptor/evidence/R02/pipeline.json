@@ -1,0 +1,20 @@
+{
+  "gold_T4": {
+    "hdf5_flux_Jy": 0.2723780526,
+    "max_pixel_diff_I_over_Imax": 0,
+    "pass": true,
+    "spectrum_flux_Jy": 0.2723780526,
+    "spectrum_vs_hdf5": -1.221245327e-15
+  },
+  "pass": true,
+  "ring": {
+    "hdf5_flux_Jy": 0.01167624116,
+    "max_pixel_diff_I_over_Imax": 0,
+    "max_pixel_diff_Q_over_Imax": 0,
+    "max_pixel_diff_U_over_Imax": 0,
+    "max_pixel_diff_V_over_Imax": 0,
+    "pass": true,
+    "spectrum_flux_Jy": 0.01167624116,
+    "spectrum_vs_hdf5": 1.110223025e-15
+  }
+}

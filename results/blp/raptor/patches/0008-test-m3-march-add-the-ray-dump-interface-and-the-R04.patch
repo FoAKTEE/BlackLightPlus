@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:52:30 -0700
-Subject: [PATCH 08/11] test(m3-march): add the ray-dump interface and the R04
+Subject: [PATCH 08/16] test(m3-march): add the ray-dump interface and the R04
  test builds
 
 - change: tests/ray_dump.c traces a given (x^mu, k_mu) state with integrate_geodesic_state and returns the stored (x, k, |h|) per state, the terminal state and its end class; library entry for ccall plus a binary-dump CLI; raptor_camera_state exposes initialize_photon

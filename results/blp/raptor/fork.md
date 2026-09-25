@@ -28,7 +28,8 @@ DAG node in the body (`- next:`/`- change:` objects).
 git clone https://github.com/jordydavelaar/raptor raptor-blp
 cd raptor-blp
 git checkout -b blp-bbh b91e937b7b746eb24992b6c1dd8831c5dea0cef1
-git am /path/to/BlackLightPlus/results/blp/raptor/patches/*.patch
+P=/path/to/BlackLightPlus/results/blp/raptor/patches
+git am -3 --keep-cr $P/*.patch $P/blp-reader/*.patch   # --keep-cr: src/GRmath.c has CRLF endings
 git rev-parse 'HEAD^{tree}'   # equals `tree` in patches/SERIES
 ```
 
@@ -75,20 +76,33 @@ keep upstream behaviour; `model/blp_analytic/definitions.h` turns them on.
 | `SKS_CONNECTION` | `SKS_CONN_FD` | FD | M2a finite differences, `SKS_CONN_ANALYTIC` = M2b |
 | `STEP_BBH` | 0 | 1 | M3 march control, termination and transfer sample set |
 | `CAMERA_PP` | 0 | 1 | M4 plane-parallel camera at `cam_dist` |
-| `EMIS_BLP` | 0 | 1 | M7 BlackLightPlus thermal coefficients |
+| `EMIS_BLP` | 0 | 1 | M7 BlackLightPlus thermal coefficients, with the j_P ≤ j_I and α_P ≤ α_I rescales of `stokes_segment` |
+| `STOKES_IAU` | 0 | 1 | M8 camera Stokes readout: normal observer, up = image north, basis (north, east) |
+| `EMIS_MODEL` | 0 | 1 | coefficients supplied by the model (`model_evaluate_coeffs`, the Gold et al. 2020 emitter) |
 
 `model/blp_analytic/definitions.h` also carries the BlackLightPlus constants (M9).
+`model/blp_analytic/model.c` holds the analytic scenes of `$RAPTOR_SCENE`
+(default `scene.in`): `slab` (thin slab and Faraday screen of
+`test/test_ray_orientation.jl`), `ring` (the orientation-check ring of
+`fig_eht_bbh.jl`) and `gold` (Gold et al. 2020 T1–T5); thermal scenes decode
+BlackLightPlus primitives exactly as `primitive_four_vectors` and `plasma_decode`.
+
 `bbh.in` holds `nholes`, `mass`, `spin`, `center1`, `center2`, `C`, `nmax`,
 `escape`, `horizon_eps`, `capture_redshift` and `cam_dist`.
+
+Upstream fix on the matched path: the unpolarized transfer adds `j ds` on
+absorption-free segments (upstream dropped them).
 
 ## Unit-test drivers
 
 `tests/build_tests.sh <dir>` builds the drivers against `model/blp_analytic`:
 `coeff_table` (R03), `metric_dump` and `metric_dump_cks` (R04 metric level),
 `ray_dump` and the `ccall` libraries `libraptor_sks_fd.so`,
-`libraptor_sks_an.so`, `libraptor_cks.so` (R04 rays, R05 camera). The
+`libraptor_sks_an.so`, `libraptor_cks.so` (R04 rays, R05 camera), and
+`libraptor_rt_pol.so`, `libraptor_rt_unpol.so` (one image point through the
+camera, march and transfer; R02). The
 BlackLightPlus side lives in `results/blp/raptor/tools/`: `r03_verify.sh`,
-`r04_verify.sh`, `r05_verify.sh` and `r01_verify.sh` export the fork branch with
+`r04_verify.sh`, `r05_verify.sh`, `r02_verify.sh` and `r01_verify.sh` export the fork branch with
 `git archive`, build it and run the comparisons.
 
 ## Branch `blp-reader`: AthenaK model (M5, M6, R06)
