@@ -1,0 +1,356 @@
+{
+ "image": "s455, i = 17 deg, 480^2, polarized, C = 80, nmax 4000, 230 GHz",
+ "host": "2x Xeon Platinum 8360Y (72 cores, 144 hardware threads), shared",
+ "protocol": "best of 3 warm runs per leg (page cache warm; BlackLightPlus compiled in a 24^2 warm-up render, excluded); RAPTOR OMP_PROC_BIND=close OMP_PLACES=cores; BlackLightPlus julia -t T; phases: load (snapshot read), setup (camera), trace (geodesics), transfer (polarized RT), output",
+ "loadavg_log": [
+  "a 64 before 54.36 42.18 43.44",
+  "a 64 after 63.20 50.87 46.55",
+  "b 64 before 63.20 50.87 46.55",
+  "b 64 after 58.83 54.96 48.81",
+  "blp 64 before 58.83 54.96 48.81",
+  "blp 64 after 48.32 52.64 48.61",
+  "a 16 before 48.32 52.64 48.61",
+  "a 16 after 17.65 24.44 35.64",
+  "b 16 before 17.65 24.44 35.64",
+  "b 16 after 21.75 21.27 29.03",
+  "blp 16 before 21.75 21.27 29.03",
+  "blp 16 after 14.17 18.38 26.75"
+ ],
+ "runs": {
+  "blp_t16": {
+   "code": "BlackLightPlus",
+   "threads": 16,
+   "label": "BlackLightPlus (CPU), 16 thr",
+   "phases_s": {
+    "load": 3.387756109,
+    "setup": 0.02484488487,
+    "trace": 9.618749142,
+    "transfer": 33.85207605,
+    "output": 0.01501083374
+   },
+   "image_walls_s": [
+    46.64524102,
+    45.68030405,
+    44.6683321
+   ],
+   "image_wall_best_s": 44.6683321,
+   "image_wall_median_s": 45.68030405,
+   "jit_warmup_s": 5.769757986,
+   "rays": 230400,
+   "samples": 192630911,
+   "rays_per_s": 5300.106427296459,
+   "samples_per_s": 4431268.791176528,
+   "end_to_end_s": 46.89843701961,
+   "maxrss_GB": 24.39979935,
+   "git_sha": "c02af6cd7994ba82b4923f24ab7a21e8fe9f3051"
+  },
+  "raptor_a_t16": {
+   "code": "RAPTOR",
+   "leg": "a",
+   "threads": 16,
+   "label": "RAPTOR (a, native step), 16 thr",
+   "phases_s": {
+    "load": 0.268955,
+    "setup": 0.007389,
+    "trace": 66.9026,
+    "transfer": 109.031577,
+    "output": 0.966835
+   },
+   "phases_runs": [
+    {
+     "threads": 16.0,
+     "load": 0.280626,
+     "setup": 0.009817,
+     "loop": 177.652819,
+     "trace": 67.599046,
+     "transfer": 110.053773,
+     "output": 0.966835,
+     "trace_cpu": 1079.824489,
+     "transfer_cpu": 1757.994627,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 16.0,
+     "load": 0.268955,
+     "setup": 0.007534,
+     "loop": 175.934177,
+     "trace": 66.9026,
+     "transfer": 109.031577,
+     "output": 1.253968,
+     "trace_cpu": 1068.85748,
+     "transfer_cpu": 1741.923572,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 16.0,
+     "load": 0.272296,
+     "setup": 0.007389,
+     "loop": 178.13007,
+     "trace": 67.775307,
+     "transfer": 110.354763,
+     "output": 1.267257,
+     "trace_cpu": 1081.894433,
+     "transfer_cpu": 1761.588548,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    }
+   ],
+   "process_wall_s": [
+    179.17,
+    177.72,
+    179.94
+   ],
+   "process_wall_best_s": 177.72,
+   "process_wall_median_s": 179.17,
+   "loop_wall_best_s": 175.934177,
+   "thread_seconds_trace": 1068.85748,
+   "thread_seconds_transfer": 1741.923572,
+   "rays": 230400,
+   "samples": 192400511,
+   "rays_per_s": 1309.5806848262348,
+   "samples_per_s": 1093593.7194283747,
+   "end_to_end_s": 177.177356,
+   "maxrss_GB": 4.031665802001953
+  },
+  "raptor_b_t16": {
+   "code": "RAPTOR",
+   "leg": "b",
+   "threads": 16,
+   "label": "RAPTOR (b, LD85 step), 16 thr",
+   "phases_s": {
+    "load": 0.270936,
+    "setup": 0.007173,
+    "trace": 66.974183,
+    "transfer": 99.721076,
+    "output": 0.977545
+   },
+   "phases_runs": [
+    {
+     "threads": 16.0,
+     "load": 0.270957,
+     "setup": 0.00761,
+     "loop": 166.695259,
+     "trace": 66.974183,
+     "transfer": 99.721076,
+     "output": 0.977545,
+     "trace_cpu": 1070.290397,
+     "transfer_cpu": 1593.606764,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 16.0,
+     "load": 0.270936,
+     "setup": 0.00727,
+     "loop": 167.222119,
+     "trace": 67.19,
+     "transfer": 100.032119,
+     "output": 1.274994,
+     "trace_cpu": 1073.931159,
+     "transfer_cpu": 1598.863075,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 16.0,
+     "load": 0.2712,
+     "setup": 0.007173,
+     "loop": 167.08531,
+     "trace": 67.143215,
+     "transfer": 99.942094,
+     "output": 1.227385,
+     "trace_cpu": 1072.925433,
+     "transfer_cpu": 1597.040208,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    }
+   ],
+   "process_wall_s": [
+    168.2,
+    169.05,
+    168.86
+   ],
+   "process_wall_best_s": 168.2,
+   "process_wall_median_s": 168.86,
+   "loop_wall_best_s": 166.695259,
+   "thread_seconds_trace": 1070.290397,
+   "thread_seconds_transfer": 1593.606764,
+   "rays": 230400,
+   "samples": 192400511,
+   "rays_per_s": 1382.1628844285249,
+   "samples_per_s": 1154205.0575055648,
+   "end_to_end_s": 167.95091299999999,
+   "maxrss_GB": 4.0317230224609375
+  },
+  "blp_t64": {
+   "code": "BlackLightPlus",
+   "threads": 64,
+   "label": "BlackLightPlus (CPU), 64 thr",
+   "phases_s": {
+    "load": 3.41859293,
+    "setup": 0.02188587189,
+    "trace": 4.46725893,
+    "transfer": 10.12668204,
+    "output": 0.02027106285
+   },
+   "image_walls_s": [
+    45.39486694,
+    21.71255302,
+    14.82246685
+   ],
+   "image_wall_best_s": 14.82246685,
+   "image_wall_median_s": 21.71255302,
+   "jit_warmup_s": 7.037179947,
+   "rays": 230400,
+   "samples": 192630911,
+   "rays_per_s": 15787.373710337819,
+   "samples_per_s": 13199375.78177007,
+   "end_to_end_s": 18.05469083474,
+   "maxrss_GB": 24.24418259,
+   "git_sha": "c02af6cd7994ba82b4923f24ab7a21e8fe9f3051"
+  },
+  "raptor_a_t64": {
+   "code": "RAPTOR",
+   "leg": "a",
+   "threads": 64,
+   "label": "RAPTOR (a, native step), 64 thr",
+   "phases_s": {
+    "load": 0.272819,
+    "setup": 0.007928,
+    "trace": 19.004894,
+    "transfer": 31.025517,
+    "output": 0.994429
+   },
+   "phases_runs": [
+    {
+     "threads": 64.0,
+     "load": 0.293826,
+     "setup": 0.008632,
+     "loop": 50.237919,
+     "trace": 19.074143,
+     "transfer": 31.163776,
+     "output": 0.994429,
+     "trace_cpu": 1212.615961,
+     "transfer_cpu": 1981.20003,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 64.0,
+     "load": 0.272819,
+     "setup": 0.008529,
+     "loop": 50.030411,
+     "trace": 19.004894,
+     "transfer": 31.025517,
+     "output": 1.213963,
+     "trace_cpu": 1209.259256,
+     "transfer_cpu": 1974.117463,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 64.0,
+     "load": 0.274283,
+     "setup": 0.007928,
+     "loop": 50.123688,
+     "trace": 19.036218,
+     "transfer": 31.08747,
+     "output": 1.311743,
+     "trace_cpu": 1211.626324,
+     "transfer_cpu": 1978.670106,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    }
+   ],
+   "process_wall_s": [
+    51.83,
+    51.81,
+    51.99
+   ],
+   "process_wall_best_s": 51.81,
+   "process_wall_median_s": 51.83,
+   "loop_wall_best_s": 50.030411,
+   "thread_seconds_trace": 1209.259256,
+   "thread_seconds_transfer": 1974.117463,
+   "rays": 230400,
+   "samples": 192400511,
+   "rays_per_s": 4605.199025848498,
+   "samples_per_s": 3845671.205859172,
+   "end_to_end_s": 51.305587,
+   "maxrss_GB": 4.037353515625
+  },
+  "raptor_b_t64": {
+   "code": "RAPTOR",
+   "leg": "b",
+   "threads": 64,
+   "label": "RAPTOR (b, LD85 step), 64 thr",
+   "phases_s": {
+    "load": 0.282059,
+    "setup": 0.007964,
+    "trace": 18.971734,
+    "transfer": 28.344167,
+    "output": 0.979362
+   },
+   "phases_runs": [
+    {
+     "threads": 64.0,
+     "load": 0.282059,
+     "setup": 0.007964,
+     "loop": 47.321575,
+     "trace": 18.977407,
+     "transfer": 28.344167,
+     "output": 0.979362,
+     "trace_cpu": 1205.654517,
+     "transfer_cpu": 1800.73459,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 64.0,
+     "load": 0.282874,
+     "setup": 0.008382,
+     "loop": 47.635119,
+     "trace": 19.102243,
+     "transfer": 28.532876,
+     "output": 1.344792,
+     "trace_cpu": 1214.157074,
+     "transfer_cpu": 1813.577243,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    },
+    {
+     "threads": 64.0,
+     "load": 0.2957,
+     "setup": 0.008179,
+     "loop": 47.335878,
+     "trace": 18.971734,
+     "transfer": 28.364144,
+     "output": 1.226071,
+     "trace_cpu": 1205.787478,
+     "transfer_cpu": 1802.741405,
+     "rays": 230400.0,
+     "samples": 192400511.0
+    }
+   ],
+   "process_wall_s": [
+    48.89,
+    49.58,
+    49.16
+   ],
+   "process_wall_best_s": 48.89,
+   "process_wall_median_s": 49.16,
+   "loop_wall_best_s": 47.321575,
+   "thread_seconds_trace": 1205.654517,
+   "thread_seconds_transfer": 1800.73459,
+   "rays": 230400,
+   "samples": 192400511,
+   "rays_per_s": 4869.398978580161,
+   "samples_per_s": 4066297.099573355,
+   "end_to_end_s": 48.585286,
+   "maxrss_GB": 4.037391662597656
+  }
+ },
+ "title": "s455 i=17\u00b0 480\u00b2 polarized C=80: CPU phase walls (best of 3)"
+}
