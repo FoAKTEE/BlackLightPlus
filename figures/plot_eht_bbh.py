@@ -13,6 +13,11 @@ Image metrics (blurred images, the EHT M87* polarimetry definitions):
   beta_2 with an unrestricted annulus). Per-hole beta_2 about each projected puncture
   within 8 M is added where the two 8 M discs do not overlap.
 
+Rings: per hole, cuts at position angles 0-150 deg through the shadow centroid (captured
+rays; the projected puncture if none); diameter = median peak-to-peak separation; f_C =
+mean I within 5 uas of the centre over the mean I on the circle of that diameter, on the
+native, 10 uas and 20 uas images. Pairs closer than 8 M in projection are flagged.
+
 Writes figures/examples/eht_bbh/fig{1..4}_*.png and .pdf, adds a "metrics" block to
 each image's records.json, and writes figures/out/eht_bbh/metrics_summary.json.
 Usage: python3 figures/plot_eht_bbh.py   [BLP_OUT=<run dir>] [BLP_FIG=<figure dir>]
@@ -27,7 +32,7 @@ import numpy as np
 from matplotlib.collections import LineCollection
 from matplotlib.colors import LinearSegmentedColormap, Normalize, PowerNorm
 from matplotlib.patches import Circle
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, map_coordinates
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.environ.get("BLP_OUT", os.path.join(HERE, "out", "eht_bbh"))
@@ -39,6 +44,11 @@ K_B = 1.380649e-16
 TICK_SPACING_UAS = 7.0
 TICK_ICUT = 0.10          # EVPA ticks only where blurred I > 10% of its peak
 PER_HOLE_R_M = 8.0
+LIM1_UAS = 170.0          # fig 1 / 3 / 4 panel half-width (the render FOV is +-214 uas)
+LIM2_UAS = 160.0          # fig 2 / 3 / 4 panel half-width
+NG_BEAM_UAS = 10.0        # ngEHT-like resolution, the second blur in fig 2
+RING_CUTS_DEG = np.arange(0, 180, 30)   # cut position angles through each hole
+FC_DISC_UAS = 5.0         # f_C: mean inside this radius over the mean on the ring
 
 SNAP_LABEL = {
     "s455": "00455  sep 25, a=0 (zoom-in SANE)",
@@ -64,9 +74,9 @@ def geometry(rec):
     return res, fov, uas, px_m, ax_m
 
 
-def blur(a, rec):
+def blur(a, rec, fwhm=BEAM_UAS):
     _, _, uas, px_m, _ = geometry(rec)
-    sig_px = BEAM_UAS / (2 * np.sqrt(2 * np.log(2))) / (px_m * uas)
+    sig_px = fwhm / (2 * np.sqrt(2 * np.log(2))) / (px_m * uas)
     return gaussian_filter(a, sig_px, mode="constant", cval=0.0, truncate=5.0)
 
 
@@ -124,7 +134,71 @@ def metrics(rec, img):
                                   "m_net": float(abs(Pb[m].sum()) / Ib[m].sum()),
                                   "flux_share": float(Ib[m].sum() / Ib.sum())}
         out["per_hole_r8M"] = ph
-    return out, (Ib, Qb, Ub, Vb)
+    I10 = blur(I, rec, NG_BEAM_UAS)
+    out["rings"] = rings(rec, I, I10, Ib)
+    return out, (Ib, Qb, Ub, Vb, I10)
+
+
+def _sample(img, rec, a_m, b_m):
+    """Bilinear I at image coordinates (alpha, beta) [M]."""
+    res, fov, _, px_m, _ = geometry(rec)
+    ia = (np.asarray(a_m) + fov / 2) / px_m - 0.5
+    ib = (np.asarray(b_m) + fov / 2) / px_m - 0.5
+    return map_coordinates(img, [ib, ia], order=1, mode="constant", cval=0.0)
+
+
+def hole_centres(rec):
+    """Shadow centroid of each hole (captured-ray mask), else the projected puncture."""
+    out = []
+    for k in (1, 2):
+        h = rec["shadow_check"][f"hole{k}"]
+        out.append(h["centroid_M"] if h.get("npix", 0) > 0 else h["projected_M"])
+    return np.array(out, dtype=float)
+
+
+def ring_metrics(img, rec, centre, rmax_m):
+    """Ring diameter from peak-to-peak separations on cuts through `centre` and the
+    fractional central brightness f_C = <I>(r < 5 uas) / <I>(ring at r = d/2)."""
+    _, _, uas, px_m, _ = geometry(rec)
+    r = np.arange(-rmax_m, rmax_m + 1e-9, px_m / 2)
+    diams, offc = [], []
+    for pa in np.radians(RING_CUTS_DEG):
+        # position angle east of north: east = -alpha
+        a = centre[0] - r * np.sin(pa)
+        b = centre[1] + r * np.cos(pa)
+        prof = _sample(img, rec, a, b)
+        neg, pos = r < 0, r > 0
+        rl = r[neg][np.argmax(prof[neg])]
+        rr = r[pos][np.argmax(prof[pos])]
+        diams.append(rr - rl)
+        offc.append(min(-rl, rr))
+    d = float(np.median(diams))
+    th = np.linspace(0, 2 * np.pi, 144, endpoint=False)
+    ring = _sample(img, rec, centre[0] + d / 2 * np.cos(th), centre[1] + d / 2 * np.sin(th)).mean()
+    rd = FC_DISC_UAS / uas
+    gr = np.arange(-rd, rd + 1e-9, px_m / 2)
+    ga, gb = np.meshgrid(gr, gr)
+    m = ga ** 2 + gb ** 2 <= rd ** 2
+    cen = _sample(img, rec, centre[0] + ga[m], centre[1] + gb[m]).mean()
+    fc = float(cen / ring) if ring > 0 else float("nan")
+    return {"diameter_M": d, "diameter_uas": d * uas,
+            "diameter_cut_spread_uas": float(np.std(diams) * uas),
+            "f_C": fc, "min_peak_offset_M": float(np.min(offc)),
+            "depression": bool(fc < 1.0 and np.median(offc) > 0.25 * d / 2)}
+
+
+def rings(rec, img_native, img_10, img_20):
+    """Per-hole ring diameter and f_C on the native, 10 uas and 20 uas images."""
+    c = hole_centres(rec)
+    dsep = float(np.hypot(*(c[0] - c[1])))
+    rmax = min(10.0, 0.5 * dsep)
+    out = {"centres_M": c.tolist(), "centre_separation_M": dsep, "cut_half_length_M": rmax,
+           "cuts_pa_deg": RING_CUTS_DEG.tolist(), "fc_disc_uas": FC_DISC_UAS,
+           "resolved_pair": bool(dsep > 8.0)}
+    for k in range(2):
+        out[f"hole{k + 1}"] = {lab: ring_metrics(im, rec, c[k], rmax) for lab, im in
+                               (("native", img_native), ("blur10", img_10), ("blur20", img_20))}
+    return out
 
 
 def extent_uas(rec):
@@ -133,11 +207,15 @@ def extent_uas(rec):
     return [h, -h, -h, h]                   # RA (= -alpha) increases to the left
 
 
-def draw_beam(ax, rec, color="w"):
+def draw_beam(ax, rec, color="w", fwhm=BEAM_UAS, lim=None):
     _, fov, uas, _, _ = geometry(rec)
-    h = fov / 2 * uas
-    r = BEAM_UAS / 2
-    ax.add_patch(Circle((h - 1.6 * r, -h + 1.6 * r), r, fill=False, ec=color, lw=1.0))
+    h = fov / 2 * uas if lim is None else lim
+    ax.add_patch(Circle((h - 0.1 * h, -h + 0.1 * h), fwhm / 2, fill=False, ec=color, lw=1.0))
+
+
+def set_lim(ax, lim):
+    ax.set_xlim(lim, -lim)
+    ax.set_ylim(-lim, lim)
 
 
 def mark_holes(ax, rec, color="c"):
@@ -202,10 +280,16 @@ def main():
                       "inc": rec["camera"]["inclination_deg"], "R_high": rec["plasma"]["R_high"],
                       "time_M": rec["snapshot"]["time_M"], **{k: met[k] for k in (
                           "m_net", "mabs_avg", "v_net", "beta2_amp", "beta2_arg_deg",
-                          "flux_blurred_Jy", "Tb_peak_blurred_K")}}
+                          "flux_blurred_Jy", "Tb_peak_blurred_K")}, "rings": met["rings"]}
         print(f"{n:18s} F={rec['flux_Jy']:.4f} ms={rec['mass_scale_g']:.3e} "
               f"m_net={met['m_net']:.4f} <|m|>={met['mabs_avg']:.4f} "
               f"|b2|={met['beta2_amp']:.4f} arg={met['beta2_arg_deg']:7.1f} V/I={met['v_net']:+.2e}")
+        rg = met["rings"]
+        for h in ("hole1", "hole2"):
+            print("     " + h + " " + "  ".join(
+                f"{lab}: d={rg[h][lab]['diameter_uas']:5.1f}uas fC={rg[h][lab]['f_C']:.2f}"
+                f"{'' if rg[h][lab]['depression'] else ' (no dip)'}"
+                for lab in ("native", "blur10", "blur20")) + ("" if rg["resolved_pair"] else "  [pair overlaps]"))
     with open(os.path.join(OUT, "metrics_summary.json"), "w") as f:
         json.dump(summary, f, indent=2, sort_keys=True)
 
@@ -228,11 +312,17 @@ def main():
             rec = recs[n]
             im = ax.imshow(tb(blurred[n][0], rec) / 1e9, origin="lower", extent=extent_uas(rec),
                            cmap="afmhot", vmin=0, vmax=vmax, interpolation="bicubic")
-            draw_beam(ax, rec)
+            set_lim(ax, LIM1_UAS)
+            draw_beam(ax, rec, lim=LIM1_UAS)
             mark_holes(ax, rec)
             ax.text(0.04, 0.95, f"i = {incs[c]}°", transform=ax.transAxes, color="w", va="top")
             ax.text(0.96, 0.95, f"{rec['flux_Jy']:.2f} Jy", transform=ax.transAxes, color="w",
                     va="top", ha="right")
+            rg = mets[n]["rings"]
+            if rg["resolved_pair"]:
+                ax.text(0.96, 0.04, "$f_C$ " + " / ".join(f"{rg[h]['blur20']['f_C']:.2f}"
+                                                         for h in ("hole1", "hole2")),
+                        transform=ax.transAxes, color="w", ha="right", fontsize=8)
             style_axes(ax, left=c == 0, bottom=r == len(snaps) - 1)
             for lab in (ax.xaxis.label, ax.yaxis.label):
                 lab.set_color("w")
@@ -250,26 +340,35 @@ def main():
     pairs = [f"{fid}_i17_Rh{rh_fid}", f"{fid}_i90_Rh{rh_fid}"]
     pairs = [p for p in pairs if p in recs]
     if pairs:
-        fig, axs = plt.subplots(2, len(pairs), figsize=(3.6 * len(pairs) + 0.6, 6.9),
+        rows = (("native", "native (sqrt stretch)"), ("blur10", f"{NG_BEAM_UAS:g} µas blur (ngEHT-like)"),
+                ("blur20", f"{BEAM_UAS:g} µas blur (EHT)"))
+        fig, axs = plt.subplots(3, len(pairs), figsize=(3.9 * len(pairs) + 0.6, 10.6),
                                 squeeze=False, facecolor="black")
         for c, n in enumerate(pairs):
             rec = recs[n]
-            for r, (data, lab) in enumerate(((imgs[n]["I"], "native"), (blurred[n][0], "20 µas blur"))):
+            rg = mets[n]["rings"]
+            data_by = {"native": imgs[n]["I"], "blur10": blurred[n][4], "blur20": blurred[n][0]}
+            for r, (key, lab) in enumerate(rows):
                 ax = axs[r, c]
-                T = tb(data, rec) / 1e9
-                norm = PowerNorm(0.5, vmin=0, vmax=T.max()) if r == 0 else Normalize(0, T.max())
+                T = tb(data_by[key], rec) / 1e9
+                norm = PowerNorm(0.5, vmin=0, vmax=T.max()) if key == "native" else Normalize(0, T.max())
                 im = ax.imshow(T, origin="lower", extent=extent_uas(rec), cmap="afmhot", norm=norm,
-                               interpolation="nearest" if r == 0 else "bicubic")
-                if r == 0:
-                    lab = "native (sqrt stretch)"
+                               interpolation="nearest" if key == "native" else "bicubic")
+                set_lim(ax, LIM2_UAS)
+                if key == "native":
                     mark_holes(ax, rec)
                 else:
-                    draw_beam(ax, rec)
-                ax.text(0.04, 0.95, f"i = {rec['camera']['inclination_deg']:.0f}°  {lab}",
-                        transform=ax.transAxes, color="w", va="top")
-                ax.text(0.96, 0.05, f"{rec['flux_Jy']:.2f} Jy", transform=ax.transAxes, color="w",
-                        ha="right")
-                style_axes(ax, left=c == 0, bottom=r == 1)
+                    draw_beam(ax, rec, fwhm=NG_BEAM_UAS if key == "blur10" else BEAM_UAS,
+                              lim=LIM2_UAS)
+                ax.set_title(f"i = {rec['camera']['inclination_deg']:.0f}°, {lab}, "
+                             f"{rec['flux_Jy']:.2f} Jy", color="w")
+                if rg["resolved_pair"]:
+                    ftxt = "\n".join(f"hole {k}: d = {rg[h][key]['diameter_uas']:.0f} µas, "
+                                     f"$f_C$ = {rg[h][key]['f_C']:.2f}"
+                                     for k, h in ((1, "hole1"), (2, "hole2")))
+                    ax.text(0.97, 0.03, ftxt, transform=ax.transAxes, color="w", fontsize=7,
+                            ha="right")
+                style_axes(ax, left=c == 0, bottom=r == 2)
                 for l_ in (ax.xaxis.label, ax.yaxis.label):
                     l_.set_color("w")
                 ax.tick_params(colors="w")
@@ -288,13 +387,14 @@ def main():
                                 squeeze=False, facecolor="white")
         for c, n in enumerate(pairs):
             rec, met = recs[n], mets[n]
-            Ib, Qb, Ub, _ = blurred[n]
+            Ib, Qb, Ub, _, _ = blurred[n]
             ax = axs[0, c]
             ax.set_facecolor("black")
             ax.imshow(tb(Ib, rec) / 1e9, origin="lower", extent=extent_uas(rec), cmap="gray",
                       vmin=0, interpolation="bicubic")
             evpa_ticks(ax, rec, Ib, Qb, Ub, cmap, mnorm)
-            draw_beam(ax, rec)
+            set_lim(ax, LIM2_UAS)
+            draw_beam(ax, rec, lim=LIM2_UAS)
             txt = (f"$m_{{net}}$ = {met['m_net']:.3f}   "
                    f"$\\langle|m|\\rangle$ = {met['mabs_avg']:.3f}   "
                    f"$v_{{net}}$ = {met['v_net']:+.1e}\n"
@@ -323,12 +423,17 @@ def main():
             ax = axs[0, c]
             im = ax.imshow(tb(blurred[n][0], rec) / 1e9, origin="lower", extent=extent_uas(rec),
                            cmap="afmhot", vmin=0, vmax=vmax, interpolation="bicubic")
-            draw_beam(ax, rec)
+            set_lim(ax, LIM2_UAS)
+            draw_beam(ax, rec, lim=LIM2_UAS)
+            rg = met["rings"]
             ax.text(0.04, 0.95, f"$R_{{high}}$ = {rec['plasma']['R_high']:g}", transform=ax.transAxes,
                     color="w", va="top")
-            ax.text(0.97, 0.04, f"{rec['flux_Jy']:.2f} Jy\n$\\mathcal{{M}}$ = {rec['mass_scale_g']:.2e} g\n"
-                    f"$m_{{net}}$ {met['m_net']:.3f}, $|\\beta_2|$ {met['beta2_amp']:.3f}",
-                    transform=ax.transAxes, color="w", fontsize=7.5, ha="right")
+            ax.text(0.97, 0.03, "$f_C$ " + " / ".join(f"{rg[h]['blur20']['f_C']:.2f}"
+                                                     for h in ("hole1", "hole2")),
+                    transform=ax.transAxes, color="w", ha="right", fontsize=7.5)
+            ax.set_title(f"{rec['flux_Jy']:.2f} Jy, $\\mathcal{{M}}$ = {rec['mass_scale_g']:.2e} g\n"
+                         f"$m_{{net}}$ {met['m_net']:.3f}, $|\\beta_2|$ {met['beta2_amp']:.3f}",
+                         color="w", fontsize=8)
             style_axes(ax, left=c == 0)
             for l_ in (ax.xaxis.label, ax.yaxis.label):
                 l_.set_color("w")
@@ -336,7 +441,7 @@ def main():
         cb = fig.colorbar(im, ax=axs[0, :].tolist(), fraction=0.02, pad=0.01)
         cb.set_label(r"$T_b$ ($10^9$ K), 20 µas blur", color="w")
         cb.ax.tick_params(colors="w")
-        fig.suptitle(f"{SNAP_LABEL[fid]}, i = 17°, each calibrated to 0.5 Jy", color="w", y=1.02)
+        fig.suptitle(f"{SNAP_LABEL[fid]}, i = 17°, each calibrated to 1.0 Jy", color="w", y=1.06)
         save(fig, "fig4_rhigh_survey")
 
 

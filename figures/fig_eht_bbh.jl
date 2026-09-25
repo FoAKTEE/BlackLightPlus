@@ -1,8 +1,10 @@
 # fig_eht_bbh.jl — EHT-style 230 GHz mock images (full IQUV) of binary-black-hole
 # GRMHD snapshots (AthenaK dynbbh runs), CPU path.
 #
-# Scaling: M = 6.5e9 Msun (total binary mass), D = 16.8 Mpc (theta_g = GM/(c^2 D) = 3.82
-# uas, t_g = GM/c^3 = 8.9 h), nu = 230 GHz. Plane-parallel camera at distance 1000 M,
+# Scaling: each hole is M87*-like, m_hole = 6.5e9 Msun, so the code mass unit (the total
+# binary mass) is M = 1.3e10 Msun; D = 16.8 Mpc (theta_g = GM/(c^2 D) = 7.64 uas, t_g =
+# GM/c^3 = 17.8 h): a hole's ring (~10.4 m_hole = 5.2 M) spans ~40 uas, twice the 20 uas
+# beam. nu = 230 GHz. Plane-parallel camera at distance 1000 M,
 # observer azimuth along the simulation +x axis, inclination i from the orbital
 # angular momentum (+z); FOV and pixels from BLP_FOV / BLP_RES.
 #
@@ -21,9 +23,9 @@
 # 0.5, n_e = n_i; sigma_cut = 1 (emission omitted where b^2/rho > 1); gamma from the dump.
 #
 # Flux calibration: mass_scale (density unit mass) is root-found per snapshot at the
-# fiducial inclination so the 230 GHz flux in the FOV is 0.5 Jy. Unpolarized ladders of
-# mass scales (one reverse march per ray carries every lane) bracket the root on a
-# stride-4 then a full pixel set; the polarized render at the interpolated root is
+# fiducial inclination so the 230 GHz flux in the FOV is 1.0 Jy (~0.5 Jy per hole).
+# Unpolarized ladders of mass scales (one reverse march per ray carries every lane)
+# bracket the root on a stride-4 then a full pixel set; the polarized render at the interpolated root is
 # checked and, if off by more than BLP_FTOL, moved by one secant step with the ladder's
 # local slope. Other inclinations reuse that mass_scale.
 #
@@ -34,7 +36,7 @@
 # the R_high survey on the fiducial snapshot at the fiducial inclination.
 #
 # Env: BLP_SNAPS (s455,s093,s122), BLP_INCS (17,60,90), BLP_FID (s455), BLP_FID_INC (17),
-# BLP_RHIGH (40), BLP_RH_SURVEY (1,10,160), BLP_RES (320), BLP_FOV (48), BLP_FTOL (0.02),
+# BLP_RHIGH (40), BLP_RH_SURVEY (1,10,160), BLP_RES (480), BLP_FOV (56), BLP_FTOL (0.02),
 # BLP_WIDE (1: wide-FOV flux check), BLP_OUT (figures/out/eht_bbh).
 # Threads come from `julia -t N`.
 # Run:  julia --project=. -t 64 figures/fig_eht_bbh.jl
@@ -62,17 +64,18 @@ const FID = get(ENV, "BLP_FID", "s455")
 const FID_INC = parse(Float64, get(ENV, "BLP_FID_INC", "17"))
 const RH_FID = parse(Float64, get(ENV, "BLP_RHIGH", "40"))
 const RH_SURVEY = parse.(Float64, _list(get(ENV, "BLP_RH_SURVEY", "1,10,160")))
-const RES = parse(Int, get(ENV, "BLP_RES", "320"))
-const FOV = parse(Float64, get(ENV, "BLP_FOV", "48"))
+const RES = parse(Int, get(ENV, "BLP_RES", "480"))
+const FOV = parse(Float64, get(ENV, "BLP_FOV", "56"))
 const FTOL = parse(Float64, get(ENV, "BLP_FTOL", "0.02"))
 const WIDE = get(ENV, "BLP_WIDE", "1") == "1"
 const OUT = get(ENV, "BLP_OUT", joinpath(REPO, "figures", "out", "eht_bbh"))
 
 const MSUN = 1.98847e33
-const M_BH = 6.5e9 * MSUN
+const M_HOLE = 6.5e9 * MSUN               # each hole (q = 1)
+const M_BH = 2 * M_HOLE                    # code mass unit: total binary mass
 const D_CM = 16.8e6 * 3.0856775814913673e18
 const NU = 230.0e9
-const F_TARGET = 0.5                     # Jy
+const F_TARGET = 1.0                     # Jy (total, ~0.5 Jy per hole)
 const DIST = 1000.0
 const ESCAPE = 1.1 * DIST
 const CVAL = 80.0
@@ -329,7 +332,7 @@ function calibrate(tr, st, sampler, rh, gam, ms_guess)
         root !== nothing && break
         center = F[end] < F_TARGET ? mss[end] * 1e4 : mss[1] * 1e-4
     end
-    root === nothing && error("flux calibration: 0.5 Jy not bracketed")
+    root === nothing && error("flux calibration: $(F_TARGET) Jy not bracketed")
     # fine: full pixel set, +-0.2 dex
     mss = root[1] .* 10.0 .^ (-0.2:0.1:0.2)
     F = flux_ladder(tr, st, sampler, mss, rh, gam; stride = 1)
@@ -586,7 +589,7 @@ for tag in SNAPS
                                  "distance_M" => DIST, "observer_azimuth" => "simulation +x axis (phi_o = 0)",
                                  "orientation" => "beta (north, up) = projected +z (orbital L); alpha = +y = west (right); east = -alpha",
                                  "C" => CVAL, "max_steps" => MAXSTEPS),
-                "scaling" => Dict("M_sun" => M_BH / MSUN, "D_Mpc" => 16.8, "theta_g_uas" => UAS_PER_M,
+                "scaling" => Dict("M_sun" => M_BH / MSUN, "m_hole_Msun" => M_HOLE / MSUN, "D_Mpc" => 16.8, "theta_g_uas" => UAS_PER_M,
                                   "t_g_hours" => T_UNIT / 3600, "L_unit_cm" => L_UNIT),
                 "plasma" => Dict("edf" => "thermal", "R_low" => R_LOW, "R_high" => rh,
                                  "beta_crit" => 1.0, "Te_split" => "total pressure (use_p)", "mu" => MU,
