@@ -23,9 +23,11 @@ emission only, total absorption, pure rotation, or the full absorption + rotatio
 solution (I 24 / L 10) with the degeneracy guard. A segment with δτ = α_I ds above
 `dtau_max` is saturated: M = 0, b = K⁻¹ j.
 
-Deviations from blacklight: (i) polarized absorptivities with α_P > α_I (a fit
-violating Mueller admissibility at a domain edge) are rescaled onto α_P = α_I,
-preserving α_I and the polarization direction, so the segment decays; (ii) ρ_P = 0
+Deviations from blacklight: (i) polarized absorptivities with α_P > α_I and
+emissivities with j_P > j_I (fits leaving the Stokes cone at small pitch angles) are
+rescaled onto α_P = α_I and j_P = j_I, preserving α_I, j_I and the polarization
+direction, so the segment decays and emits an admissible Stokes vector (the observed
+Stokes then does not depend on the order in which segments are accumulated); (ii) ρ_P = 0
 takes the full solution (λ₁ = α_P, λ₂ = 0), which matches matrix-exponential
 references where CoupleAbsorptionNoRotation does not; (iii) a degenerate eigenstructure
 falls back to total-absorption coupling instead of dividing by zero; (iv) blacklight's
@@ -36,6 +38,11 @@ mm_2/mm_3 index typos and mm_4 signs are corrected.
     T = promote_type(eltype(α), eltype(ρ), typeof(ds))
     Tb = promote_type(eltype(j), T)
     I4 = one(SMatrix{4,4,T})
+    j_p = sqrt(j[2] * j[2] + j[3] * j[3] + j[4] * j[4])
+    if j[1] > 0.0 && j_p > j[1]
+        sj = j[1] / j_p
+        j = SVector(j[1], j[2] * sj, j[3] * sj, j[4] * sj)
+    end
     alpha_sq = α[2] * α[2] + α[4] * α[4]
     alpha_p = sqrt(alpha_sq)
     if α[1] > 0.0 && alpha_p > α[1]
