@@ -3,7 +3,7 @@ timestamp,paper,node_id,node_seq,task_id,git_commit,domain,status,summary,eviden
 2026-09-25T18:33:20.364302+00:00,arxiv-1801.10452,R03,1,raptor-decompose,37ec66e,numerical,hypothesis,"Coefficient-level comparison: RAPTOR EMIS_BLP port (M7, BLP constants M9) vs BLP coefficients.jl <=1e-10; native Dexter16-type fits reported as ratio table",,"[""R01""]",results/blp/raptor/dag.md#r03,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row d47e6920f4e1a7d3d4a4946e0e8a162fb71330a2ce0df80a538b41f5987c9fa7; superseded by 88ab2bfb19dd2c22f3db229e74388862a31b8075fedba642b7f29756120d71da,d47e6920f4e1a7d3d4a4946e0e8a162fb71330a2ce0df80a538b41f5987c9fa7,,grep -qw R03 results/blp/raptor/dag.md && grep -qw R03 results/blp/raptor/design.md,30,grep -qw R03 results/blp/raptor/dag.md && grep -qw R03 results/blp/raptor/design.md,0.006,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
 2026-09-25T18:33:20.368741+00:00,arxiv-1801.10452,R04,1,raptor-decompose,37ec66e,numerical,hypothesis,"Geodesic-level harness: same initial rays in Kerr and superposed KS (s455, s122 geometries); metric/Gamma identities, RK4 convergence to Vern7, termination class per ray, RT sample sets",,"[""R01""]",results/blp/raptor/dag.md#r04,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row bd4dcee519376b5646fcc96bde177b8f01d5552e0791ad55ada708666b7c1fae; superseded by 70006cf1e2159a15839b71a62eec896bf715419a6f1d515c6a2889815ecbfd66,bd4dcee519376b5646fcc96bde177b8f01d5552e0791ad55ada708666b7c1fae,,grep -qw R04 results/blp/raptor/dag.md && grep -qw R04 results/blp/raptor/design.md,30,grep -qw R04 results/blp/raptor/dag.md && grep -qw R04 results/blp/raptor/design.md,0.006,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
 2026-09-25T18:33:20.374810+00:00,arxiv-1801.10452,R05,1,raptor-decompose,37ec66e,software,hypothesis,"RAPTOR superposed Kerr-Schild metric (M1), FD and analytic derivatives (M2a/b), BLP step/termination (M3), plane-parallel camera (M4); passes R04 SKS legs",,"[""R04""]",results/blp/raptor/dag.md#r05,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row a027ea1ab218a0d712678c3f43230433a05ec9fac4e6d5991ebd709e4b8759b6; superseded by 252cc8a9df2702c4056c82dbf57181334549f07ba1109e25b9a0215ed73bbd65,a027ea1ab218a0d712678c3f43230433a05ec9fac4e6d5991ebd709e4b8759b6,,grep -qw R05 results/blp/raptor/dag.md && grep -qw R05 results/blp/raptor/design.md,30,grep -qw R05 results/blp/raptor/dag.md && grep -qw R05 results/blp/raptor/design.md,0.006,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
-2026-09-25T18:33:20.379673+00:00,arxiv-1801.10452,R02,1,raptor-decompose,37ec66e,numerical,hypothesis,"Single-Kerr image cross-check: thin-slab orientation tests, BLP orientation self-test, Gold+2020 analytic problem; fixes RAPTOR Stokes sign table (M8)",,"[""R03"", ""R05""]",results/blp/raptor/dag.md#r02,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row 8b98a1b5ccda8b4631b5fba5449b50f7c388f4b406de2fe93e7d8c2177ac76e6,8b98a1b5ccda8b4631b5fba5449b50f7c388f4b406de2fe93e7d8c2177ac76e6,,grep -qw R02 results/blp/raptor/dag.md && grep -qw R02 results/blp/raptor/design.md,30,grep -qw R02 results/blp/raptor/dag.md && grep -qw R02 results/blp/raptor/design.md,0.007,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
+2026-09-25T18:33:20.379673+00:00,arxiv-1801.10452,R02,1,raptor-decompose,37ec66e,numerical,hypothesis,"Single-Kerr image cross-check: thin-slab orientation tests, BLP orientation self-test, Gold+2020 analytic problem; fixes RAPTOR Stokes sign table (M8)",,"[""R03"", ""R05""]",results/blp/raptor/dag.md#r02,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row 8b98a1b5ccda8b4631b5fba5449b50f7c388f4b406de2fe93e7d8c2177ac76e6; superseded by bc4bc7ef0afcc473a7b9dd3bdffe2d8b6aa4bd7dfa8fdf573a12cb6e221368ab,8b98a1b5ccda8b4631b5fba5449b50f7c388f4b406de2fe93e7d8c2177ac76e6,,grep -qw R02 results/blp/raptor/dag.md && grep -qw R02 results/blp/raptor/design.md,30,grep -qw R02 results/blp/raptor/dag.md && grep -qw R02 results/blp/raptor/design.md,0.007,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
 2026-09-25T18:33:20.386258+00:00,arxiv-1801.10452,R06,1,raptor-decompose,37ec66e,software,hypothesis,"RAPTOR AthenaK .bin/.athdf reader (M5: Float32 layout, per-level hash, BLP ownership and cell-centred trilinear) and plasma model (M6); 1e5-point sample comparison vs BLP",,"[""R01"", ""R05""]",results/blp/raptor/dag.md#r06,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row df18943d4f96516c8e07b94dcea9db8e8247997db7c2c29bf6c54747ca16662d; superseded by 5659b3f82a41cd3809e403cfd9e89b8c816216a6a915868903c381f9f2c97513,df18943d4f96516c8e07b94dcea9db8e8247997db7c2c29bf6c54747ca16662d,,grep -qw R06 results/blp/raptor/dag.md && grep -qw R06 results/blp/raptor/design.md,30,grep -qw R06 results/blp/raptor/dag.md && grep -qw R06 results/blp/raptor/design.md,0.005,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
 2026-09-25T18:33:20.391316+00:00,arxiv-1801.10452,R07,1,raptor-decompose,37ec66e,numerical,hypothesis,"s455 image comparison at i=17/60/90 (I,Q,U,V, flux, EVPA, ring diameters, error maps) with matched, LD85, native-fit and native-step legs and C/resolution convergence",,"[""R02"", ""R06""]",results/blp/raptor/dag.md#r07,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row c9734a45026058df86f81539786a3f05fd38605cf4446b211ceb6d313c51ef6c,c9734a45026058df86f81539786a3f05fd38605cf4446b211ceb6d313c51ef6c,,grep -qw R07 results/blp/raptor/dag.md && grep -qw R07 results/blp/raptor/design.md,30,grep -qw R07 results/blp/raptor/dag.md && grep -qw R07 results/blp/raptor/design.md,0.005,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
 2026-09-25T18:33:20.398227+00:00,arxiv-1801.10452,R08,1,raptor-decompose,37ec66e,software,hypothesis,"CPU timing protocol (1/16/64/128 threads, phase timers M12) and the RAPTOR vs BLP comparison report",,"[""R07""]",results/blp/raptor/dag.md#r08,worker,,,,,,"Acceptance in results/blp/raptor/dag.md; audit, convention table and modifications in results/blp/raptor/design.md.",row 3c4dc692565f4a20abdd8e4627021a3e027667694e3c09e39cc3480b2bc96533,3c4dc692565f4a20abdd8e4627021a3e027667694e3c09e39cc3480b2bc96533,,grep -qw R08 results/blp/raptor/dag.md && grep -qw R08 results/blp/raptor/design.md,30,grep -qw R08 results/blp/raptor/dag.md && grep -qw R08 results/blp/raptor/design.md,0.005,0,e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855,,2026-09-25T18:33:20+00:00
@@ -89,3 +89,122 @@ s122: 100000 points, 432 level-jump faces, BLP load 4.31 s (peak RSS 9.32 GB), l
 ┌ Warning: athenak_bin_snapshot: zeroed 1 non-finite cell values (isolated c2p failures; zeroed cells emit nothing)
 └ @ BlackLightPlus.Simulation /data/haiyangw/claude/BlackLightPlus/src/simulation/athenak_z4c.jl:291
 ",2026-09-25T19:37:36+00:00
+2026-09-25T20:06:49.842635+00:00,arxiv-1801.10452,R02,2,raptor-R02,a2bd566,numerical,solid,"RAPTOR (M8 IEEE/IAU readout) matches BlackLightPlus on the orientation slabs (all signs), the orientation-check ring (7e-8) and Gold T1-T5 plus the polarized ring at 480^2, C=160 (NMSE(I) <= 2.5e-13)",results/blp/raptor/evidence/R02/analytic.json,"[""R03"", ""R05""]",results/blp/raptor/dag.md#r02,worker,8beaaee2d957904b6b0db082facceac7f3b0fff6ad0e9cd21ad0bb2a4cc763b3,,,,,"Sign table: upstream RAPTOR readout gives Q=-Q_IAU, U=-U_IAU, V=V_IEEE (90 deg basis rotation); M8 reads out in (north, east). BlackLightPlus bug fixed (2fab069): non-admissible j_P>j_I emission made the reverse-march result order dependent; mirrored in EMIS_BLP (82c904f). Upstream RAPTOR unpolarized transfer dropped emission on alpha=0 segments (fixed aaa32ce). Faraday-screen slab: Q/I differs 8e-4 at C=80, converging with C (RAPTOR RK4/trapezoid vs exact LD85). Gold/ring images are unpolarized-Gold and thermal-ring; Gold has no |P|, V. RAPTOR polarized mode still returns 0 for purely unpolarized emission (upstream POLARIZATION_ACTIVE quirk, not on the thermal path). Verification reruns the images at 40^2 (the ledger runner caps total CPU time at the timeout); the 480^2 run is evidence/R02/analytic.json.",row bc4bc7ef0afcc473a7b9dd3bdffe2d8b6aa4bd7dfa8fdf573a12cb6e221368ab; supersedes 8b98a1b5ccda8b4631b5fba5449b50f7c388f4b406de2fe93e7d8c2177ac76e6,bc4bc7ef0afcc473a7b9dd3bdffe2d8b6aa4bd7dfa8fdf573a12cb6e221368ab,8b98a1b5ccda8b4631b5fba5449b50f7c388f4b406de2fe93e7d8c2177ac76e6,bash results/blp/raptor/tools/r02_verify.sh '' 16 40,3600,bash results/blp/raptor/tools/r02_verify.sh '' 16 40,116.243,0,b740bc5423bd52a1e42295db80cdbae8515f8d8673dbc3bb09e3ecfae1f5ca4e,"SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+
+Model parameters:
+
+MBH 		= 4.0632e+06 Msun
+DISTANCE 	= 7.77787 kpc
+M_UNIT 		= 1 grams
+R_LOW 		= 1 
+R_HIGH 		= 1 
+INCLINATION 	= 90 deg
+METRIC 		= 
+Observer parameters:
+
+IMG_WIDTH 	= 10 
+IMG_HEIGHT 	= 10 
+CAM_SIZE_X 	= 30 GM/c2
+CAM_SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+
+Model parameters:
+
+MBH 		= 4.0632e+06 Msun
+DISTANCE 	= 7.77787 kpc
+M_UNIT 		= 1 grams
+R_LOW 		= 1 
+R_HIGH 		= 1 
+INCLINATION 	= 90 deg
+METRIC 		= 
+Observer parameters:
+
+IMG_WIDTH 	= 10 
+IMG_HEIGHT 	= 10 
+CAM_SIZE_X 	= 30 GM/c2
+CAM_SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+
+Model parameters:
+
+MBH 		= 4.0632e+06 Msun
+DISTANCE 	= 7.77787 kpc
+M_UNIT 		= 1 grams
+R_LOW 		= 1 
+R_HIGH 		= 1 
+INCLINATION 	= 90 deg
+METRIC 		= 
+Observer parameters:
+
+IMG_WIDTH 	= 10 
+IMG_HEIGHT 	= 10 
+CAM_SIZE_X 	= 30 GM/c2
+CAM_SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+
+Model parameters:
+
+MBH 		= 4.0632e+06 Msun
+DISTANCE 	= 7.77787 kpc
+M_UNIT 		= 1 grams
+R_LOW 		= 1 
+R_HIGH 		= 1 
+INCLINATION 	= 90 deg
+METRIC 		= 
+Observer parameters:
+
+IMG_WIDTH 	= 10 
+IMG_HEIGHT 	= 10 
+CAM_SIZE_X 	= 30 GM/c2
+CAM_SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+
+Model parameters:
+
+MBH 		= 4.0632e+06 Msun
+DISTANCE 	= 7.77787 kpc
+M_UNIT 		= 1 grams
+R_LOW 		= 1 
+R_HIGH 		= 1 
+INCLINATION 	= 90 deg
+METRIC 		= 
+Observer parameters:
+
+IMG_WIDTH 	= 10 
+IMG_HEIGHT 	= 10 
+CAM_SIZE_X 	= 30 GM/c2
+CAM_SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+
+Model parameters:
+
+MBH 		= 1.3e+10 Msun
+DISTANCE 	= 16800 kpc
+M_UNIT 		= 1e+24 grams
+R_LOW 		= 1 
+R_HIGH 		= 1 
+INCLINATION 	= 90 deg
+METRIC 		= 
+Observer parameters:
+
+IMG_WIDTH 	= 10 
+IMG_HEIGHT 	= 10 
+CAM_SIZE_X 	= 30 GM/c2
+CAM_SIZE_Y 	= 30 GM/c2
+FREQS_PER_DEC 	= 1.000000 
+FREQ_MIN 	= 2.3e+11 Hz
+STEPSIZE 	= 0.01 
+",2026-09-25T20:04:53+00:00
