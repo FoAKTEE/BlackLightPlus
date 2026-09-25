@@ -1,0 +1,3 @@
+# tests/native_cold at fork d01fc9a (before the rho_Q guard) and at 502d8766f71587d85e9d60c9c9db4dd32569aeb5 (after)
+native_cold: 7353 of 110808 values non-finite; largest Theta_e with a non-finite value 1.2589e-03
+native_cold: 0 of 110808 values non-finite; largest Theta_e with a non-finite value 0.0000e+00

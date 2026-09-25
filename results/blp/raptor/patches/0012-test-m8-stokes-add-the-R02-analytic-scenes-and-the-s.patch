@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:24:47 -0700
-Subject: [PATCH 12/16] test(m8-stokes): add the R02 analytic scenes and the
+Subject: [PATCH 12/22] test(m8-stokes): add the R02 analytic scenes and the
  single-pixel transfer library
 
 - change: model/blp_analytic reads a scene file ($RAPTOR_SCENE): the test_ray_orientation.jl slab and Faraday screen, the orientation-check prograde ring (fig_eht_bbh.jl), and the Gold et al. 2020 analytic emitter; thermal scenes decode BlackLightPlus primitives (primitive_four_vectors, plasma_decode) with the SKS metric

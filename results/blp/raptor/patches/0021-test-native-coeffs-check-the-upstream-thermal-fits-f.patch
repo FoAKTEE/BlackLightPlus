@@ -1,0 +1,99 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 14:16:29 -0700
+Subject: [PATCH 21/22] test(native-coeffs): check the upstream thermal fits
+ for finite values at cold electrons
+
+- finding: rho_Q_thermal is NaN for Theta_e <= 1.26e-3 (7353 of 110808 values on Theta_e 1e-5..1e-1, 86-345 GHz, B 1-1000 G): K1(1/Theta_e)/K2(1/Theta_e) is 0/0 once GSL K_n underflows at 1/Theta_e > ~705; the upstream THETAE_MIN = 1e-3 cut leaves 1e-3 <= Theta_e < 1.4e-3 exposed [SOLID]
+- change: tests/native_cold.c evaluates all eight EMIS_NATIVE coefficients on that grid and exits 1 on a non-finite value; build_tests.sh builds it
+- next: guard the ratio as rho_V_thermal already does
+---
+ tests/build_tests.sh |  4 ++++
+ tests/native_cold.c  | 56 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 60 insertions(+)
+ create mode 100644 tests/native_cold.c
+
+diff --git a/tests/build_tests.sh b/tests/build_tests.sh
+index 5fb6c2e..a2e983e 100755
+--- a/tests/build_tests.sh
++++ b/tests/build_tests.sh
+@@ -9,6 +9,7 @@
+ #   libraptor_cks.so       ray-dump library, upstream CKS Kerr (a = 0.9375)
+ #   libraptor_rt_{pol,unpol}.so  single-pixel transfer (R02)
+ #   libraptor_pol_step.so  one polarized transfer segment, native and LD85 (R07, M11)
++#   native_cold            finiteness of the upstream thermal fits for cold electrons (R07)
+ set -euo pipefail
+ HERE=$(cd "$(dirname "$0")/.." && pwd)
+ OUT=${1:?output directory}
+@@ -39,6 +40,9 @@ CKSINC="-I$HERE/src -I$CKSDEF $H5INC -DBLP_ANALYTIC_SPIN=0.9375"
+ $CC $CFLAGS $SKSINC "$HERE/tests/coeff_table.c" "$HERE/src/blp_coeffs.c" \
+     "$HERE/src/pol_emission.c" -o "$OUT/coeff_table" -lgsl -lgslcblas -lm
+ echo "built $OUT/coeff_table"
++$CC $CFLAGS $SKSINC "$HERE/tests/native_cold.c" "$HERE/src/blp_coeffs.c" \
++    "$HERE/src/pol_emission.c" -o "$OUT/native_cold" -lgsl -lgslcblas -lm
++echo "built $OUT/native_cold"
+ 
+ $CC $CFLAGS $SKSINC "$HERE/tests/metric_dump.c" $CORE -o "$OUT/metric_dump" $LIBS
+ $CC $CFLAGS $CKSINC "$HERE/tests/metric_dump.c" $CORE -o "$OUT/metric_dump_cks" $LIBS
+diff --git a/tests/native_cold.c b/tests/native_cold.c
+new file mode 100644
+index 0000000..869ca60
+--- /dev/null
++++ b/tests/native_cold.c
+@@ -0,0 +1,56 @@
++/*
++ * native_cold.c -- finiteness of the upstream thermal fits (EMIS_NATIVE,
++ * pol_emission.c) for cold electrons (dag.md R07 leg (c) and stock leg).
++ *
++ * Evaluates j_I, j_Q, j_V, a_I, a_Q, a_V, rho_Q, rho_V on
++ *   Theta_e = 10^(-5 + 0.05 i), i = 0..80 (1e-5 .. 1e-1),
++ *   nu = {86, 230, 345} GHz, B = {1, 30, 1000} G, n_e = 1e6 cm^-3,
++ *   theta_B = pi k / 20, k = 1..19,
++ * and prints the non-finite cells. Exit 0 iff every value is finite.
++ * The transfer turns one NaN coefficient into a blank pixel.
++ */
++#include "definitions.h"
++#include "functions.h"
++
++int main(void) {
++    const double nus[3] = {86.0e9, 230.0e9, 345.0e9};
++    const double Bs[3] = {1.0, 30.0, 1000.0};
++    const double n_e = 1.0e6;
++    long bad = 0, n = 0;
++    double te_max_bad = 0.;
++    for (int in = 0; in < 3; in++)
++        for (int ib = 0; ib < 3; ib++)
++            for (int it = 0; it <= 80; it++) {
++                double te = pow(10.0, -5.0 + 0.05 * it);
++                for (int k = 1; k < 20; k++) {
++                    double th = M_PI * k / 20.0, nu = nus[in], B = Bs[ib];
++                    double jI = j_I_thermal(te, n_e, nu, B, th);
++                    double jQ = j_Q_thermal(te, n_e, nu, B, th);
++                    double jV = j_V_thermal(te, n_e, nu, B, th);
++                    double c[8] = {jI, jQ, jV,
++                                   a_I_thermal(te, n_e, nu, B, th, jI),
++                                   a_Q_thermal(te, n_e, nu, B, th, jQ),
++                                   a_V_thermal(te, n_e, nu, B, th, jV),
++                                   rho_Q_thermal(te, n_e, nu, B, th),
++                                   rho_V_thermal(te, n_e, nu, B, th)};
++                    const char *nm[8] = {"jI", "jQ", "jV", "aI",
++                                         "aQ", "aV", "rQ", "rV"};
++                    for (int q = 0; q < 8; q++) {
++                        n++;
++                        if (!isfinite(c[q])) {
++                            if (bad < 5)
++                                printf("non-finite %s at Theta_e %.4e nu %.3e B %g "
++                                       "theta_B %.3f\n",
++                                       nm[q], te, nu, B, th);
++                            bad++;
++                            if (te > te_max_bad)
++                                te_max_bad = te;
++                        }
++                    }
++                }
++            }
++    printf("native_cold: %ld of %ld values non-finite; largest Theta_e with a "
++           "non-finite value %.4e\n",
++           bad, n, te_max_bad);
++    return bad ? 1 : 0;
++}

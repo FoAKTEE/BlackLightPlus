@@ -29,7 +29,9 @@ git clone https://github.com/jordydavelaar/raptor raptor-blp
 cd raptor-blp
 git checkout -b blp-bbh b91e937b7b746eb24992b6c1dd8831c5dea0cef1
 P=/path/to/BlackLightPlus/results/blp/raptor/patches
-git am -3 --keep-cr $P/*.patch $P/blp-reader/*.patch   # --keep-cr: src/GRmath.c has CRLF endings
+# --keep-cr: src/GRmath.c has CRLF endings; the blp-reader series goes after 0016, where
+# blp-bbh merges it (0017+ edit model/athenak)
+git am -3 --keep-cr $(ls $P/00*.patch | head -16) $P/blp-reader/*.patch $(ls $P/00*.patch | tail -n +17)
 git rev-parse 'HEAD^{tree}'   # equals `tree` in patches/SERIES
 ```
 
@@ -79,6 +81,8 @@ keep upstream behaviour; `model/blp_analytic/definitions.h` turns them on.
 | `EMIS_BLP` | 0 | 1 | M7 BlackLightPlus thermal coefficients, with the j_P ≤ j_I and α_P ≤ α_I rescales of `stokes_segment` |
 | `STOKES_IAU` | 0 | 1 | M8 camera Stokes readout: normal observer, up = image north, basis (north, east) |
 | `EMIS_MODEL` | 0 | 1 | coefficients supplied by the model (`model_evaluate_coeffs`, the Gold et al. 2020 emitter) |
+| `POL_SOLVER_LD85` | 0 | 0 | M11 exact constant-coefficient polarized step (`pol_rte_ld85_step`, the BlackLightPlus `stokes_segment` + `stokes_admissible`) in place of `check_stiffness` → RK4/trapezoid |
+| `ATHK_UPSTREAM_PLASMA` | 0 | — | AthenaK model only (`model_definitions.h`): the `model/bhac` plasma decode (R07 stock leg) |
 
 `model/blp_analytic/definitions.h` also carries the BlackLightPlus constants (M9).
 `model/blp_analytic/model.c` holds the analytic scenes of `$RAPTOR_SCENE`
@@ -93,6 +97,15 @@ BlackLightPlus primitives exactly as `primitive_four_vectors` and `plasma_decode
 Upstream fix on the matched path: the unpolarized transfer adds `j ds` on
 absorption-free segments (upstream dropped them).
 
+M12 (always on without AMR): `calculate_image_all` runs every pixel of every block in one
+OpenMP loop (`schedule(dynamic, 64)`); `main` prints `RAPTOR_TIMERS` (load, setup, loop,
+trace, transfer, output walls; thread-summed geodesic and transfer times; rays; stored
+states); under `STEP_BBH` the HDF5 image carries `endclass` and `nsamples` per pixel.
+
+Upstream fix on the native path: `rho_Q_thermal` takes K₁/K₂ → 1 when K₂(1/Θ_e)
+underflows (Θ_e < 1.4e−3), as `rho_V_thermal` does for K₀/K₂; before, the NaN blanked the
+pixel.
+
 ## Unit-test drivers
 
 `tests/build_tests.sh <dir>` builds the drivers against `model/blp_analytic`:
@@ -100,7 +113,8 @@ absorption-free segments (upstream dropped them).
 `ray_dump` and the `ccall` libraries `libraptor_sks_fd.so`,
 `libraptor_sks_an.so`, `libraptor_cks.so` (R04 rays, R05 camera), and
 `libraptor_rt_pol.so`, `libraptor_rt_unpol.so` (one image point through the
-camera, march and transfer; R02). The
+camera, march and transfer; R02), `libraptor_pol_step.so` (one polarized segment, native
+and M11 step; R07) and `native_cold` (finiteness of the upstream fits for cold electrons). The
 BlackLightPlus side lives in `results/blp/raptor/tools/`: `r03_verify.sh`,
 `r04_verify.sh`, `r05_verify.sh`, `r02_verify.sh` and `r01_verify.sh` export the fork branch with
 `git archive`, build it and run the comparisons.
@@ -146,3 +160,15 @@ R06 reproduction (`dag.md` R06): `results/blp/raptor/tools/r06_run.sh TAG
 probe and compares (`r06_compare.py`) into `evidence/R06/TAG_samples.json`;
 `RAPTOR_SKS=<blp-reader merged onto blp-bbh>` adds the end-to-end leg.
 `r06_verify.sh` re-runs s455 and s122 on the committed `blp-reader`.
+
+## R07/R08 image runs
+
+`tools/r07_build.sh <dir> [a,b,c,stock]` exports the fork and builds the R07 legs (athenak,
+SKS, pol, RK4; `max_steps` 4e4): (a) matched, (b) + `POL_SOLVER_LD85`, (c) `EMIS_BLP 0`,
+stock (upstream fits, constants, plasma decode, `RT_OUTER_CUTOFF` 50).
+`tools/r07_blp.jl` renders the BlackLightPlus images and writes `bbh.in`;
+`tools/r07_raptor.sh` runs a leg over inclinations, C and resolutions (nmax = 50 C);
+`tools/r07_compare.py` writes `evidence/R07/metrics.json`; `tools/r07_figures.py` the
+figures; `tools/r08_timing.sh` and `tools/r08_collect.py` the timings
+(`evidence/R08/timing.json`); `tools/r08_report.py` renders `report.md`.
+`tools/r07_verify.sh` and `tools/r08_verify.sh` are the ledger re-checks.

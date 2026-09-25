@@ -1,0 +1,33 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 14:17:12 -0700
+Subject: [PATCH 22/22] fix(native-coeffs): take K1/K2 -> 1 in rho_Q_thermal
+ when K2 underflows
+
+- change: rho_Q_thermal uses k_ratio = K1/K2 when K2(1/Theta_e) > 0 and 1 otherwise, the guard rho_V_thermal already applies to K0/K2; the cold limit of both ratios is 1 (K1/K2 = 1 - 3/(2x) + ... at x = 1/Theta_e = 705 is 0.998)
+- verify: native_cold 0 of 110808 values non-finite (7353 before); the R03 coefficient table is byte-identical (its grid starts at Theta_e = 10^-2.5)
+- caveat: before this change a sample with Theta_e < 1.4e-3 inside the model cuts turned the whole pixel blank (Iinv_pol = NaN clears POLARIZATION_ACTIVE and the pixel reads out zero)
+---
+ src/pol_emission.c | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/pol_emission.c b/src/pol_emission.c
+index 712595f..58d480f 100755
+--- a/src/pol_emission.c
++++ b/src/pol_emission.c
+@@ -127,10 +127,14 @@ double rho_Q_thermal(double theta_e, double n_e, double nu, double B,
+     double Xe = theta_e * sqrt(sqrt(2.) * sin(theta_B) *
+                                (1.e3 * omega0 / 2. / M_PI / nu));
+     double Thetaer = 1. / theta_e;
++    // K1/K2 -> 1 for cold electrons; GSL K_n underflows to 0 beyond
++    // 1/Theta_e ~ 705 (guarded as the K0/K2 ratio of rho_V_thermal)
++    double k2 = bessel_appr(2, Thetaer);
++    double k_ratio = (k2 > 0) ? bessel_appr(1, Thetaer) / k2 : 1;
+ 
+     return 2. * M_PI * nu / 2. / SPEED_OF_LIGHT * wp2 * omega0 * omega0 /
+            pow(2. * M_PI * nu, 4.) * f_m(Xe) *
+-           (bessel_appr(1, Thetaer) / bessel_appr(2, Thetaer) + 6. * theta_e) *
++           (k_ratio + 6. * theta_e) *
+            sin(theta_B) * sin(theta_B);
+ }
+ 

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:27:49 -0700
-Subject: [PATCH 13/16] fix(m8-stokes): reset the analytic scene to its
+Subject: [PATCH 13/22] fix(m8-stokes): reset the analytic scene to its
  defaults on every read
 
 - finding: a second raptor_rt_setup in one process kept the previous scene's d_unit and b_unit when the new scene file omitted them (the ring ran with the slab's 1e-31 g cm^-3), 5 orders of magnitude low in I [SOLID]

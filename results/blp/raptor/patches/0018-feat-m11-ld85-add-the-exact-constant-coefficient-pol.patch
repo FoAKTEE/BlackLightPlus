@@ -1,0 +1,254 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 13:18:34 -0700
+Subject: [PATCH 18/22] feat(m11-ld85): add the exact constant-coefficient
+ polarized step (POL_SOLVER_LD85)
+
+- finding: the native step routes every segment to the implicit trapezoid: check_stiffness evaluates the RK4 amplification 1 + tau + ... with tau = +lambda dl (> 1 for any absorbing segment) on dl_current without the C_CONST factor; 20000 random segments take the trapezoid, observed order 2.0 [SOLID]
+- change: POL_SOLVER_LD85 = 1 replaces check_stiffness -> RK4/trapezoid by pol_rte_ld85_step, a port of BlackLightPlus stokes_segment (LD85 solution, j_P and alpha_P rescales, saturation above delta tau 100) followed by stokes_admissible; the 1/(pol_frac + 0.005) renormalisation is skipped on that path; default 0 keeps upstream behaviour
+- verify: libraptor_pol_step.so solver 1 against stokes_couple, max relative difference 4.2e-14 over 20000 segments with delta tau 1e-4..30 and Faraday depth 1e-3..300 per segment
+---
+ src/functions.h          |   7 ++
+ src/pol_rte_integrator.c | 190 ++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 196 insertions(+), 1 deletion(-)
+
+diff --git a/src/functions.h b/src/functions.h
+index 6582e8a..a5d2dd9 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -53,6 +53,13 @@
+ #define STOKES_IAU (0)
+ #endif
+ 
++// POL_SOLVER_LD85 = 1: the polarized plasma step is the exact
++// constant-coefficient solution of BlackLightPlus stokes_segment plus the
++// |P| <= I clamp (M11), in place of check_stiffness -> RK4 / trapezoid.
++#ifndef POL_SOLVER_LD85
++#define POL_SOLVER_LD85 (0)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index 4845b68..bdc8b5a 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -555,6 +555,188 @@ void pol_rte_trapezoid_step(double jI, double jQ, double jU, double jV,
+     S_A[3] = x4;
+ }
+ 
++// Exact constant-coefficient segment (M11): the BlackLightPlus stokes_segment
++// (transfer.jl, the LD85 solution in the Landi Degl'Innocenti & Landi
++// Degl'Innocenti 1985 form of blacklight polarized_transfer.hpp) followed by
++// stokes_admissible. RAPTOR's Mueller matrix (pol_rte_rk4_step) is
++//   K = [aI aQ aU aV; aQ aI rV -rU; aU -rV aI rQ; aV rU -rQ aI]
++// with aU = rU = 0 from the tetrad, which is the matrix of stokes_segment, so
++// the segment S -> M S + b over ds = dl_current * C is the same operator.
++// j_P > j_I and alpha_P > alpha_I are rescaled onto the Stokes cone; a segment
++// with alpha_I ds > 100 is saturated (M = 0, b = K^-1 j).
++#define LD85_DTAU_MAX (100.)
++static void ld85_total_absorption(const double j[4], double aI, double dtau,
++                                  int thin, double M[4][4], double b[4]) {
++    for (int r = 0; r < 4; r++)
++        for (int c = 0; c < 4; c++)
++            M[r][c] = 0.;
++    if (!thin) {
++        for (int r = 0; r < 4; r++)
++            b[r] = j[r] / aI;
++        return;
++    }
++    double e = exp(-dtau);
++    for (int r = 0; r < 4; r++) {
++        M[r][r] = e;
++        b[r] = (j[r] / aI) * (-expm1(-dtau));
++    }
++}
++
++static void ld85_segment(const double jin[4], const double ain[4],
++                         const double rin[4], double ds, double M[4][4],
++                         double b[4]) {
++    double j[4] = {jin[0], jin[1], jin[2], jin[3]};
++    double al[4] = {ain[0], ain[1], ain[2], ain[3]};
++    double j_p = sqrt(j[1] * j[1] + j[2] * j[2] + j[3] * j[3]);
++    if (j[0] > 0. && j_p > j[0]) {
++        double sj = j[0] / j_p;
++        j[1] *= sj;
++        j[2] *= sj;
++        j[3] *= sj;
++    }
++    double alpha_sq = al[1] * al[1] + al[3] * al[3];
++    double alpha_p = sqrt(alpha_sq);
++    if (al[0] > 0. && alpha_p > al[0]) {
++        double sc = al[0] / alpha_p;
++        al[1] *= sc;
++        al[2] *= sc;
++        al[3] *= sc;
++        alpha_sq = al[0] * al[0];
++        alpha_p = al[0];
++    }
++    double rho_sq = rin[1] * rin[1] + rin[3] * rin[3];
++    double rho_p = sqrt(rho_sq);
++    double aI = al[0];
++    double delta_tau = aI * ds;
++    int thin = delta_tau <= LD85_DTAU_MAX;
++    for (int r = 0; r < 4; r++)
++        for (int c = 0; c < 4; c++)
++            M[r][c] = (r == c) ? 1. : 0.;
++    if (aI == 0. && rho_p == 0.) { // emission only
++        for (int r = 0; r < 4; r++)
++            b[r] = j[r] * ds;
++        return;
++    }
++    if (alpha_p == 0. && rho_p == 0.) { // total absorption
++        ld85_total_absorption(j, aI, delta_tau, thin, M, b);
++        return;
++    }
++    if (aI == 0.) { // pure rotation
++        double cr = cos(rho_p * ds), sr = sin(rho_p * ds);
++        double s2 = sin(rho_p * ds / 2.), ss = s2 * s2;
++        double rQ = rin[1], rV = rin[3];
++        M[1][1] = cr + 2. * rQ * rQ / rho_sq * ss;
++        M[1][2] = -rV / rho_p * sr;
++        M[1][3] = 2. * rQ * rV / rho_sq * ss;
++        M[2][1] = rV / rho_p * sr;
++        M[2][2] = cr;
++        M[2][3] = -rQ / rho_p * sr;
++        M[3][1] = 2. * rV * rQ / rho_sq * ss;
++        M[3][2] = rQ / rho_p * sr;
++        M[3][3] = cr + 2. * rV * rV / rho_sq * ss;
++        for (int r = 0; r < 4; r++)
++            b[r] = j[r] * ds;
++        return;
++    }
++    // full absorption + rotation
++    double aQ = al[1], aV = al[3], rQ = rin[1], rV = rin[3];
++    double ar = aQ * rQ + aV * rV;
++    double asr = alpha_sq - rho_sq;
++    double la = sqrt(asr * asr / 4. + ar * ar);
++    double lb = asr / 2.;
++    double l1 = sqrt(la + lb);
++    double l2 = sqrt(la - lb);
++    double ct = l1 * l1 + l2 * l2;
++    double s = ar >= 0. ? 1. : -1.;
++    double a0 = aI * aI;
++    if (ct <= 1.0e-12 * (alpha_sq + rho_sq) ||
++        fabs(a0 - l1 * l1) <= 1.0e-12 * (a0 + l1 * l1)) {
++        ld85_total_absorption(j, aI, delta_tau, thin, M, b);
++        return;
++    }
++    double it = 1. / ct;
++    double m2[4][4] = {
++        {0., l2 * aQ - s * l1 * rQ, 0., l2 * aV - s * l1 * rV},
++        {l2 * aQ - s * l1 * rQ, 0., s * l1 * aV + l2 * rV, 0.},
++        {0., -(s * l1 * aV + l2 * rV), 0., s * l1 * aQ + l2 * rQ},
++        {l2 * aV - s * l1 * rV, 0., -(s * l1 * aQ + l2 * rQ), 0.}};
++    double m3[4][4] = {
++        {0., l1 * aQ + s * l2 * rQ, 0., l1 * aV + s * l2 * rV},
++        {l1 * aQ + s * l2 * rQ, 0., -(s * l2 * aV - l1 * rV), 0.},
++        {0., s * l2 * aV - l1 * rV, 0., -(s * l2 * aQ - l1 * rQ)},
++        {l1 * aV + s * l2 * rV, 0., s * l2 * aQ - l1 * rQ, 0.}};
++    double d0 = (alpha_sq + rho_sq) / 2.;
++    double m4[4][4] = {{d0, 0., aQ * rV - aV * rQ, 0.},
++                       {0., aQ * aQ + rQ * rQ - d0, 0., aV * aQ + rV * rQ},
++                       {-(aQ * rV - aV * rQ), 0., -d0, 0.},
++                       {0., aV * aQ + rV * rQ, 0., aV * aV + rV * rV - d0}};
++    double p4[4][4], m4m[4][4], cosh_t[4][4], cos_t[4][4], pp[4][4];
++    double f1 = 1. / (a0 - l1 * l1);
++    double f2 = 1. / (a0 + l2 * l2);
++    for (int r = 0; r < 4; r++)
++        for (int c = 0; c < 4; c++) {
++            m2[r][c] *= it;
++            m3[r][c] *= it;
++            m4[r][c] *= 2. * it;
++            double id = (r == c) ? 1. : 0.;
++            p4[r][c] = id + m4[r][c];
++            m4m[r][c] = id - m4[r][c];
++            cosh_t[r][c] = (-l1 * f1) * m3[r][c] + (0.5 * aI * f1) * p4[r][c];
++            cos_t[r][c] = (-l2 * f2) * m2[r][c] + (0.5 * aI * f2) * m4m[r][c];
++            pp[r][c] = cosh_t[r][c] + cos_t[r][c];
++        }
++    if (thin) {
++        double ev = exp(-delta_tau);
++        double sv = sin(l2 * ds), cv = cos(l2 * ds);
++        double shv = sinh(l1 * ds), chv = cosh(l1 * ds);
++        for (int r = 0; r < 4; r++)
++            for (int c = 0; c < 4; c++) {
++                double sin_t = (-aI * f2) * m2[r][c] + (-0.5 * l2 * f2) * m4m[r][c];
++                double sinh_t = (-aI * f1) * m3[r][c] + (0.5 * l1 * f1) * p4[r][c];
++                pp[r][c] -= ev * (chv * cosh_t[r][c] + cv * cos_t[r][c] +
++                                  sv * sin_t + shv * sinh_t);
++                M[r][c] = ev * (0.5 * chv * p4[r][c] + 0.5 * cv * m4m[r][c] -
++                                sv * m2[r][c] - shv * m3[r][c]);
++            }
++    } else {
++        for (int r = 0; r < 4; r++)
++            for (int c = 0; c < 4; c++)
++                M[r][c] = 0.;
++    }
++    for (int r = 0; r < 4; r++) {
++        b[r] = 0.;
++        for (int c = 0; c < 4; c++)
++            b[r] += pp[r][c] * j[c];
++    }
++}
++
++void pol_rte_ld85_step(double jI, double jQ, double jU, double jV, double rQ,
++                       double rU, double rV, double aI, double aQ, double aU,
++                       double aV, double dl_current, double C,
++                       double complex S_A[]) {
++    (void)rU; // zero by the tetrad choice, as in stokes_segment
++    double j[4] = {jI, jQ, jU, jV};
++    double al[4] = {aI, aQ, aU, aV};
++    double rh[4] = {0., rQ, 0., rV};
++    double M[4][4], b[4], S0[4], S[4];
++    ld85_segment(j, al, rh, dl_current * C, M, b);
++    for (int r = 0; r < 4; r++)
++        S0[r] = creal(S_A[r]);
++    for (int r = 0; r < 4; r++) {
++        S[r] = b[r];
++        for (int c = 0; c < 4; c++)
++            S[r] += M[r][c] * S0[c];
++    }
++    // stokes_admissible: I >= 0, |P| <= I
++    double ii = S[0] > 0. ? S[0] : 0.;
++    double pol = S[1] * S[1] + S[2] * S[2] + S[3] * S[3];
++    double f = pol > ii * ii ? sqrt(ii * ii / pol) : 1.;
++    S_A[0] = ii;
++    S_A[1] = S[1] * f;
++    S_A[2] = S[2] * f;
++    S_A[3] = S[3] * f;
++}
++
+ void f_to_stokes(double complex f_u[], double complex f_tetrad_u[],
+                  double tetrad_d[][4], double complex S_A[], double Iinv,
+                  double Iinv_pol) {
+@@ -645,6 +827,11 @@ void pol_integration_step(struct GRMHD modvar, double frequency,
+     // Given Stokes params and plasma coeffs, compute NEW Stokes params
+     // after plasma step.
+ 
++#if (POL_SOLVER_LD85)
++    // exact constant-coefficient segment (M11); it ends on the Stokes cone
++    pol_rte_ld85_step(jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV, *dl_current,
++                      C, S_A);
++#else
+     int STIFF = check_stiffness(jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV,
+                                 *dl_current);
+ 
+@@ -658,6 +845,7 @@ void pol_integration_step(struct GRMHD modvar, double frequency,
+         pol_rte_trapezoid_step(jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV,
+                                *dl_current, C, S_A);
+     }
++#endif
+     // FROM STOKES TO F VECTOR
+     ///////////////////////////
+     // somtimes in very specific cells issue with Ipol>S_I, numerical round off
+@@ -666,7 +854,7 @@ void pol_integration_step(struct GRMHD modvar, double frequency,
+         sqrt(S_A[1] * S_A[1] + S_A[2] * S_A[2] + S_A[3] * S_A[3]) /
+         sqrt(S_A[0] * S_A[0]);
+ 
+-    if (pol_frac > 1.) {
++    if (pol_frac > 1. && !POL_SOLVER_LD85) {
+         //         fprintf(stderr,"unphysical in pol step, skipping step. %e %e
+         //         %e\n", sqrt(S_A[0]*S_A[0]), sqrt(S_A[1] * S_A[1] + S_A[2] *
+         //         S_A[2] +

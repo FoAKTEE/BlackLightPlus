@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:34:42 -0700
-Subject: [PATCH 15/16] fix(m7-coeffs): mirror the BlackLightPlus emission
+Subject: [PATCH 15/22] fix(m7-coeffs): mirror the BlackLightPlus emission
  admissibility rescale
 
 - why: BlackLightPlus 2fab069 rescales j_P > j_I onto j_P = j_I in stokes_segment (the M21 fits leave the Stokes cone at small pitch angles)

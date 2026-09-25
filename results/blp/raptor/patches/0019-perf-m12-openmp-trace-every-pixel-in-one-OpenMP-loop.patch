@@ -1,0 +1,267 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 13:19:21 -0700
+Subject: [PATCH 19/22] perf(m12-openmp): trace every pixel in one OpenMP loop
+ with phase timers
+
+- change: calculate_image_all runs the per-pixel body of calculate_image_block over all blocks in one parallel for (dynamic, 64) instead of one 100-pixel region per block (AMR keeps the block loop); main reports RAPTOR_TIMERS (load, setup, loop, output walls; thread-summed geodesic and transfer times; rays, stored states)
+- change: under STEP_BBH the HDF5 image carries endclass (1/2 captured by hole 1/2, 3 escaped, 4 budget, 5 non-finite) and nsamples per pixel
+- verify: R01 synthetic image (bhac, CKS, pol, switches off) bitwise identical to upstream b91e937 in I, Q, U, V, tau, tauF, alpha, beta and the spectrum
+---
+ src/core.c      | 78 +++++++++++++++++++++++++++++++++++++++++++++++++
+ src/functions.h | 17 +++++++++++
+ src/io.c        | 21 +++++++++++++
+ src/main.c      | 29 ++++++++++++++++--
+ 4 files changed, 142 insertions(+), 3 deletions(-)
+
+diff --git a/src/core.c b/src/core.c
+index a20cf22..9072860 100644
+--- a/src/core.c
++++ b/src/core.c
+@@ -10,6 +10,7 @@
+ #include "model_definitions.h"
+ #include "model_functions.h"
+ #include "model_global_vars.h"
++#include <omp.h>
+ 
+ // GLOBAL VARS
+ //////////////
+@@ -26,6 +27,8 @@ int IMG_WIDTH, IMG_HEIGHT;
+ double CAM_SIZE_X, CAM_SIZE_Y;
+ double STEPSIZE;
+ 
++double *ray_endclass = NULL, *ray_nsamples = NULL;
++
+ // FUNCTIONS
+ ////////////
+ 
+@@ -145,6 +148,81 @@ void calculate_image_block(struct Camera *intensityfield,
+ #pragma omp barrier
+ }
+ 
++// All pixels of all blocks in one parallel loop (M12). Each pixel runs the
++// body of calculate_image_block unchanged, so the image does not depend on
++// the schedule.
++void calculate_image_all(struct Camera *intensityfield, int nblocks,
++                         double frequencies[num_frequencies],
++                         struct PhaseTimers *tm) {
++    long npix = (long)nblocks * tot_pixels;
++    double trace_cpu = 0., transfer_cpu = 0.;
++    long samples = 0;
++    double t0 = omp_get_wtime();
++#pragma omp parallel for schedule(dynamic, 64) reduction(+ : trace_cpu, transfer_cpu, samples)
++    for (long q = 0; q < npix; q++) {
++        struct Camera *cam = &intensityfield[q / tot_pixels];
++        int pixel = (int)(q % tot_pixels);
++        int steps = 0;
++        double *lightpath2 = malloc(9 * max_steps * sizeof(double));
++#if (POL)
++        double f_x = 0.;
++        double f_y = 0.;
++        double p = 0.;
++#endif
++        double ta = omp_get_wtime();
++        integrate_geodesic(cam->alpha[pixel], cam->beta[pixel], lightpath2,
++                           &steps, CUTOFF_INNER);
++        double tb = omp_get_wtime();
++#if (POL)
++        for (int f = 0; f < num_frequencies; f++) {
++            radiative_transfer_polarized(lightpath2, steps, frequencies[f],
++                                         &f_x, &f_y, &p, 0, cam->IQUV[pixel][f],
++                                         &cam->tau[pixel][f],
++                                         &cam->tauF[pixel][f]);
++        }
++#else
++        radiative_transfer_unpolarized(lightpath2, steps, frequencies,
++                                       cam->IQUV[pixel], &cam->tau[pixel]);
++        for (int f = 0; f < num_frequencies; f++) {
++            cam->IQUV[pixel][f][0] *= pow(frequencies[f], 3.);
++        }
++#endif
++        double tc = omp_get_wtime();
++        trace_cpu += tb - ta;
++        transfer_cpu += tc - tb;
++        samples += steps;
++        if (ray_nsamples)
++            ray_nsamples[q] = steps;
++        if (ray_endclass)
++#if (STEP_BBH)
++            ray_endclass[q] = -lightpath2[9 * steps + 8];
++#else
++            ray_endclass[q] = 0.;
++#endif
++        free(lightpath2);
++    }
++    tm->loop += omp_get_wtime() - t0;
++    tm->trace_cpu += trace_cpu;
++    tm->transfer_cpu += transfer_cpu;
++    tm->rays += npix;
++    tm->samples += samples;
++    tm->threads = omp_get_max_threads();
++}
++
++// One line on stderr: phase walls [s]; trace and transfer are the loop wall
++// split in proportion to the thread-summed geodesic and transfer times.
++void report_phase_timers(const struct PhaseTimers *tm) {
++    double cpu = tm->trace_cpu + tm->transfer_cpu;
++    double ftr = cpu > 0. ? tm->trace_cpu / cpu : 0.;
++    fprintf(stderr,
++            "RAPTOR_TIMERS threads=%d load=%.6f setup=%.6f loop=%.6f "
++            "trace=%.6f transfer=%.6f output=%.6f trace_cpu=%.6f "
++            "transfer_cpu=%.6f rays=%ld samples=%ld\n",
++            tm->threads, tm->load, tm->setup, tm->loop, tm->loop * ftr,
++            tm->loop * (1. - ftr), tm->output, tm->trace_cpu, tm->transfer_cpu,
++            tm->rays, tm->samples);
++}
++
+ // Functions that computes a spectrum at every frequency
+ // by integrating over the image struct
+ void compute_spec(struct Camera *intensityfield,
+diff --git a/src/functions.h b/src/functions.h
+index a5d2dd9..8f3b74b 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -436,6 +436,23 @@ void write_uniform_camera(struct Camera *intensityfield, double frequency,
+ // compute the image.
+ void calculate_image_block(struct Camera *intensityfield,
+                            double frequencies[num_frequencies]);
++
++// M12: one OpenMP loop over every pixel of every block (dynamic, 64), with
++// per-thread geodesic and transfer timers. Output is the same as the
++// per-block loop. Per ray, ray_endclass (STEP_BBH end class: 1/2 captured by
++// hole 1/2, 3 escaped, 4 step budget, 5 non-finite; 0 otherwise) and
++// ray_nsamples (stored states) are kept when allocated, indexed
++// block * tot_pixels + pixel, and written to the HDF5 image.
++struct PhaseTimers {
++    double load, setup, loop, trace_cpu, transfer_cpu, output;
++    long rays, samples;
++    int threads;
++};
++extern double *ray_endclass, *ray_nsamples;
++void calculate_image_all(struct Camera *intensityfield, int nblocks,
++                         double frequencies[num_frequencies],
++                         struct PhaseTimers *tm);
++void report_phase_timers(const struct PhaseTimers *tm);
+ /// CAMERA.C
+ void init_camera(struct Camera **intensityfield);
+ 
+diff --git a/src/io.c b/src/io.c
+index 35bdf0d..85fced7 100644
+--- a/src/io.c
++++ b/src/io.c
+@@ -274,6 +274,27 @@ void write_image_hdf5(char *hdf5_filename, struct Camera *data,
+ 
+     status = H5Sclose(dataspace_id);
+ 
++#if (STEP_BBH)
++    // per-ray end class and stored-state count (M12, calculate_image_all)
++    const char *ray_names[2] = {"endclass", "nsamples"};
++    double *ray_data[2] = {ray_endclass, ray_nsamples};
++    for (int d = 0; d < 2; d++) {
++        if (!ray_data[d])
++            continue;
++        for (int block = 0; block < tot_blocks; block++)
++            for (int pixel = 0; pixel < tot_pixels; pixel++)
++                buffer[block][pixel] = ray_data[d][block * tot_pixels + pixel];
++        dataspace_id = H5Screate_simple(2, dims, NULL);
++        dataset_id = H5Dcreate2(file_id, ray_names[d], H5T_NATIVE_DOUBLE,
++                                dataspace_id, H5P_DEFAULT, H5P_DEFAULT,
++                                H5P_DEFAULT);
++        H5Dwrite(dataset_id, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT,
++                 buffer);
++        status = H5Dclose(dataset_id);
++        status = H5Sclose(dataspace_id);
++    }
++#endif
++
+     status = H5Fclose(file_id);
+ }
+ 
+diff --git a/src/main.c b/src/main.c
+index 9eb7c84..d140636 100755
+--- a/src/main.c
++++ b/src/main.c
+@@ -45,6 +45,7 @@
+ #include "model_definitions.h"
+ #include "model_functions.h"
+ #include "model_global_vars.h"
++#include <omp.h>
+ 
+ int main(int argc, char *argv[]) {
+ 
+@@ -75,6 +76,9 @@ int main(int argc, char *argv[]) {
+     else
+         fprintf(stderr, " unpolarized mode!\n");
+ 
++    struct PhaseTimers tm = {0};
++    double t_phase = omp_get_wtime();
++
+     fprintf(stderr, "\nInitializing...\n");
+     read_model(argv);
+ 
+@@ -85,6 +89,9 @@ int main(int argc, char *argv[]) {
+     // Note: this sets the black hole spin 'a'
+     init_model();
+ 
++    tm.load = omp_get_wtime() - t_phase;
++    t_phase = omp_get_wtime();
++
+     // Set constants such as R_ISCO, JANSKY_FACTOR
+     // These depend on the black hole spin
+     set_constants();
+@@ -131,25 +138,36 @@ int main(int argc, char *argv[]) {
+     prerun_refine(&intensityfield);
+ #endif
+ 
++    tm.setup = omp_get_wtime() - t_phase;
++
++#if (AMR)
+     int block = 0;
+ 
++    t_phase = omp_get_wtime();
+     while (block  < tot_blocks) { // block_total
+         if (block % (25) == 0)
+             fprintf(stderr, "block %d of total %d\n", block, tot_blocks);
+ 
+         calculate_image_block(&intensityfield[block], frequencies);
+-#if (AMR)
+         if (refine_block(intensityfield[block])) {
+             add_block(&intensityfield, block);
+         } else {
+             block++;
+         }
++    }
++    tm.loop = omp_get_wtime() - t_phase;
++    tm.threads = omp_get_max_threads();
+ #else
+-        block++;
++    // M12: every pixel in one parallel loop
++    fprintf(stderr, "%d blocks, %d pixels\n", tot_blocks,
++            tot_blocks * tot_pixels);
++    ray_endclass = malloc((size_t)tot_blocks * tot_pixels * sizeof(double));
++    ray_nsamples = malloc((size_t)tot_blocks * tot_pixels * sizeof(double));
++    calculate_image_all(intensityfield, tot_blocks, frequencies, &tm);
+ #endif
+-    }
+ 
+     fprintf(stderr, "\nRay tracing done!\n\n");
++    t_phase = omp_get_wtime();
+ 
+     compute_spec(intensityfield, energy_spectrum);
+ 
+@@ -164,10 +182,15 @@ int main(int argc, char *argv[]) {
+ #if (UNIF)
+     write_uniform_camera(intensityfield, frequencies[0], 0);
+ #endif
++    tm.output = omp_get_wtime() - t_phase;
++    report_phase_timers(&tm);
++
+     // FREE ALLOCATED POINTERS
+     //////////////////////////
+ 
+     free(intensityfield);
++    free(ray_endclass);
++    free(ray_nsamples);
+ 
+     fprintf(stderr, "\nThat's all folks!\n");
+ 

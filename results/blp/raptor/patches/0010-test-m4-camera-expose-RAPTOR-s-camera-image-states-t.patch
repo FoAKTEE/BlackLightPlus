@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:02:59 -0700
-Subject: [PATCH 10/16] test(m4-camera): expose RAPTOR's camera image states to
+Subject: [PATCH 10/22] test(m4-camera): expose RAPTOR's camera image states to
  the R05 camera check
 
 - change: raptor_camera_image builds the upstream camera (10x10 blocks) for an npix^2 image and returns the initialize_photon state of every pixel in the BlackLightPlus camera_rays order

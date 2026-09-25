@@ -1,0 +1,68 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 13:20:17 -0700
+Subject: [PATCH 20/22] feat(m6-plasma): add the upstream RAPTOR plasma model
+ as a switch (ATHK_UPSTREAM_PLASMA)
+
+- change: ATHK_UPSTREAM_PLASMA = 1 decodes AthenaK samples with the model/bhac rules (n_e = rho/(m_p + m_e) + 1e-6, b^2 floor 1e-6, Theta_e = (u/rho)(1/3)(m_p/m_e)/(1 + R), cuts sigma > 1, Theta_e outside [1e-3, 100], r < 1, r > RT_OUTER_CUTOFF) on the AthenaK four-vectors; samples with rho <= 0 stay vacuum; default 0 keeps the M6 decode
+- next: R07 report-only stock leg (upstream fits, constants, plasma and polarized radius on the matched geometry)
+---
+ model/athenak/model.c             | 26 ++++++++++++++++++++++++++
+ model/athenak/model_definitions.h |  7 +++++++
+ 2 files changed, 33 insertions(+)
+
+diff --git a/model/athenak/model.c b/model/athenak/model.c
+index debb967..295a1e7 100644
+--- a/model/athenak/model.c
++++ b/model/athenak/model.c
+@@ -108,6 +108,32 @@ int get_fluid_params(double X[NDIM], struct GRMHD *modvar) {
+         modvar->B_d[i] = fv.bcov[i];
+     }
+ 
++#if (ATHK_UPSTREAM_PLASMA)
++    // model/bhac/model.c get_fluid_params with the AthenaK four-vectors:
++    // BHAC's density and field floors, fixed 1/3 in Theta_e, its cuts
++    {
++        double r = get_r(X);
++        double rho = prim[ATHK_DENS], uu = prim[ATHK_EINT];
++        double smalll = 1.e-6;
++        if (r < 1.00 || !(rho > 0.) || !(fv.b_sq == fv.b_sq))
++            return 0;
++        modvar->n_e = rho * RHO_unit / (PROTON_MASS + ELECTRON_MASS) + smalll;
++        double Bsq = fabs(fv.b_sq) + smalll;
++        modvar->B = sqrt(Bsq) * B_unit;
++        modvar->beta = uu * (athk.gamma - 1.) / (0.5 * (Bsq + smalll));
++        double b2 = pow(modvar->beta, 2.);
++        modvar->sigma = Bsq / (rho + smalll);
++        double trat = R_HIGH * b2 / (1. + b2) + R_LOW / (1. + b2);
++        modvar->theta_e = (uu / rho) * (1. / 3. * MPoME / (trat + 1));
++        if (Bsq / (rho + 1e-20) > SIGMA_CUT || r > RT_OUTER_CUTOFF ||
++            modvar->theta_e > THETAE_MAX || modvar->theta_e < THETAE_MIN) {
++            modvar->n_e = 0;
++            return 0;
++        }
++        return 1;
++    }
++#endif
++
+     athk_plasma pl;
+     double pgas = athk_pgas(prim[ATHK_EINT], athk.gamma);
+     int emit = athk_plasma_decode(&athk_par, prim[ATHK_DENS], pgas, fv.b_sq, &pl);
+diff --git a/model/athenak/model_definitions.h b/model/athenak/model_definitions.h
+index abd437e..730be36 100644
+--- a/model/athenak/model_definitions.h
++++ b/model/athenak/model_definitions.h
+@@ -18,6 +18,13 @@
+ #define ATHK_GAMMA_OVERRIDE (0.)
+ /* emission cut sigma = b^2/rho > ATHK_SIGMA_CUT (negative disables) */
+ #define ATHK_SIGMA_CUT (1.0)
++/* 1: the upstream RAPTOR plasma model of model/bhac (report-only "stock" leg of
++ * R07): n_e = rho/(m_p + m_e) + 1e-6 cm^-3, b^2 floor 1e-6, Theta_e =
++ * (u/rho)(1/3)(m_p/m_e)/(1 + R), cuts sigma > SIGMA_CUT, Theta_e outside
++ * [THETAE_MIN, THETAE_MAX], r < 1 and r > RT_OUTER_CUTOFF (r = get_r) */
++#ifndef ATHK_UPSTREAM_PLASMA
++#define ATHK_UPSTREAM_PLASMA (0)
++#endif
+ /* reader threads; <= 0 uses min(OMP_NUM_THREADS, 16) */
+ #define ATHK_LOAD_THREADS (0)
+ 

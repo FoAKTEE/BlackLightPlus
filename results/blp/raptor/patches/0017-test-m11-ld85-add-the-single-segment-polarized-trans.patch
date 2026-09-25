@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 13:17:13 -0700
+Subject: [PATCH 17/22] test(m11-ld85): add the single-segment polarized
+ transfer library for R07
+
+- change: tests/pol_step.c exposes one constant-coefficient polarized segment of the transfer, the native check_stiffness -> RK4/trapezoid step (solver 0) and the exact LD85 step pol_rte_ld85_step (solver 1); build_tests.sh builds libraptor_pol_step.so with --no-undefined
+- next: R07 leg (b) M11; the library does not link until pol_rte_ld85_step exists
+---
+ tests/build_tests.sh |  7 +++++
+ tests/pol_step.c     | 64 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 71 insertions(+)
+ create mode 100644 tests/pol_step.c
+
+diff --git a/tests/build_tests.sh b/tests/build_tests.sh
+index a8dddd7..5fb6c2e 100755
+--- a/tests/build_tests.sh
++++ b/tests/build_tests.sh
+@@ -7,6 +7,8 @@
+ #   libraptor_sks_fd.so    ray-dump library, SKS with the M2a connection
+ #   libraptor_sks_an.so    ray-dump library, SKS with the M2b connection
+ #   libraptor_cks.so       ray-dump library, upstream CKS Kerr (a = 0.9375)
++#   libraptor_rt_{pol,unpol}.so  single-pixel transfer (R02)
++#   libraptor_pol_step.so  one polarized transfer segment, native and LD85 (R07, M11)
+ set -euo pipefail
+ HERE=$(cd "$(dirname "$0")/.." && pwd)
+ OUT=${1:?output directory}
+@@ -54,3 +56,8 @@ echo "built $OUT/ray_dump $OUT/libraptor_{sks_fd,sks_an,cks}.so"
+ $CC $CFLAGS $LIBFLAGS $SKSINC "$HERE/tests/pixel_rt.c" $CORE -o "$OUT/libraptor_rt_pol.so" $LIBS
+ $CC $CFLAGS $LIBFLAGS $SKSINC -DPOL=0 "$HERE/tests/pixel_rt.c" $CORE -o "$OUT/libraptor_rt_unpol.so" $LIBS
+ echo "built $OUT/libraptor_rt_{pol,unpol}.so"
++
++# one polarized transfer segment (R07 leg (b)): native step and the M11 LD85 step
++$CC $CFLAGS $LIBFLAGS $SKSINC -Wl,--no-undefined "$HERE/tests/pol_step.c" $CORE \
++    -o "$OUT/libraptor_pol_step.so" $LIBS
++echo "built $OUT/libraptor_pol_step.so"
+diff --git a/tests/pol_step.c b/tests/pol_step.c
+new file mode 100644
+index 0000000..8fbcc5c
+--- /dev/null
++++ b/tests/pol_step.c
+@@ -0,0 +1,64 @@
++/*
++ * pol_step.c -- one constant-coefficient polarized transfer segment of
++ * RAPTOR's transfer, as a library for ccall (dag.md R07 leg (b), M11).
++ *
++ *   int raptor_pol_step(int solver, const double coef[11], double dl,
++ *                       double C, double S[4])
++ * advances the Stokes vector S = (I, Q, U, V) over one segment of invariant
++ * length dl * C (pol_integration_step's dl_current and C_CONST) with the
++ * invariant coefficients
++ * coef = (jI, jQ, jU, jV, rQ, rU, rV, aI, aQ, aU, aV):
++ *   solver 0: the native step of pol_integration_step, i.e. check_stiffness
++ *             selects pol_rte_rk4_step or pol_rte_trapezoid_step;
++ *   solver 1: pol_rte_ld85_step (M11), the exact constant-coefficient
++ *             solution of BlackLightPlus stokes_segment plus the |P| <= I clamp.
++ * Returns the check_stiffness flag (1: trapezoid, 0: RK4) for solver 0 and 0
++ * for solver 1.
++ */
++#include "definitions.h"
++#include "functions.h"
++#include "global_vars.h"
++#include "model_definitions.h"
++#include "model_functions.h"
++#include "model_global_vars.h"
++
++int check_stiffness(double jI, double jQ, double jU, double jV, double rQ,
++                    double rU, double rV, double aI, double aQ, double aU,
++                    double aV, double dl_current);
++void pol_rte_rk4_step(double jI, double jQ, double jU, double jV, double rQ,
++                      double rU, double rV, double aI, double aQ, double aU,
++                      double aV, double dl_current, double C,
++                      double complex S_A[]);
++void pol_rte_trapezoid_step(double jI, double jQ, double jU, double jV,
++                            double rQ, double rU, double rV, double aI,
++                            double aQ, double aU, double aV, double dl_current,
++                            double C, double complex S_A[]);
++void pol_rte_ld85_step(double jI, double jQ, double jU, double jV, double rQ,
++                       double rU, double rV, double aI, double aQ, double aU,
++                       double aV, double dl_current, double C,
++                       double complex S_A[]);
++
++int raptor_pol_step(int solver, const double coef[11], double dl, double C,
++                    double S[4]) {
++    double complex S_A[4] = {S[0], S[1], S[2], S[3]};
++    const double *c = coef;
++    int stiff = 0;
++    if (solver == 0) {
++        // as pol_integration_step: check_stiffness sees dl_current alone,
++        // the step integrates over dl_current * C
++        stiff = check_stiffness(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
++                                c[8], c[9], c[10], dl);
++        if (!stiff)
++            pol_rte_rk4_step(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
++                             c[8], c[9], c[10], dl, C, S_A);
++        else
++            pol_rte_trapezoid_step(c[0], c[1], c[2], c[3], c[4], c[5], c[6],
++                                   c[7], c[8], c[9], c[10], dl, C, S_A);
++    } else {
++        pol_rte_ld85_step(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8],
++                          c[9], c[10], dl, C, S_A);
++    }
++    for (int s = 0; s < 4; s++)
++        S[s] = creal(S_A[s]);
++    return stiff;
++}
