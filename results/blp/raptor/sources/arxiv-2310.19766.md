@@ -1,0 +1,11 @@
+# arxiv-2310.19766 — Krauth, Davelaar, Haiman, Westernacher-Schneider, Zrake & MacFadyen 2023, Self-lensing flares from black hole binaries III: general-relativistic ray tracing of circumbinary accretion simulations (arXiv preprint; journal reference not listed by the arXiv API)
+- Mirror: ref-paper/arxiv-2310.19766/ (tex/main.tex; sha256(src.tar) 5903d562c71737013dda87700a6210132eb6a7a0f0304c5114a9a4aaaf2fef0b, PROVENANCE.md). Bib key: Krauth2023slf3.
+- Role: reference (RAPTOR on gridded binary hydrodynamics data; camera-AMR convergence table).
+- Declarations (literature-grounded; line numbers in tex/main.tex):
+  - Input: 2D Sailfish (GPU) Cartesian data, square domain $20a$ (l.360, l.418); vertical structure $\rho=\rho_0(x,y)\exp(-z^2/(2h)^2)$ [as printed], $T_{\rm eff}$ from $\mathcal P,\Sigma$, post-hoc rescaling to $\dot M=0.19\dot M_{\rm Edd}$ (l.425–431).
+  - Metric: superposed Cartesian Schwarzschild ($a=0$ CKS), $f=2/r$, $l_\nu=(1,x/r,y/r,z/r)$, $g^{\mu\nu}=\eta^{\mu\nu}-h^{\mu\nu,p}-h^{\mu\nu,s}$ (l.433–455); $u^t$ from $u^\mu u_\mu=-1$; $\nu_p=-k_\mu u^\mu$ (l.455).
+  - Transfer: backward from camera; emission = blackbody at $T_{\rm eff}$ at the photosphere where $\tau=\int\nu\alpha\,d\lambda\ge1$ with $\alpha_\nu=\kappa_{\rm es}\rho$; integration terminates at $\tau\ge1$; fast light (l.457).
+  - Emitting region: square of side $3a$ about the binary (l.459); camera block-AMR refinement threshold $\Delta I/I=10^{-3}$ (l.459); fiducial inclination $86^\circ$ (l.468).
+  - Convergence study (pixels / step size / AMR levels): lc1–lc10, adopted lc10 = 200×200, step 0.01, AMR 3/4 (App. l.1429–1463); step size reduced in proportion to local disk scale height (l.1429).
+- [OPEN] Interpolation of the Sailfish grid onto ray positions (nearest vs linear) is not stated.
+- [OPEN] Refinement threshold here ($10^{-3}$, l.459) differs from Paper I ($s_{\rm th}=0.2$, arXiv:2112.05828 l.306).

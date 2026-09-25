@@ -1,0 +1,13 @@
+# arxiv-2112.05828 — Davelaar & Haiman 2022, Self-lensing flares from black hole binaries I: general-relativistic ray tracing of black hole binaries (Phys. Rev. D 105, 103010)
+- Mirror: ref-paper/arxiv-2112.05828/ (tex/main.tex; sha256(src.tar) 251bbb98dfee7a70612140e3cdf4e84d2f140b1ffd32f6b0ffcc83f4e08dfa22, PROVENANCE.md). Bib key: Davelaar2022.
+- Role: baseline (RAPTOR binary-BH mode: superposed CKS metric, slow-light moving holes, adaptive quadtree camera).
+- Declarations (literature-grounded; line numbers in tex/main.tex):
+  - Metric: $g_{\mu\nu}=\eta_{\mu\nu}+h^p_{\mu\nu}+h^s_{\mu\nu}$, $h=f\,l_\mu l_\nu$ (CKS $f$, $l_\nu$ as in 1906.10065), each shifted by $\vec x-\vec x^{bh}$; $g^{\mu\nu}=\eta^{\mu\nu}-h^{\mu\nu,p}-h^{\mu\nu,s}$ with $l^\nu$ = $l_\nu$ with sign-flipped time component (l.94–125); valid for separations $\ge100R_g$, mildly relativistic orbits (l.127–129). Holes on Keplerian orbits (Sec. l.131–265).
+  - Geodesics as RAPTOR I/II; connection coefficients from finite-difference metric derivatives (l.266–282).
+  - Transfer: backward $dI_\nu/(\nu^3d\lambda)=j_\nu\exp(-\tau_\nu)$, $\tau_\nu=\int_0^{\lambda}\nu\alpha_\nu d\lambda$ from the camera (l.284–290); BH positions updated with the ray's coordinate time (slow light) (l.290).
+  - Camera: covariant tetrad camera (Davelaar+2018 VR) at $d_{\rm cam}=10^4R_g$ (l.292). Quadtree camera AMR: block corners ${\rm lcorner}_x(i)=-{\rm fov}_x/2+i\,{\rm block\_fov}_x$, pixel centres $\alpha={\rm lcorner}_x+(k+0.5)dx$, $\beta={\rm lcorner}_y+(l+0.5)dy$ (l.294–304); refine when $\max_{kl}\sum|I_{kl}-I_{mn}|/I_{kl}$ over 4 neighbours exceeds $s_{\rm th}=0.2$ (l.306); child indexing and corners at level $L$ scale as $2^{-(L-1)}$ (l.308–321); speedup ×3 (with Einstein ring) to ×10 (l.325); 25² pixels per block (Fig. l.333); Kepler-predicted block culling, additional ×4 (l.337).
+  - Emission: optically thick thin minidisks, blackbody with $T=(F/\sigma_b)^{1/4}$, $F=3GM\dot M/8\pi r^3$, $R_{\rm inner}\in\{r_h,r_{\rm ISCO}\}$, tidal truncation $0.27q^{\mp0.3}a(1-e)$ (l.341–357); four-velocity in BL then transformed to CKS (l.359–388).
+  - Resolution: base $N=250(a_{\rm per}/100R_g)(\frac{1+e}{1-e})(1/q)$, three refinement levels; effective resolution up to $19{,}000^2$ (l.471–477). X-ray 2.5–10 keV (l.470).
+- [OPEN] Horizon termination criterion for two holes (per-hole $r<r_h$ test and margin) is not stated.
+- [OPEN] Finite-difference stencil and step are not stated.
+- [OPEN] l.357 calls $\sigma_b$ the Boltzmann constant (it is the Stefan–Boltzmann constant); l.371 $\omega=1/(r^{3/2}+a^{1/2})$ (Keplerian form uses $a$, not $a^{1/2}$).

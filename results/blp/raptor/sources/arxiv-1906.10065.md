@@ -1,0 +1,20 @@
+# arxiv-1906.10065 — Davelaar, Olivares, Porth, Bronzwaer, Janssen, Roelofs, Mizuno, Fromm, Falcke & Rezzolla 2019, Modeling non-thermal emission from the jet-launching region of M 87 with adaptive mesh refinement (A&A 632, A2)
+- Mirror: ref-paper/arxiv-1906.10065/ (tex/main.tex; sha256(src.tar) 3b813abad1aae585bdd5185bd3a304e165f5529fed1be382ddabf97334b0cb26, PROVENANCE.md). Bib key: Davelaar2019.
+- Role: baseline (RAPTOR on BHAC block-AMR data in Cartesian Kerr–Schild; step control; AMR interpolation; κ-width prescription).
+- Declarations (literature-grounded; line numbers in tex/main.tex):
+  - CKS metric: $g_{\mu\nu}=\eta_{\mu\nu}+f\,l_\mu l_\nu$, $f=2r^3/(r^4+a^2z^2)$, $l_\nu=(1,\frac{rx+ay}{r^2+a^2},\frac{ry-ax}{r^2+a^2},\frac zr)$, $r^2=\tfrac12[R^2-a^2+\sqrt{(R^2-a^2)^2+4a^2z^2}]$, $R^2=x^2+y^2+z^2$; $g^{\mu\nu}=\eta^{\mu\nu}-f\,l^\mu l^\nu$, $l^\nu=(-1,\ldots)$ (l.409–451). Lengths in $r_g=GM/c^2$ (l.439–440).
+  - BHAC grid: base $96\times96\times192$, domain $x,y\in(-500,500)\,r_g$, $z\in(-1000,1000)\,r_g$, up to 8 levels with radius/angle-dependent caps (Table l.384–407; l.453–472).
+  - Camera: tetrad camera (Noble+2007; implementation Davelaar+2018 VR paper) built by Gram–Schmidt from trial vectors at $(r_c,\theta_c,\phi_c)$: $t_0=(1,0,0,0)$, $t_1=(0,-\sin\theta_c\cos\phi_c,-\sin\theta_c\sin\phi_c,-\cos\theta_c)$, $t_2=(0,-\sin\phi_c,\cos\phi_c)$, $t_3=(0,-\cos\theta_c\cos\phi_c,-\cos\theta_c\sin\phi_c,-\sin\theta_c)$; right-handed, observer facing the hole (l.480–507).
+  - Geodesics: RK4; connection coefficients from a finite-difference derivative of the metric (l.509–522).
+  - Step control: $d\lambda_{x,y,z}=\Delta/(|k^{x,y,z}|+\delta)$, $d\lambda_{\rm geod}=R/(|d\lambda_x|^{-1}+|d\lambda_y|^{-1}+|d\lambda_z|^{-1})$, $\Delta\approx0.01$ (l.524–541); grid step $d\lambda_{\rm grid}=dx/(n\,k_{\max})$, $k_{\max}=\max(k^x,k^y,k^z)$, $n\ge2$ steps per cell; $d\lambda=\min(d\lambda_{\rm geod},d\lambda_{\rm grid})$ (l.542–555).
+  - AMR data: BHAC block structure parsed and full AMR grid reconstructed; plasma variables sampled by nearest-neighbour (nearest cell) lookup (l.557–562).
+  - Units/electrons: $\mathcal M=1.8\times10^{29}$ g, $M=6.2\times10^9M_\odot$; $\rho_0=\mathcal M/\mathcal L^3$, $u_0=\rho_0c^2$, $B_0=c\sqrt{4\pi\rho_0}$; $n_e=n_p$ (l.566–589); $T_p/T_e=R_{\rm low}/(1+\beta^2)+R_{\rm high}\beta^2/(1+\beta^2)$, $\Theta_e=U(\hat\gamma-1)(m_p/m_e)/(\rho\,T_{\rm ratio})$ (l.592–606).
+  - κ distribution with width $w$: $w=\frac{\kappa-3}{\kappa}\Theta_e+\tilde\epsilon\frac{\kappa-3}{6\kappa}\frac{m_p}{m_e}\sigma$, $\tilde\epsilon=\epsilon\,\tfrac12(1+\tanh(r-r_{\rm inj}))$ (l.613–661); $p(\beta,\sigma)$ from Ball+2018: $p=A_p+B_p\tanh(C_p\beta)$, $A_p=1.8+0.7/\sqrt\sigma$, $B_p=3.7\sigma^{-0.19}$, $C_p=23.4\sigma^{0.26}$ (l.673–684).
+  - Masks: no emission where $\sigma>5$ or where floors were applied (l.698–703).
+  - Coefficients: thermal Leung+2011; κ Pandya+2016 (l.712–714).
+  - Imaging setup: $i=160^\circ$, FOV 1000 $r_g$, 2000² pixels (l.889–894).
+- [OPEN] $t_2$ (l.501) is printed with three components; $t_3$ (l.502) with last component $-\sin\theta_c$ is not orthogonal to $t_1$ (orthogonality requires $+\sin\theta_c$). Resolve against code.
+- [OPEN] Factor $R$ in $d\lambda_{\rm geod}$ (l.535) is presumably the CKS radius; $k_{\max}$ (l.547) is written without absolute values.
+- [OPEN] Finite-difference stencil order and step for $\partial g$ are not stated here (Prather+2023 l.1235: 4th-order centred).
+- [OPEN] Horizon/termination radius in CKS is not stated.
+- Code differs from the stated nearest-neighbour sampling: model/bhac/model.c:878-996 interpolates trilinearly inside the leaf with weights measured from the cell's lower face while data sit at cell centres (model.c:312), a half-cell offset (design.md §1.4).

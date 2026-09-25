@@ -1,0 +1,13 @@
+# arxiv-1811.08369 — Davelaar, Bronzwaer, Kok, Younsi, Mościbrodzka & Falcke 2018, Observing supermassive black holes in virtual reality (Computational Astrophysics and Cosmology 5, 1)
+- Mirror: ref-paper/arxiv-1811.08369/ (tex/paper.tex; sha256(src.tar) 823b23303d4c040348a21d3ad5893be450b2664b4afff2193c565a377da16e40, PROVENANCE.md). Bib key: Davelaar2018VR.
+- Role: reference (RAPTOR covariant tetrad camera for observers at finite distance / in motion; backward transfer with background term).
+- Declarations (literature-grounded; line numbers in tex/paper.tex):
+  - Original RAPTOR camera uses Bardeen impact parameters and applies to distant observers only (l.380–382); extended to an orthonormal tetrad (Noble+2007) for $4\pi$ cameras (l.383–385).
+  - Tetrad-frame wave vector for direction $(\theta,\phi)$: $k^{(0)}=1$, $k^{(1)}=-\cos\phi\cos\theta$, $k^{(2)}=-\sin\theta$, $k^{(3)}=-\sin\phi\cos\theta$ (l.398–407).
+  - Tetrad from Gram–Schmidt with $t_{(0)}=u^\mu_{\rm obs}$ (observer four-velocity, carries Doppler effects), $t_{(1)}=(0,-1,0,0)$, $t_{(2)}=(0,0,1,0)$, $t_{(3)}=(0,0,0,1)$ in spherical-type coordinates; right-handed, observer facing the hole (l.411–428); $k^\mu=e^\mu_{(a)}k^{(a)}$ (l.431–435).
+  - Geodesics: RK4; transfer by the semi-analytic backward scheme of RAPTOR I (l.741–746).
+  - Backward transfer with background: $I_{\nu,\rm obs}/\nu^3_{\rm obs}=(I_{\nu,\infty}/\nu^3_\infty)e^{-\tau_{\nu,\rm obs}(\lambda_\infty)}+\int_{\lambda_{\rm obs}}^{\lambda_\infty}(j_\nu/\nu^2)e^{-\tau_{\nu,\rm obs}}d\lambda'$, $\tau_{\nu,\rm obs}=\int_{\lambda_{\rm obs}}^{\lambda}\nu\alpha_\nu d\lambda'$ (l.757–775); background only for rays leaving the volume; celestial map $x=\lfloor\hat\phi W/2\pi\rfloor$, $y=\lfloor\hat\theta H/\pi\rfloor$ (l.795–811).
+  - Model: Sgr A* $M=4.0\times10^6M_\odot$, $a=0.9375$, BHAC $256\times128\times128$, $r_{\rm out}=1000\,r_g$; Mościbrodzka+2014 electron model, thermal eDF (l.827–845); frequencies 22, 43, 86, 230 GHz (l.849–850).
+  - GPU: CPU/GPU via NVIDIA OpenACC (l.355–357); movie 8600 frames at 2000×1000 px (l.880). No timing numbers reported.
+- [OPEN] The spherical-coordinate trial vectors $t_{(1..3)}$ (l.422–424) are given without the coordinate system (BL vs MKS); the sign choice $t_{(1)}=-\hat r$ fixes the viewing direction.
+- [OPEN] $(\theta,\phi)$ in l.402–404 are camera look angles, not BL angles; their mapping to image pixels (uniform grid, l.398) is not given explicitly.

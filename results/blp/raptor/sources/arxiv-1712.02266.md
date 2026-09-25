@@ -1,0 +1,14 @@
+# arxiv-1712.02266 — Davelaar, Mościbrodzka, Bronzwaer & Falcke 2018, General relativistic magnetohydrodynamical κ-jet models for Sgr A* (A&A 612, A34)
+- Mirror: ref-paper/arxiv-1712.02266/ (tex/aa.tex; sha256(src.tar) 04aaa77d506fc2b9dd82d66f8236807e0cbee151014fe860f3a98f7c39b5a9b7, PROVENANCE.md). Bib key: Davelaar2018kappa.
+- Role: reference (RAPTOR κ-distribution emission, jet-sheath/spine masking, polar-logarithmic camera).
+- Declarations (literature-grounded; line numbers in tex/aa.tex):
+  - Unit scaling: $\mathcal L=GM/c^2$, $\mathcal T=GM/c^3$, $\mathcal M$ free; $\dot M=\dot M_{\rm sim}\mathcal M\mathcal T^{-1}$; $\rho_0=\mathcal M/\mathcal L^3$, $u_0=\rho_0c^2$, $B_0=c\sqrt{4\pi\rho_0}$ (l.276–284). Sgr A* runs: $\mathcal M=10^{21}$ g (l.461).
+  - Regions: disk (thermal), jet sheath where Bernoulli $Be=-hu_t>1.02$ (κ electrons), jet spine $\sigma=B^2/\rho>1$ excluded (l.288–298).
+  - Electron temperature: $T_p/T_e=R_{\rm low}/(1+\beta^2)+R_{\rm high}\beta^2/(1+\beta^2)$, $\beta=P_{\rm gas}/P_{\rm mag}$, $P_{\rm mag}=B^2/2$; $R_{\rm low}=1$, $R_{\rm high}=25$ (l.313–323).
+  - κ distribution: $dn_e/d\gamma=N\gamma\sqrt{\gamma^2-1}\,(1+\frac{\gamma-1}{\kappa\Theta_e})^{-(\kappa+1)}$, $\kappa=p+1$, optically thin $\alpha=(2-\kappa)/2$ (l.329–348); thermal limit $\kappa\to\infty$ (l.195–199).
+  - Emissivity/absorptivity fits for thermal and κ: Pandya, Zhang, Chandra & Gammie 2016 (ApJ 822, 34) (l.350–352; aa.bbl l.275–277).
+  - Polar logarithmic camera: $\alpha=r\cos\theta$, $\beta=r\sin\theta$, $r=\exp(\log(r_{\rm cam})\,i/N_r)-1$, $\theta=2\pi j/N_\theta$; pixel area $dA=r\,dr\,d\theta$, $dr=\frac{\log r_{\rm cam}}{N_r}\exp(\log(r_{\rm cam})\,i/N_r)$, $d\theta=2\pi/N_\theta$ (App. l.674–692); FOV 2000 $r_g$; converged SED at $512(\log r)\times256(\theta)$, $\mathcal O(1)\%$ vs 1024² (l.354–365, l.698).
+  - Geodesics and transfer computed simultaneously, same FOV at every frequency (l.356–357).
+- [OPEN] Which Pandya+2016 fits (emissivity only vs absorptivity) and which κ-width prescription RAPTOR uses in this paper are not spelled out; 1906.10065 l.624–656 gives the later $w$ prescription.
+- [OPEN] $\log$ base in the camera formula is not stated (natural log assumed from $\exp$).
+- [OPEN] l.195 prints $e^{-(\gamma-1)/\Theta^2}$ for the thermal limit; the distribution at l.329–331 implies $e^{-(\gamma-1)/\Theta}$.
