@@ -1,0 +1,26 @@
+{
+  "s093": {
+    "an": {
+      "class_counts_blp_C80": [21, 8, 1021, 0, 0],
+      "class_counts_raptor_C80": [21, 8, 1021, 0, 0],
+      "mismatches_C80": []
+    },
+    "fd": {
+      "class_counts_blp_C80": [21, 8, 1021, 0, 0],
+      "class_counts_raptor_C80": [21, 8, 1021, 0, 0],
+      "mismatches_C80": []
+    }
+  },
+  "s122r": {
+    "an": {
+      "class_counts_blp_C80": [8, 9, 1033, 0, 0],
+      "class_counts_raptor_C80": [8, 9, 1033, 0, 0],
+      "mismatches_C80": []
+    },
+    "fd": {
+      "class_counts_blp_C80": [8, 9, 1033, 0, 0],
+      "class_counts_raptor_C80": [8, 9, 1033, 0, 0],
+      "mismatches_C80": []
+    }
+  }
+}

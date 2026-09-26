@@ -41,7 +41,7 @@ def extent(npix):
     return [h, -h, -h, h]
 
 
-def img_panels(run, inc, C, npix, out, met):
+def img_panels(run, inc, C, npix, out, met, label="s455"):
     B = rc.load_blp(run, inc, C, npix)
     A = rc.load_raptor(run, "ra", inc, C, npix)
     Bb = rc.load_raptor(run, "rb", inc, C, npix)
@@ -98,12 +98,12 @@ def img_panels(run, inc, C, npix, out, met):
         ax.set_xlabel("RA [µas]")
     for c, t in enumerate(["I", "|P|", "EVPA", "V"]):
         axs[0, c].set_title(t)
-    fig.suptitle(f"s455, i = {inc}°, 230 GHz, {npix}², C = {C}: BlackLightPlus and RAPTOR (fork blp-bbh)")
+    fig.suptitle(f"{label}, i = {inc}°, 230 GHz, {npix}², C = {C}: BlackLightPlus and RAPTOR (fork blp-bbh)")
     fig.savefig(out, dpi=90)
     plt.close(fig)
 
 
-def convergence(met, out):
+def convergence(met, out, label="s455"):
     incs = sorted(met["blp"].keys(), key=int)
     fig, axs = plt.subplots(len(incs), 3, figsize=(11, 3.1 * len(incs)), constrained_layout=True)
     axs = np.atleast_2d(axs)
@@ -136,7 +136,7 @@ def convergence(met, out):
                 ax.set_ylabel("normalized L1")
     h, l = axs[0, 0].get_legend_handles_labels()
     fig.legend(h, l, loc="outside lower center", ncol=4, frameon=False)
-    fig.suptitle("s455 480²: self-convergence (against each code's finest level) and code-to-code difference")
+    fig.suptitle(f"{label} 480²: self-convergence (against each code's finest level) and code-to-code difference")
     fig.savefig(out, dpi=110)
     plt.close(fig)
 

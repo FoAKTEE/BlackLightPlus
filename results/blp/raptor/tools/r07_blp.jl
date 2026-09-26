@@ -15,8 +15,16 @@
 #   e.g.  r07_blp.jl out/raptor/R07/blp 17,60,90 40,80,160,320 480 1
 # `repeats` > 1 repeats every render and keeps the best wall per phase (R08 timing);
 # a 24^2 warm-up render runs first so that the timed phases exclude compilation.
+#
+# R09: R07_SNAP selects the dump (.bin or .athdf) and R07_MASS_SCALE its mass scale. Spins
+# follow figures/fig_eht_bbh.jl: the header a_A (units of the total mass) along +z
+# (th_a = 0) or -z (th_a = pi); |a_A| > m_A is imaged as chi = |a_A| (a_used = chi m_A).
+# Every record also holds the sampled-state safety statistics (outside the timed phases):
+# the smallest r_A - r_h,A over all stored states and the number of stored states with
+# g^tt >= 0 (where primitive_four_vectors has no lapse).
 
 using StaticArrays, Printf, Dates, Statistics, LinearAlgebra
+using HDF5
 using BlackLightPlus
 const BLP = BlackLightPlus
 const RAD = BLP.Radiation
@@ -50,18 +58,26 @@ nmax_for(C) = round(Int, 50 * C)
 
 # ---------------------------------------------------------------- binary (fig_eht_bbh.jl)
 function read_header(path)
-    tt = NaN; text = ""
-    open(path, "r") do io
-        H = -1
-        while H < 0
-            l = readline(io)
-            startswith(l, "  time=") && (tt = parse(Float64, strip(l[8:end])))
-            startswith(l, "  header offset=") && (H = parse(Int, strip(l[17:end])))
+    tt = NaN; lines = String[]
+    if endswith(path, ".bin")
+        text = ""
+        open(path, "r") do io
+            H = -1
+            while H < 0
+                l = readline(io)
+                startswith(l, "  time=") && (tt = parse(Float64, strip(l[8:end])))
+                startswith(l, "  header offset=") && (H = parse(Int, strip(l[17:end])))
+            end
+            text = String(read(io, H))
         end
-        text = String(read(io, H))
+        lines = split(text, '\n')
+    else
+        tt, lines = h5open(path, "r") do h
+            Float64(read_attribute(h, "Time")), String.(read_attribute(h, "Header"))
+        end
     end
     par = Dict{String,Dict{String,String}}(); blk = ""
-    for l in split(text, '\n')
+    for l in lines
         s = strip(l)
         if startswith(s, "<") && endswith(s, ">")
             blk = s[2:end-1]; par[blk] = get(par, blk, Dict{String,String}())
@@ -86,9 +102,17 @@ function binary_setup(path)
     m1 = 1 / (1 + q); m2 = q / (1 + q)
     r1 = q / (1 + q) * sep; r2 = -sep / (1 + q)
     C1 = (r1 * cos(phi), r1 * sin(phi), 0.0); C2 = (r2 * cos(phi), r2 * sin(phi), 0.0)
-    (a1 == 0 && a2 == 0) || error("R07 expects the zero-spin s455 dump")
-    st = SuperposedKerrSchild([m1, m2], [0.0, 0.0], [C1, C2])
-    return (st = st, t = t, phi0 = phi, masses = (m1, m2), centers = (C1, C2), gamma = gam, sep = sep)
+    th1 = _num(par, "problem", "th_a1", 0.0); th2 = _num(par, "problem", "th_a2", 0.0)
+    function spin_used(a, th, m)             # figures/fig_eht_bbh.jl binary_setup
+        s = abs(th) < 1e-12 ? 1.0 : abs(th - pi) < 1e-12 ? -1.0 : error("tilted spin th_a = $th")
+        a == 0 && return 0.0
+        abs(a) <= m && return s * abs(a)
+        return s * min(abs(a), 1.0) * m
+    end
+    au = (spin_used(a1, th1, m1), spin_used(a2, th2, m2))
+    st = SuperposedKerrSchild([m1, m2], [au...], [C1, C2])
+    return (st = st, t = t, phi0 = phi, masses = (m1, m2), centers = (C1, C2), gamma = gam, sep = sep,
+            a_header = (a1, a2), a_used = au)
 end
 
 function write_bbh_in(path, bs; C = 80.0)
@@ -96,7 +120,7 @@ function write_bbh_in(path, bs; C = 80.0)
     open(path, "w") do io
         println(io, "nholes 2")
         println(io, "mass $(repr(bs.masses[1])) $(repr(bs.masses[2]))")
-        println(io, "spin 0.0 0.0")
+        println(io, "spin $(repr(bs.a_used[1])) $(repr(bs.a_used[2]))")
         println(io, "center1 $(repr(c1[1])) $(repr(c1[2])) $(repr(c1[3]))")
         println(io, "center2 $(repr(c2[1])) $(repr(c2[2])) $(repr(c2[3]))")
         println(io, "C $(repr(C))")
@@ -157,21 +181,44 @@ function render_once(bs, sampler, scc, inc, C, npix)
     end
     cls = [end_class(bs.st, s[1], C) for s in states]   # states[1] is the terminal state
     nsamp = sum(length, states)
+    safety = sample_safety(bs.st, states)
     return img, reshape(Float64.(cls), npix, npix),
-           Dict("setup" => t1 - t0, "trace" => t2 - t1, "transfer" => t3 - t2), nsamp
+           Dict("setup" => t1 - t0, "trace" => t2 - t1, "transfer" => t3 - t2), nsamp, safety
+end
+
+"Smallest r_A - r_h,A and r_A over every stored state, and the stored states with g^tt >= 0."
+function sample_safety(st, states)
+    n = length(states)
+    gap = fill(Inf, n); rmin = fill(Inf, n); npos = zeros(Int, n)
+    Threads.@threads :dynamic for i in 1:n
+        for y in states[i]
+            all(isfinite, y) || continue
+            x = SVector(y[1], y[2], y[3], y[4])
+            for A in eachindex(st.mass)
+                r = GEO.ks_radius_hole(st, x, A)
+                rmin[i] = min(rmin[i], r)
+                gap[i] = min(gap[i], r - GEO.horizon_radius_hole(st, A))
+            end
+            GEO.inverse_metric(st, x)[1, 1] >= 0 && (npos[i] += 1)
+        end
+    end
+    return Dict("min_horizon_gap" => minimum(gap), "min_rA" => minimum(rmin),
+                "states_gtt_nonneg" => sum(npos))
 end
 
 function main()
     mkpath(OUT)
     t0 = time()
     bs = binary_setup(SNAP)
-    snap = athenak_bin_snapshot(SNAP; gamma = bs.gamma)
+    snap = endswith(SNAP, ".bin") ? athenak_bin_snapshot(SNAP; gamma = bs.gamma) :
+           SIM.AthenaKSnapshot(SNAP; gamma = bs.gamma)
     load_s = time() - t0
     write_bbh_in(joinpath(OUT, "bbh.in"), bs)
     sampler = make_sampler(snap, bs.gamma)
     scc = scc_for(bs.gamma)
-    @printf("BLP | threads %d | load %.2f s | phi0 %.10f | centres %s %s | gamma %.12g\n",
-            Threads.nthreads(), load_s, bs.phi0, string(bs.centers[1]), string(bs.centers[2]), bs.gamma)
+    @printf("BLP | threads %d | load %.2f s | phi0 %.10f | centres %s %s | a_used %s | gamma %.12g | maxrss %.1f GB\n",
+            Threads.nthreads(), load_s, bs.phi0, string(bs.centers[1]), string(bs.centers[2]),
+            string(bs.a_used), bs.gamma, Sys.maxrss() / 2^30)
     tw = time()
     render_once(bs, sampler, scc, 17.0, 80.0, 24)            # compilation
     jit_s = time() - tw
@@ -180,11 +227,11 @@ function main()
     for npix in NPIXS, inc in INCS, C in CS
         best = Dict("setup" => Inf, "trace" => Inf, "transfer" => Inf, "output" => Inf)
         walls = Float64[]
-        local img, cls, nsamp
+        local img, cls, nsamp, safety
         for rep in 1:REPEATS
             GC.gc()
             tr = time()
-            img, cls, tim, nsamp = render_once(bs, sampler, scc, inc, C, npix)
+            img, cls, tim, nsamp, safety = render_once(bs, sampler, scc, inc, C, npix)
             dir = joinpath(OUT, @sprintf("blp_i%02d_C%d_n%d", round(Int, inc), round(Int, C), npix))
             to = time()
             mkpath(dir)
@@ -209,6 +256,8 @@ function main()
                    "M_bh_g" => M_BH, "D_cm" => D_CM, "nu_Hz" => NU, "R_low" => R_LOW,
                    "R_high" => R_HIGH, "sigma_cut" => SIGMA_CUT, "gamma" => bs.gamma,
                    "phi0_rad" => bs.phi0, "centers" => [collect(c) for c in bs.centers],
+                   "a_header" => collect(bs.a_header), "a_used" => collect(bs.a_used),
+                   "sample_safety" => safety,
                    "flux_IQUV_Jy" => flux, "threads" => Threads.nthreads(),
                    "repeats" => REPEATS, "walls_s" => walls,
                    "timing_best_s" => merge(best, Dict("load" => load_s, "jit_warmup" => jit_s,
@@ -219,9 +268,10 @@ function main()
                    "classes_cap1_cap2_esc_nmax_nonfinite" => [count(==(k), cls) for k in 1:5],
                    "when" => string(Dates.now()))
         write_json(joinpath(dir, "record.json"), rec)
-        @printf("i=%2d C=%3d n=%d: F %.5f Jy (Q %+.5f U %+.5f V %+.5f) | setup %.2f trace %.2f transfer %.2f output %.2f s | %.0f rays/s | classes %s\n",
+        @printf("i=%2d C=%3d n=%d: F %.5f Jy (Q %+.5f U %+.5f V %+.5f) | setup %.2f trace %.2f transfer %.2f output %.2f s | %.0f rays/s | classes %s | min r_A-r_h %.2e, g^tt>=0 states %d\n",
                 inc, C, npix, flux..., best["setup"], best["trace"], best["transfer"], best["output"],
-                nrays / wall, string(rec["classes_cap1_cap2_esc_nmax_nonfinite"]))
+                nrays / wall, string(rec["classes_cap1_cap2_esc_nmax_nonfinite"]),
+                safety["min_horizon_gap"], safety["states_gtt_nonneg"])
         flush(stdout)
     end
 end

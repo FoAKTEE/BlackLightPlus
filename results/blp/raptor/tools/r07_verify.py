@@ -1,5 +1,8 @@
 """r07_verify.py — checks of the reduced R07 re-run (r07_verify.sh) and of the committed
 evidence/R07/metrics.json. Usage: python3 r07_verify.py <rundir> <npix> <metrics.json>
+Optional 4th argument: the leg (b) tolerance (default 1e-5, the s455 value); R09 passes the
+spinning-snapshot value and then also requires leg (b)'s L1(|P|) at i = 17 to fall by >= 4x
+from C = 80 to C = 160 (the RK4 truncation difference of the two geodesic forms).
 Exit 0 iff every check passes; prints one line per check."""
 import json
 import os
@@ -11,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import r07_compare as rc  # noqa: E402
 
 run, npix, mpath = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+TOL = float(sys.argv[4]) if len(sys.argv) > 4 else 1e-5
 ok = True
 
 
@@ -21,14 +25,19 @@ def check(name, cond, detail=""):
 
 
 rc.CENTERS = rc.load_blp(run, 17, 80, npix)["record"]["centers"]
+l1p_b = {}
 for inc, Cs in ((17, (80, 160)), (60, (80,)), (90, (80,))):
     for C in Cs:
         B = rc.load_blp(run, inc, C, npix)
         R = rc.load_raptor(run, "rb", inc, C, npix)
         m, _, _ = rc.pair_metrics(R, B, inc, npix)
         worst = max(m["l1_I"], m["l1_P"], m["l1_V"], m["nmse_I"], m["nmse_P"], m["nmse_V"])
-        check(f"leg b i={inc} C={C}", worst <= 1e-5 and m["class_agreement"] == 1.0,
+        if inc == 17:
+            l1p_b[C] = m["l1_P"]
+        check(f"leg b i={inc} C={C}", worst <= TOL and m["class_agreement"] == 1.0,
               f"max(L1, NMSE of I, |P|, V) {worst:.2e}, class agreement {m['class_agreement']}")
+if len(sys.argv) > 4:
+    check("leg b L1(|P|) falls with C (i=17)", l1p_b[160] <= l1p_b[80] / 4, f"C=80 {l1p_b[80]:.2e}, C=160 {l1p_b[160]:.2e}")
 # leg a: native-step discretisation shrinks toward leg b with C
 d = []
 for C in (80, 160):

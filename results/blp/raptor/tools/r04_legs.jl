@@ -3,6 +3,8 @@
 #   kerr : one hole, m = 1, a = 0.9375, at the origin (SKS with N = 1)
 #   s455 : m = 0.5 + 0.5, a = 0, C1 = -C2 = (12.19120680, -2.76124551, 0)   (design.md §2)
 #   s122 : m = 0.5 + 0.5, a = 0.4 along +z, C1 = -C2 = (0.32159304, 7.99353351, 0)
+#   s093 : m = 0.5 + 0.5, a = 0.4 along +z, C1 = -C2 = (-10.42584453, 6.89577884, 0)  (R09)
+#   s122r: s122 with both spins along -z (a = -0.4; R09 spin-orientation leg)
 
 using BlackLightPlus, StaticArrays
 using BlackLightPlus.Geodesics: metric, inverse_metric, christoffel, ks_radius, KerrSchildCartesian
@@ -14,6 +16,10 @@ const LEGS = Dict(
                c = [(12.19120680, -2.76124551, 0.0), (-12.19120680, 2.76124551, 0.0)]),
     "s122" => (m = [0.5, 0.5], a = [0.4, 0.4],
                c = [(0.32159304, 7.99353351, 0.0), (-0.32159304, -7.99353351, 0.0)]),
+    "s093" => (m = [0.5, 0.5], a = [0.4, 0.4],
+               c = [(-10.42584453, 6.89577884, 0.0), (10.42584453, -6.89577884, 0.0)]),
+    "s122r" => (m = [0.5, 0.5], a = [-0.4, -0.4],
+                c = [(0.32159304, 7.99353351, 0.0), (-0.32159304, -7.99353351, 0.0)]),
 )
 
 leg_spacetime(leg) = (L = LEGS[leg]; SuperposedKerrSchild(L.m, L.a, L.c))

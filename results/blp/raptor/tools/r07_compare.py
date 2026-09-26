@@ -26,7 +26,8 @@ Acceptance (dag.md R07), evaluated at C = 160 and at the finest level of each le
   |dF/F| <= 1% (<= 0.5% after Richardson); L1(I) <= 3%; NMSE(I) <= 1e-3;
   |d m_net| <= 0.01; |d <|m|>| <= 0.01; |d EVPA_net| <= 2 deg; |d v_net| <= 0.002;
   per-hole ring diameter within 0.5 uas (native and 20 uas blur); |d f_C| <= 0.02;
-  i = 90: the pair is flagged unresolved in both codes.
+  i = 90: the pair is flagged unresolved in both codes (projected separation < 8 M, s455),
+  else both codes flag it alike (R09).
 A threshold miss that the attribution rule classes as discretisation is reported as such.
 
 Usage: python3 r07_compare.py <rundir> <out.json> [--incs 17,60,90] [--npix 480]
@@ -185,6 +186,8 @@ def pair_metrics(R, B, inc, npix, oR=None, oB=None):
     m["class_agreement"] = float((cR == cB).mean())
     m["class_mismatch_pixels"] = int((cR != cB).sum())
     m["resolved_pair"] = [oR["resolved_pair"], oB["resolved_pair"]]
+    p1, p2 = (project(c, inc) for c in CENTERS)
+    m["projected_separation_M"] = float(np.hypot(p1[0] - p2[0], p1[1] - p2[1]))
     return m, oR, oB
 
 
@@ -201,7 +204,10 @@ def gate(m, inc):
             g[f"hole{k}_{lab}_diameter"] = abs(m[f"d_hole{k}_{lab}_diameter_uas"]) <= THRESH["ring_diameter_uas"]
             g[f"hole{k}_{lab}_f_C"] = abs(m[f"d_hole{k}_{lab}_f_C"]) <= THRESH["f_C"]
     if inc == 90:
-        g["unresolved_both"] = (not m["resolved_pair"][0]) and (not m["resolved_pair"][1])
+        if m["projected_separation_M"] < peb.PER_HOLE_R_M:
+            g["unresolved_both"] = (not m["resolved_pair"][0]) and (not m["resolved_pair"][1])
+        else:      # R09: pairs projected wider than 8 M (s122, s093): the codes flag them alike
+            g["pair_flag_agrees"] = m["resolved_pair"][0] == m["resolved_pair"][1]
     return g
 
 
@@ -262,7 +268,7 @@ def attribute(m, g, epsR, epsB):
             val[f"hole{k}_{lab}_diameter"] = abs(m[f"d_hole{k}_{lab}_diameter_uas"])
             val[f"hole{k}_{lab}_f_C"] = abs(m[f"d_hole{k}_{lab}_f_C"])
     for k, ok in g.items():
-        if ok or k == "unresolved_both":
+        if ok or k in ("unresolved_both", "pair_flag_agrees"):
             continue
         tol = 2 * max(epsR.get(k, 0.0), epsB.get(k, 0.0))
         out[k] = {"difference": val[k], "eps_raptor": epsR.get(k), "eps_blp": epsB.get(k),

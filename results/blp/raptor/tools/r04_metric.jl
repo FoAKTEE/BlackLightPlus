@@ -3,7 +3,7 @@
 # forward-AD Christoffels, at 1e4 points per leg; the upstream CKS Kerr metric
 # (regularised, 4th-order FD with h ~ |x^i|) is reported against the same AD reference.
 #
-# Usage: julia --project=. r04_metric.jl <bindir> <outjson>
+# Usage: julia --project=. r04_metric.jl <bindir> <outjson> [legs=kerr,s455,s122]
 #   <bindir> holds metric_dump (SKS) and metric_dump_cks (upstream CKS, a = 0.9375)
 # Exit 0 iff every SKS leg meets: max|g - g_BLP| <= 1e-14, max|g g^-1 - I| <= 1e-13,
 # Gamma(M2b) vs AD <= 1e-12 and Gamma(M2a) vs AD <= 1e-7 (per point, max|dGamma|/max|Gamma|).
@@ -70,7 +70,8 @@ end
 res = Dict{String,Any}()
 pass = true
 tmp = mktempdir()
-for leg in ("kerr", "s455", "s122")
+const LEGSEL = length(ARGS) >= 3 ? split(ARGS[3], ",") : ["kerr", "s455", "s122"]
+for leg in LEGSEL
     st = leg_spacetime(leg)
     rng = MersenneTwister(hash(leg))
     pts = sample_points(st, rng; Lbox = leg == "kerr" ? 20.0 : 40.0)
