@@ -7,6 +7,33 @@ each leg running sequentially and exclusively. Imaging throughput is rays/s
 (= pixels/wall); Monte Carlo throughput counts tracked superphotons/s
 (primaries plus all scattered children).
 
+## Status of the GPU numbers
+
+The GPU rows below were measured on the code released as v0.1.0. Since then the
+GPU drivers run on the persistent device pool with device-side camera rays, a
+cost-ordered queue and streaming adaptive refinement; the kernels call the CPU
+physics and the shared reverse marches; and the Monte Carlo kernels use
+ancestry-keyed streams with exact accumulation ([Method](@ref "Multi-device execution")).
+These changes are verified for correctness on the KernelAbstractions CPU
+backend and by the offline register/stack/spill audit, but their GPU throughput
+has not been measured, so the GPU rows describe v0.1.0, not the current code.
+The acceptance runs, on a host with two exclusive A100s:
+
+```sh
+# baseline at the pre-pool commit, from a worktree of 3736b32
+git worktree add /tmp/base 3736b32 && cd /tmp/base
+BLP_OUT=<repo>/results/blp/multigpu/baseline_3736b32.json \
+    julia --project=. -t 8 <repo>/bench/bench_multigpu.jl
+# current code
+julia --project=. -t 8 bench/bench_multigpu.jl
+julia --project=. bench/kernel_audit.jl --check
+```
+
+Pass criteria: two-device speed-up $T_1/T_2\ge1.90$ on 768² full frames,
+$\ge1.85$ end to end on the AMR driver and for Monte Carlo with scattering,
+$\ge1.90$ for thin Monte Carlo; single-GPU throughput within 2% of the
+baseline on every leg; one- and two-device outputs bitwise equal.
+
 ## Headline results
 
 | path | measurement |
@@ -61,9 +88,12 @@ threads at high resolution. Single-GPU fused throughput at the same deck:
   correlation > 0.999. With native device AMR sampling, polarized agreement is
   corr(I,Q,U,V) = (1.0, 0.99999, 0.99998, 0.99999).
 - GPU vs CPU parity is bit-for-bit wherever the same algorithm runs on both
-  sides: the device AMR fluid sampler and the Monte Carlo replay of
-  matched RNG streams
-  (spectrum ratio 1.000000, worst bin 1.1×10⁻¹⁵).
+  sides: the device AMR fluid sampler (49200/49200 probes). The v0.1.0 Monte
+  Carlo replay of matched RNG streams gave a spectrum ratio of 1.000000 and a
+  worst bin of 1.1×10⁻¹⁵ on the thin kernel; with ancestry-keyed streams and
+  exact accumulation the device kernels equal the CPU drivers bitwise on the
+  KernelAbstractions CPU backend, and the CUDA replay is part of the pending
+  acceptance runs.
 - The analytic GPU kernel matches the CPU elliptic tracer per pixel to
   round-off (median relative difference ≤ 2.5×10⁻¹⁶).
 - Compton scattering unbiasedness (spawned weight / incident scattering loss):

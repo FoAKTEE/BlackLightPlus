@@ -2,9 +2,8 @@
 
 The GPU path collapses geodesic integration, fluid sampling, and radiative
 transfer into a single kernel, one ray per thread, storing no trajectory — only
-the image returns to the host. It reaches roughly 130× an 8-thread CPU render;
-see [Benchmarks](@ref) for the measured numbers and the machine they were taken
-on.
+the image returns to the host. [Benchmarks](@ref) lists the measured
+throughput, the machine, and which numbers predate the device pool.
 
 ## Why the drivers are included, not imported
 
@@ -68,7 +67,9 @@ frame's trip counts. With `precision = :mixed` the near-ring pixels that need fp
 the same queue ahead of the fp32 pixels. Each chunk sends only its pixel indices; the
 camera rays are generated on the device by the same `camera_ray` function as the CPU
 `camera_rays`. Every ray writes its own pixel, so the
-image is bitwise identical for any device count and chunking. [Benchmarks](@ref) lists the measured multi-GPU scaling.
+image is bitwise identical for any device count and chunking. The design is in
+[Method](@ref "Multi-device execution"); its GPU scaling is not yet measured
+([Benchmarks](@ref)).
 
 A snapshot or `UniformFluidGrid` passed to a driver is uploaded once per pool and reused
 by later calls with the same object; do not modify it in place between renders (upload
