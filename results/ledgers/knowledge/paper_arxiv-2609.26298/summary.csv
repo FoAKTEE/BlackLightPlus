@@ -102,3 +102,30 @@ ok   figures/out/z4c_phasespace/deck.json git=5c30761a39e996fb5022f3f627c2b42d5a
 ok   fig_polarized and pol_hires after 6031897
 OK: figures 2-4 built from post-706b55f runs
 ",2026-09-24T03:54:10+00:00
+2026-09-26T03:36:33.833183+00:00,arxiv-2609.26298,docs-final,1,docs-final,32d89ca,software,solid,"Final documentation of the method paper's code: CHANGELOG [Unreleased] with one Fixed entry per bug (symptom, <sha>^:path:line cause, fix commit, regression test line, regenerated outputs) and the API changes; method.md conventions (p=-k backward rays, IEEE/IAU Stokes, camera basis), shared march termination with its omitted-intensity bound, transported-frame reverse march with j_P<=j_I and alpha_P<=alpha_I admissibility and one physics source, ancestry-keyed MC streams with exact accumulation; stale polarized examples re-rendered after 2fab069 (torus_IQUV sum I -0.08%, bbh_i90 flux -0.31%, LP 0.8434->0.8430; pol_hires, paper fig 3 and eht_bbh unchanged to <=2.3e-10); docs build passes (warnonly=false, checkdocs=:exports, doctests)",CHANGELOG.md,"[""manuscript"", ""figures-regen"", ""conventions""]",docs/src/method.md,worker,6d18b25df1cc3d8d43a364403ed8ded595e0b213cae90a2b8268474af9b22fb2,"Commits 3a6595a (figures), 140f4ab (regen check requires 2fab069), 9abde71 and 2a3fa8c (API pages; the docs build failed on 26 missing docstrings before), a384e17 (method), 365beea (validation page), 5094211 (changelog), 71a5a3c (docs_check.py), e929793 (conventions.md); paper 0cf7f79 (fig_polarized re-plotted, CAPTIONS provenance). 13 test files are not in test/runtests.jl; include lines in docs/src/contributing.md.",row 45bb6b0656c64023b30896b84ced747393f824175144f8ea4de5b5fec3d86d04,45bb6b0656c64023b30896b84ced747393f824175144f8ea4de5b5fec3d86d04,,python3 results/blp/docs_check.py && python3 results/blp/paper_arxiv-2609.26298/evidence/check_figures_regen.py && python3 results/blp/paper_arxiv-2609.26298/evidence/check_manuscript.py && python3 results/blp/paper_arxiv-2609.26298/evidence/check_conventions.py,900,python3 results/blp/docs_check.py && python3 results/blp/paper_arxiv-2609.26298/evidence/check_figures_regen.py && python3 results/blp/paper_arxiv-2609.26298/evidence/check_manuscript.py && python3 results/blp/paper_arxiv-2609.26298/evidence/check_conventions.py,1.551,0,51aa54b1c2b63eaa60b43d88bd80488bc6cfff42087ef39f9e60dd6219ae7ec1,"checked: sha 68, parent_loc 30, test_loc 24, raptor_loc 32, path 113, nav 21
+OK
+ok   fig_analytic.pdf 42 KiB
+ok   fig_performance.pdf 12 KiB
+ok   fig_pipeline.pdf 25 KiB
+ok   fig_polarized.pdf 176 KiB
+ok   fig_z4c.pdf 153 KiB
+42 literals in data block, 0 not in benchmarks.md
+ok   newer than 706b55f paper/figures/fig_analytic.pdf
+ok   newer than 706b55f paper/figures/fig_polarized.pdf
+ok   newer than 706b55f paper/figures/fig_z4c.pdf
+ok   newer than 706b55f figures/examples/analytic_disk_I.png
+ok   newer than 706b55f figures/examples/bbh_i90_pol_amr.png
+ok   newer than 706b55f figures/examples/pol_hires.png
+ok   newer than 706b55f figures/examples/torus_IQUV.png
+ok   newer than 706b55f figures/examples/z4c_phasespace_i30.png
+ok   figures/out/examples_meta.txt git=bb85b213b9e757fb8ce4e314b4c451626e387c5b
+ok   figures/out/pol_hires/meta.txt git=bb85b213b9e757fb8ce4e314b4c451626e387c5b
+ok   figures/out/z4c_phasespace/deck.json git=5c30761a39e996fb5022f3f627c2b42d5a9d1712
+ok   fig_polarized and pol_hires after 6031897
+ok   figures/out/pol_hires/meta.txt after 2fab069 (git=bb85b213b9e757fb8ce4e314b4c451626e387c5b)
+ok   figures/out/examples_meta.txt after 2fab069 (git=bb85b213b9e757fb8ce4e314b4c451626e387c5b)
+ok   figures/out/bbh_i90_pol_amr/records.json after 2fab069 (git=bb85b213b9e757fb8ce4e314b4c451626e387c5b)
+OK: figures 2-4 built from post-706b55f runs
+OK: builds; bibliography starts on page 6; 5 figures; no undefined refs; intro 3 paragraphs; evidence ids used: E1, E2, E3, E4, E5, E6, E7, E8, E9, E10, E11, E12, E13, E14, E17, E18, E19, E20, E21, E22, E24, E25, E26, E27, E28, E29, E30, E31, E32, E33, E34, E35, E36, E37, E38, E39
+rows=13 newcommands=53 failures=0
+",2026-09-26T03:36:32+00:00
