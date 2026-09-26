@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:33:56 -0700
-Subject: [PATCH 14/22] feat(m8-stokes): read the camera Stokes out in the
+Subject: [PATCH 14/23] feat(m8-stokes): read the camera Stokes out in the
  IEEE/IAU convention (STOKES_IAU)
 
 - finding: with the upstream readout (cam_up = -z, Kerr observer) RAPTOR returns Q = -Q_IAU, U = -U_IAU and V = V_IEEE on every R02 slab and on the orientation-check ring: its observer tetrad (e_1 = west, e_2 = north) is the IAU (north, east) basis rotated by 90 degrees [SOLID]

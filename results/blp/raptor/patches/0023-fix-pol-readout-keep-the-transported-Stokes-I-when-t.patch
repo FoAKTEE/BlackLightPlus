@@ -1,0 +1,66 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 18:27:19 -0700
+Subject: [PATCH 23/23] fix(pol-readout): keep the transported Stokes I when
+ the polarized invariant stays below the activation threshold
+
+- finding: radiative_transfer_polarized reads a pixel out as I = Q = U = V = 0 unless POLARIZATION_ACTIVE, which pol_integration_step sets only while I_pol,inv > 1e-100; unpolarized emission (Gold T3: 64 of 64 pixels) and faint pixels whose polarized part was absorbed below the threshold lose their I (R10 deck, i = 90: 823127 of 1048576 pixels, 7e-12 of the flux, up to 6e-10 of the peak) [SOLID]
+- change: POL_KEEP_I = 1 reads out I = S_A[0] nu^3 with Q = U = V = 0 for an inactive pixel; default 0 keeps upstream; model/blp_analytic/definitions.h turns it on
+- verify: results/blp/raptor/tools/r10_polkeep.jl (Gold T3, i = 60, 64 pixels): |I_pol/I_unpol - 1| 1.0 before, 4.4e-16 after
+---
+ model/blp_analytic/definitions.h | 6 ++++++
+ src/functions.h                  | 8 ++++++++
+ src/pol_rte_integrator.c         | 6 ++++++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/model/blp_analytic/definitions.h b/model/blp_analytic/definitions.h
+index 1aa287a..4f9b319 100644
+--- a/model/blp_analytic/definitions.h
++++ b/model/blp_analytic/definitions.h
+@@ -139,6 +139,12 @@ typedef struct Camera {
+ #define STOKES_IAU (1)
+ #endif
+ 
++// polarized readout keeps I when the polarized invariant is below the
++// activation threshold (BlackLightPlus reads every pixel out)
++#ifndef POL_KEEP_I
++#define POL_KEEP_I (1)
++#endif
++
+ // BlackLightPlus plane-parallel camera at bbh.in cam_dist (M4)
+ #ifndef CAMERA_PP
+ #define CAMERA_PP (1)
+diff --git a/src/functions.h b/src/functions.h
+index 8f3b74b..d76796e 100755
+--- a/src/functions.h
++++ b/src/functions.h
+@@ -60,6 +60,14 @@
+ #define POL_SOLVER_LD85 (0)
+ #endif
+ 
++// POL_KEEP_I = 1: the polarized transfer reads out the transported Stokes I
++// when the polarized invariant never exceeded (or fell back to) the
++// activation threshold 1e-100 of pol_integration_step; upstream (0) reads
++// such a pixel out as I = Q = U = V = 0.
++#ifndef POL_KEEP_I
++#define POL_KEEP_I (0)
++#endif
++
+ // Superposed Kerr-Schild binary (bbh_metric.c): holes, march control, camera.
+ struct BBHConfig {
+     int n;               // number of holes (1 or 2)
+diff --git a/src/pol_rte_integrator.c b/src/pol_rte_integrator.c
+index bdc8b5a..e34bfd2 100755
+--- a/src/pol_rte_integrator.c
++++ b/src/pol_rte_integrator.c
+@@ -1079,4 +1079,10 @@ void radiative_transfer_polarized(double *lightpath, int steps,
+         // Construct final (NON-INVARIANT) Stokes params.
+         LOOP_i IQUV[i] = S_A[i] * pow(frequency, 3.);
+     }
++#if (POL_KEEP_I)
++    // inactive: Q = U = V = 0 (reset in pol_integration_step), I is the
++    // transported invariant intensity (0 if the ray never met plasma)
++    else
++        IQUV[0] = creal(S_A[0]) * pow(frequency, 3.);
++#endif
+ }

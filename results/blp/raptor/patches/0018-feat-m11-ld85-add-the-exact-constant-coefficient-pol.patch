@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 13:18:34 -0700
-Subject: [PATCH 18/22] feat(m11-ld85): add the exact constant-coefficient
+Subject: [PATCH 18/23] feat(m11-ld85): add the exact constant-coefficient
  polarized step (POL_SOLVER_LD85)
 
 - finding: the native step routes every segment to the implicit trapezoid: check_stiffness evaluates the RK4 amplification 1 + tau + ... with tau = +lambda dl (> 1 for any absorbing segment) on dl_current without the C_CONST factor; 20000 random segments take the trapezoid, observed order 2.0 [SOLID]

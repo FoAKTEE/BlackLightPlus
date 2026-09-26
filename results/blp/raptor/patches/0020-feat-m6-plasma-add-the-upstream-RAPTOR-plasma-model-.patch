@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 13:20:17 -0700
-Subject: [PATCH 20/22] feat(m6-plasma): add the upstream RAPTOR plasma model
+Subject: [PATCH 20/23] feat(m6-plasma): add the upstream RAPTOR plasma model
  as a switch (ATHK_UPSTREAM_PLASMA)
 
 - change: ATHK_UPSTREAM_PLASMA = 1 decodes AthenaK samples with the model/bhac rules (n_e = rho/(m_p + m_e) + 1e-6, b^2 floor 1e-6, Theta_e = (u/rho)(1/3)(m_p/m_e)/(1 + R), cuts sigma > 1, Theta_e outside [1e-3, 100], r < 1, r > RT_OUTER_CUTOFF) on the AthenaK four-vectors; samples with rho <= 0 stay vacuum; default 0 keeps the M6 decode

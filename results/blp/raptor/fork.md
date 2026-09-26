@@ -81,6 +81,7 @@ keep upstream behaviour; `model/blp_analytic/definitions.h` turns them on.
 | `EMIS_BLP` | 0 | 1 | M7 BlackLightPlus thermal coefficients, with the j_P ≤ j_I and α_P ≤ α_I rescales of `stokes_segment` |
 | `STOKES_IAU` | 0 | 1 | M8 camera Stokes readout: normal observer, up = image north, basis (north, east) |
 | `EMIS_MODEL` | 0 | 1 | coefficients supplied by the model (`model_evaluate_coeffs`, the Gold et al. 2020 emitter) |
+| `POL_KEEP_I` | 0 | 1 | polarized readout of the transported I (with Q = U = V = 0) when the polarized invariant never exceeded, or fell back to, the 1e−100 activation threshold; upstream reads such a pixel out as zero |
 | `POL_SOLVER_LD85` | 0 | 0 | M11 exact constant-coefficient polarized step (`pol_rte_ld85_step`, the BlackLightPlus `stokes_segment` + `stokes_admissible`) in place of `check_stiffness` → RK4/trapezoid |
 | `ATHK_UPSTREAM_PLASMA` | 0 | — | AthenaK model only (`model_definitions.h`): the `model/bhac` plasma decode (R07 stock leg) |
 
@@ -172,3 +173,16 @@ stock (upstream fits, constants, plasma decode, `RT_OUTER_CUTOFF` 50).
 figures; `tools/r08_timing.sh` and `tools/r08_collect.py` the timings
 (`evidence/R08/timing.json`); `tools/r08_report.py` renders `report.md`.
 `tools/r07_verify.sh` and `tools/r08_verify.sh` are the ledger re-checks.
+
+## R09/R10 runs
+
+`tools/r07_blp.jl` and `tools/r07_raptor.sh` take any AthenaK dump (`R07_SNAP`, `.bin` or
+`.athdf`) with its mass scale (`R07_MASS_SCALE`); spins follow `figures/fig_eht_bbh.jl`
+(header a_A along ±z, |a_A| > m_A imaged as χ = |a_A|). `tools/r09_run.sh <tag> <dump>
+<mass scale> <build> <out>` runs both codes and `r07_compare.py` on one snapshot;
+`tools/r09_geometry.jl` checks the spinning geometry on test drivers built with `max_steps`
+4e5; `tools/r09_collect.py` gathers the per-image records into `evidence/R09/runs.json`.
+`tools/r10_run.sh` renders the i = 90° AMR deck (AMR at HEAD, `tools/r10_blp.jl`, RAPTOR with
+`NPIX1D=8 tools/r07_build.sh` and the deck's `R07_MBH`, `R07_RHIGH`, `R07_FOV`, `R07_FREQ`,
+`R07_NMAX`) and `tools/r10_compare.py`. `tools/r09_verify.sh` and `tools/r10_verify.sh` are the
+ledger re-checks.

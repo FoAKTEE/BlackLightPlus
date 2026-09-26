@@ -7,6 +7,8 @@
 # <out>/<tag>_i<inc>_C<C>_n<npix>/ holds model.in, bbh.in, the RAPTOR output, the
 # reassembled img.npz (BlackLightPlus constants) and timing.json (wall, max RSS from
 # /usr/bin/time, and the RAPTOR_TIMERS line of the M12 phase timers when present).
+# R10 overrides (defaults: the R07 deck): R07_MBH [Msun], R07_RHIGH, R07_FOV [M],
+# R07_FREQ [Hz], R07_NMAX (fixed step budget instead of 50 C).
 # Run from the BlackLightPlus root.
 # Usage: r07_raptor.sh <raptor_binary> <bbh.in template> <out> <incs> <Cs> <npixs> [threads] [tag] [repeats]
 set -euo pipefail
@@ -22,6 +24,10 @@ REPEATS=${9:-1}
 ROOT=$PWD
 SNAP=${R07_SNAP:-/data2/haiyangw/aurora/cbd_rel/zoom_in_mad/SANE_stage2_horizon_zero_spin/torus.mhd_w_bcc.00455.bin}
 MS=${R07_MASS_SCALE:-2.274019497e28}
+MBH=${R07_MBH:-1.3e10}
+RHIGH=${R07_RHIGH:-40}
+FOV=${R07_FOV:-56}
+FREQ=${R07_FREQ:-230.e9}
 ulimit -s unlimited
 for NPIX in ${NPIXS//,/ }; do
 for INC in ${INCS//,/ }; do
@@ -29,22 +35,22 @@ for C in ${CS//,/ }; do
   D=$(printf "%s/%s_i%02d_C%d_n%d" "$OUT" "$TAG" "$INC" "$C" "$NPIX")
   rm -rf "$D"; mkdir -p "$D"
   cat > "$D/model.in" <<EOF
-MBH		(Msun)	1.3e10
+MBH		(Msun)	$MBH
 DISTANCE		(kpc) 16800
 M_UNIT		(g)	$MS
 R_LOW		(-)	1
-R_HIGH		(-)	40
+R_HIGH		(-)	$RHIGH
 INCLINATION	(deg)           $INC
 IMG_WIDTH	(pixels)	$NPIX
 IMG_HEIGHT	(pixels)	$NPIX
-CAM_SIZE_X	(Rg)		56
-CAM_SIZE_Y	(Rg)		56
+CAM_SIZE_X	(Rg)		$FOV
+CAM_SIZE_Y	(Rg)		$FOV
 FREQS_PER_DEC	(-)		1
-FREQ_MIN	(Hz)		230.e9
+FREQ_MIN	(Hz)		$FREQ
 STEPSIZE	(-)		0.01
 MAX_LEVEL	(-)		1
 EOF
-  sed -e "s/^C .*/C $C.0/" -e "s/^nmax .*/nmax $((50 * C))/" "$BBH" > "$D/bbh.in"
+  sed -e "s/^C .*/C $C.0/" -e "s/^nmax .*/nmax ${R07_NMAX:-$((50 * C))}/" "$BBH" > "$D/bbh.in"
   WALLS=()
   for REP in $(seq 1 "$REPEATS"); do
     ( cd "$D" && RAPTOR_BBH=$PWD/bbh.in OMP_NUM_THREADS=$THREADS OMP_STACKSIZE=64m \
@@ -52,7 +58,7 @@ EOF
       && grep RAPTOR_TIMERS run.err > timers_$REP.txt || true )
     WALLS+=("$(cut -d' ' -f1 "$D/time_$REP.txt")")
   done
-  python3 "$ROOT/results/blp/raptor/tools/raptor_h5_to_array.py" "$D/output/img_data_0.h5" 56 "$NPIX" 1.3e10 16800 \
+  python3 "$ROOT/results/blp/raptor/tools/raptor_h5_to_array.py" "$D/output/img_data_0.h5" "$FOV" "$NPIX" "$MBH" 16800 \
       "$D/img.npz" --constants blp > "$D/reassemble.log"
   python3 - "$D" "$THREADS" "$REPEATS" <<'EOF'
 import json, sys, os, re

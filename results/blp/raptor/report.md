@@ -1,6 +1,6 @@
-# RAPTOR and BlackLightPlus on the s455 binary-black-hole snapshot
+# RAPTOR and BlackLightPlus on the binary-black-hole snapshots
 
-Nodes R07 (image comparison) and R08 (CPU timings) of `dag.md`; design and attribution rule in `design.md` (§3 conventions, §4 modifications, §5 attribution). Every number below is read from `evidence/R07/metrics.json`, `evidence/R07/polstep.json`, `evidence/R07/native_cold.txt` and `evidence/R08/timing.json` by `tools/r08_report.py`.
+Nodes R07 (s455 image comparison), R08 (CPU timings), R09 (spinning snapshots) and R10 (i = 90° AMR-figure deck) of `dag.md`; design and attribution rule in `design.md` (§3 conventions, §4 modifications, §5 attribution). Every number below is read from `evidence/R07/metrics.json`, `evidence/R07/polstep.json`, `evidence/R07/native_cold.txt` and `evidence/R08/timing.json` by `tools/r08_report.py`; the R09 and R10 sections (spinning snapshots and the i = 90° AMR-figure deck) are read from `evidence/R09` and `evidence/R10` by `tools/r09_report.py`.
 
 ## Setup
 
@@ -50,6 +50,7 @@ Branch `blp-bbh` from upstream `b91e937`; the patch series is `patches/` (`fork.
 | `e06fd46` | feat(m6-plasma): add the upstream RAPTOR plasma model as a switch (ATHK_UPSTREAM_PLASMA) |
 | `d01fc9a` | test(native-coeffs): check the upstream thermal fits for finite values at cold electrons |
 | `502d876` | fix(native-coeffs): take K1/K2 -> 1 in rho_Q_thermal when K2 underflows |
+| `e6359a6` | fix(pol-readout): keep the transported Stokes I when the polarized invariant stays below the activation threshold |
 
 The R07/R08 modifications:
 
@@ -214,11 +215,223 @@ Load average at the start and end of each leg (1/5/15 min; the 1-min value durin
 - BlackLightPlus: the s455 image is `march_rays_gpu_spacetime(cfg, st, snap, camera_rays(st, cam); polarized = true, C = 80, nmax = 4000, devices = [0])` and `devices = [0, 1]` (`src/gpu_spacetime.jl`: the CPU march in-kernel on the superposed Kerr–Schild metric, Float64, one snapshot upload per device), with `cfg`, `st`, `snap`, `cam` of `tools/r07_blp.jl`; the timed phases are the snapshot upload, the fused march and the device-to-host copy, best of 3 warm runs, and the image is checked against the CPU image of `r07_blp.jl` (L1 ≤ 1e−10). The Kerr-deck scaling legs of `bench/bench_multigpu.jl` (`julia --project=. -t 8 bench/bench_multigpu.jl`) give the pool's 1→2 device speed-up.
 - RAPTOR: M13 (direct calls instead of the `rk4_step` function pointer, iterative `determ`, preallocated per-ray buffers, device Bessels) and `#pragma acc parallel loop gang vector` over the M12 pixel loop; built with `nvc -acc=gpu -gpu=cc80` in an `r07_build.sh` run directory and run with `r07_raptor.sh` on the same inputs (one device; RAPTOR has no multi-device path). The port is not built; `nvc -mp` builds of the CPU sources exist (`fork.md`).
 
+## Spinning snapshots (R09)
+
+s122 (`torus.mhd_w_bcc.00122.athdf`, sep 16) and s093 (`torus.mhd_w_bcc.00093.bin`, 38.7 GB, sep 25) carry the header spin a = 0.8 per hole in units of the total mass, i.e. a > m_A = 0.5; both codes image them, as `figures/fig_eht_bbh.jl` does, as χ = 0.8 (a_used = 0.4 per hole, along +z: th_a = 0 in the header). Everything else is the R07 protocol: M = 1.3e10 M_sun, D = 16.8 Mpc, 230 GHz, R_high 40, FOV 56 M, 480², C ladder with nmax = 50 C, the calibrated mass scale of `figures/out/eht_bbh/<snap>_i17_Rh40/records.json` passed to both codes, legs (a) and (b).
+
+| snapshot | a_used | centres | mass scale [g] | BLP load [s] | RAPTOR load [s] | peak RSS BLP / RAPTOR [GB] |
+|---|---|---|---|---|---|---|
+| s122 | 0.4, 0.4 | ±(0.32159304, 7.99353351, 0) | 1.000498515e+21 | 5.2 | 0.4 | 63.8 / 4.1 |
+| s093 | 0.4, 0.4 | ±(-10.42584453, 6.89577884, 0) | 2.252873787e+20 | 88.3 | 2.4 | 99.8 / 32.1 |
+
+BlackLightPlus peak RSS is the Julia process maximum over the whole run and includes the stored ray states of the largest image (C = 320); RAPTOR's is the largest per-image process maximum. Load times are single measurements with the page cache in whatever state the preceding legs left it (RAPTOR ran after BlackLightPlus; the s093 figure record has a BlackLightPlus load of 25.9 s). The dag.md bound on the s093 reader, peak memory ≤ 64 GB, holds for RAPTOR (32.1 GB).
+
+### Geometry of the spinning binary
+
+Metric level (1e4 points per leg, `tools/r04_metric.jl`; s122r is s122 with both spins along −z):
+
+| leg | max \|g − g_BLP\| | max \|g g⁻¹ − I\| | Γ analytic (M2b) vs AD | Γ FD (M2a) vs AD | gate |
+|---|---|---|---|---|---|
+| s093 | 4.44e-16 | 1.22e-15 | 4.68e-15 | 7.05e-11 | pass |
+| s122 | 2.22e-16 | 1.30e-15 | 4.13e-15 | 5.99e-11 | pass |
+| s122r | 4.44e-16 | 8.24e-16 | 4.04e-15 | 5.45e-11 | pass |
+
+Geodesic level (1050 rays per leg, i = 60°, `tools/r04_rays.jl`, finite-difference build):
+
+| leg | class agreement | max \|Δx\| escaped, C = 80 (/ 2 max ε) | C = 160 | escape angle C = 80 / 160 [rad] | order BLP / RAPTOR | gate (R04 rule) |
+|---|---|---|---|---|---|---|
+| s093 | 1.0000 | 2.32e-03 (0.79) | 4.40e-05 | 2.11e-06 / 3.98e-08 | 4.02 / 3.57 | pass |
+| s122r | 1.0000 | 2.24e-03 (0.72) | 4.80e-05 | 2.01e-06 / 4.36e-08 | 4.02 / 3.63 | pass |
+
+Spin orientation and frame dragging (`tools/r09_geometry.jl`, i = 90°, C = 160, bisected shadow edges on the β = 0 line, test drivers built with max_steps 4e5 so that no bisection ray ends on the step budget; budget-limited rays met: 0):
+
+| hole | photon-orbit edges α = −ξ [M] | BLP edges, d = 1000 | RAPTOR − BLP | 1/d-extrapolated (d = 1000, 4000) − photon orbit | shadow shift | gate |
+|---|---|---|---|---|---|---|
+| Kerr a=-0.9 | [-6.832319, 2.844421] | [-6.828665, 2.847999] | 0.00e+00 | 1.37e-05 | -1.9903 | pass |
+| Kerr a=0.9 | [-2.844421, 6.832319] | [-2.847999, 6.828665] | 0.00e+00 | 1.37e-05 | +1.9903 | pass |
+
+With the observer on +x and α = +ŷ, a hole spinning along +z has its prograde edge at α = −ξ_pro < 0 and its shadow displaced toward +α (west); both codes give the same displacement with the same sign, and reverse it for a < 0. At d = 1000 the plane-parallel camera offsets the edges by O(M b/d) (3.65e-03 M); the 1/d extrapolation removes it.
+
+| binary | hole 1 shadow centre α [M] BLP / RAPTOR | hole 2 | max \|edge_R − edge_B\| [M] | gate |
+|---|---|---|---|---|
+| s093 | +10.4076 / +10.4076 | -6.0592 / -6.0592 | 0.00e+00 | pass |
+| s122 | +9.1611 / +9.1611 | -7.6124 / -7.6124 | 0.00e+00 | pass |
+| s122r | +7.5342 / +7.5342 | -9.2388 / -9.2388 | 0.00e+00 | pass |
+
+Reversing both spins (s122 → s122r) moves each shadow centre by 1.6269 M, 1.6264 M (holes 1, 2) in both codes.
+
+**Horizon and capture rule.** Both codes stop a ray at d = min_A(r_A − r_h,A) < 1e−3 with r_h,A = m_A + √(m_A² − a_A²) = 0.8 of the isolated hole, or when the normal-frame energy exceeds 100 (the BlackLightPlus redshift cut and horizon backstop, M3). In the superposed metric the surface g^{μν} ∂_μ r_A ∂_ν r_A = 0 around each hole lies outside r_h (2000 directions per hole; RAPTOR's g^{μν} vanishes on it to the same rounding):
+
+| binary | hole | r_A of the null surface min / median / max | RAPTOR \|g^{rr}\| there (relative) | g^tt ≥ 0 region: max r_A BLP / RAPTOR | gate |
+|---|---|---|---|---|---|
+| s093 | 1 | 0.8207 / 0.8571 / 0.9193 | 2.07e-15 | 0.1469 / 0.1469 | pass |
+| s093 | 2 | 0.8207 / 0.8586 / 0.9191 | 2.04e-15 | 0.1511 / 0.1511 | pass |
+| s122 | 1 | 0.8325 / 0.8890 / 0.9762 | 1.56e-15 | 0.2528 / 0.2528 | pass |
+| s122 | 2 | 0.8325 / 0.8904 / 0.9761 | 1.67e-15 | 0.2442 / 0.2442 | pass |
+
+Rays that enter the perturbed horizon (between the null surface and r_h + 1e−3) reach the energy cut first: over every stored state of every BlackLightPlus image the smallest r_A − r_h,A is 0.063 (s122), 0.043 (s093), so no sample lies within r_A < 0.843. The inverse metric has g^tt ≥ 0 only deep inside each hole (the table), where `primitive_four_vectors` has no lapse and throws; the number of stored states there is 0 (s122), 0 (s093). The rays never sample that region, so BlackLightPlus needs no change.
+
+### s122 (sep 16), leg (b), LD85 step
+
+| i | C | ΔF/F | L1(I) | NMSE(I) | L1(\|P\|) | L1(V) | Δm_net | Δ⟨\|m\|⟩ | ΔEVPA_net [°] | Δv_net | Δ ring d [µas] max | Δf_C max | class agree | gate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 17 | 40 | -3.79e-06 | 4.30e-06 | 7.57e-08 | 1.84e-04 | 3.38e-04 | +0.0000 | -0.0000 | -0.02 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 80 | 1.46e-07 | 1.65e-07 | 8.75e-11 | 1.76e-05 | 2.96e-05 | +0.0000 | -0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 160 | 1.13e-08 | 1.27e-08 | 4.96e-13 | 1.60e-06 | 2.94e-06 | +0.0000 | -0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 320 | 2.11e-10 | 4.63e-10 | 5.76e-17 | 1.51e-07 | 3.06e-07 | +0.0000 | -0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 40 | -2.70e-06 | 6.14e-06 | 4.41e-08 | 1.65e-04 | 1.18e-03 | -0.0000 | -0.0000 | +0.00 | -0.00001 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 80 | -4.03e-07 | 5.32e-07 | 4.55e-10 | 1.56e-05 | 1.29e-04 | -0.0000 | -0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 160 | -2.73e-08 | 3.79e-08 | 2.09e-12 | 1.49e-06 | 1.12e-05 | -0.0000 | -0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 320 | -3.00e-09 | 4.11e-09 | 2.39e-14 | 1.57e-07 | 1.23e-06 | -0.0000 | -0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 40 | 1.28e-06 | 3.55e-06 | 9.81e-10 | 4.42e-04 | 1.04e-03 | -0.0001 | -0.0001 | -0.01 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 80 | 1.24e-07 | 3.80e-07 | 1.26e-11 | 4.78e-05 | 1.06e-04 | -0.0000 | -0.0000 | -0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 160 | 1.29e-08 | 2.96e-08 | 7.18e-14 | 4.18e-06 | 8.00e-06 | -0.0000 | -0.0000 | -0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 320 | 1.01e-09 | 3.54e-09 | 1.01e-15 | 4.32e-07 | 7.86e-07 | -0.0000 | -0.0000 | -0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+
+Flux after Richardson extrapolation (three finest levels): i = 17°: +1.12e-07 (pass); i = 60°: -5.02e-06 (pass); i = 90°: +8.07e-07 (pass).
+
+Evaluated levels: i = 17°, C = 160: all thresholds met; i = 17°, C = 320: all thresholds met; i = 60°, C = 160: all thresholds met; i = 60°, C = 320: all thresholds met; i = 90°, C = 160: all thresholds met; i = 90°, C = 320: all thresholds met.
+
+### s122 (sep 16), leg (a), native polarized step
+
+| i | C | ΔF/F | L1(I) | NMSE(I) | L1(\|P\|) | L1(V) | Δm_net | Δ⟨\|m\|⟩ | ΔEVPA_net [°] | Δv_net | Δ ring d [µas] max | Δf_C max | class agree | gate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 17 | 40 | 1.81e-06 | 1.10e-05 | 7.60e-08 | 3.09e-04 | 7.36e-04 | -0.0000 | +0.0000 | -0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 80 | 1.53e-06 | 1.90e-06 | 1.48e-10 | 5.00e-05 | 1.30e-04 | -0.0000 | +0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 160 | 3.58e-07 | 4.49e-07 | 4.06e-12 | 9.81e-06 | 2.81e-05 | -0.0000 | +0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 320 | 8.69e-08 | 1.10e-07 | 2.16e-13 | 2.22e-06 | 6.60e-06 | -0.0000 | +0.0000 | +0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 40 | 1.08e-05 | 2.89e-05 | 5.85e-08 | 3.14e-04 | 2.39e-03 | -0.0000 | +0.0004 | -0.20 | -0.00001 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 80 | 3.03e-06 | 6.25e-06 | 1.39e-09 | 5.23e-05 | 4.35e-04 | -0.0000 | +0.0001 | -0.05 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 160 | 8.22e-07 | 1.47e-06 | 6.09e-11 | 1.07e-05 | 8.80e-05 | -0.0000 | +0.0000 | -0.01 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 320 | 2.10e-07 | 3.63e-07 | 3.78e-12 | 2.50e-06 | 2.05e-05 | -0.0000 | +0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 40 | 1.04e-05 | 3.37e-05 | 2.75e-08 | 6.49e-04 | 2.34e-03 | +0.0002 | +0.0000 | -0.12 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 80 | 2.36e-06 | 7.98e-06 | 1.61e-09 | 1.00e-04 | 4.35e-04 | +0.0001 | +0.0000 | -0.03 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 160 | 5.76e-07 | 1.95e-06 | 1.03e-10 | 1.74e-05 | 9.07e-05 | +0.0000 | +0.0000 | -0.01 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 320 | 1.43e-07 | 4.85e-07 | 6.41e-12 | 3.75e-06 | 2.14e-05 | +0.0000 | +0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+
+Flux after Richardson extrapolation (three finest levels): i = 17°: +5.11e-07 (pass); i = 60°: +1.95e-05 (pass); i = 90°: +9.73e-06 (pass).
+
+Evaluated levels: i = 17°, C = 160: all thresholds met; i = 17°, C = 320: all thresholds met; i = 60°, C = 160: all thresholds met; i = 60°, C = 320: all thresholds met; i = 90°, C = 160: all thresholds met; i = 90°, C = 320: all thresholds met.
+
+s122 (sep 16), resolution at i = 17°, C = 80 (leg b − BlackLightPlus): 240²: L1(I) 7.34e-08, L1(\|P\|) 1.49e-05, m_net BLP 0.0790; 480²: L1(I) 1.65e-07, L1(\|P\|) 1.76e-05, m_net BLP 0.0775; 960²: L1(I) 6.36e-08, L1(\|P\|) 2.12e-05, m_net BLP 0.0780.
+
+### s093 (sep 25), leg (b), LD85 step
+
+| i | C | ΔF/F | L1(I) | NMSE(I) | L1(\|P\|) | L1(V) | Δm_net | Δ⟨\|m\|⟩ | ΔEVPA_net [°] | Δv_net | Δ ring d [µas] max | Δf_C max | class agree | gate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 17 | 40 | 3.02e-09 | 4.23e-08 | 2.46e-12 | 1.93e-05 | 1.09e-04 | -0.0000 | -0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 80 | 4.47e-10 | 2.63e-09 | 2.62e-14 | 2.05e-06 | 1.38e-05 | -0.0000 | -0.0000 | +0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 160 | 3.74e-11 | 2.13e-10 | 1.94e-16 | 2.17e-07 | 1.15e-06 | -0.0000 | -0.0000 | +0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 320 | 8.18e-12 | 5.40e-11 | 4.89e-19 | 2.60e-08 | 1.12e-07 | -0.0000 | -0.0000 | +0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 40 | -9.01e-09 | 5.70e-08 | 8.91e-13 | 4.36e-05 | 2.54e-04 | -0.0000 | +0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 80 | -5.37e-10 | 2.97e-09 | 3.32e-15 | 4.07e-06 | 2.02e-05 | -0.0000 | +0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 160 | -3.73e-11 | 2.28e-10 | 2.00e-17 | 4.20e-07 | 1.80e-06 | -0.0000 | +0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 320 | 1.27e-11 | 7.41e-11 | 1.28e-18 | 5.24e-08 | 1.95e-07 | -0.0000 | +0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 40 | 1.34e-07 | 2.21e-07 | 5.16e-10 | 4.71e-05 | 3.02e-04 | -0.0000 | -0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 80 | 5.89e-09 | 9.73e-09 | 1.63e-12 | 4.94e-06 | 2.58e-05 | -0.0000 | -0.0000 | +0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 160 | 3.23e-10 | 6.01e-10 | 4.87e-15 | 5.56e-07 | 3.12e-06 | -0.0000 | -0.0000 | -0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 320 | 2.06e-10 | 3.34e-10 | 2.53e-15 | 6.67e-08 | 3.36e-07 | -0.0000 | -0.0000 | -0.00 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+
+Flux after Richardson extrapolation (three finest levels): i = 17°: +4.60e-10 (pass); i = 60°: -3.76e-09 (pass); i = 90°: +9.00e-09 (pass).
+
+Evaluated levels: i = 17°, C = 160: all thresholds met; i = 17°, C = 320: all thresholds met; i = 60°, C = 160: all thresholds met; i = 60°, C = 320: all thresholds met; i = 90°, C = 160: all thresholds met; i = 90°, C = 320: all thresholds met.
+
+### s093 (sep 25), leg (a), native polarized step
+
+| i | C | ΔF/F | L1(I) | NMSE(I) | L1(\|P\|) | L1(V) | Δm_net | Δ⟨\|m\|⟩ | ΔEVPA_net [°] | Δv_net | Δ ring d [µas] max | Δf_C max | class agree | gate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 17 | 40 | 2.56e-08 | 6.22e-07 | 2.38e-10 | 5.13e-03 | 6.20e-04 | -0.0003 | +0.0001 | -0.03 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 80 | 6.20e-08 | 3.61e-07 | 1.14e-10 | 3.63e-03 | 3.70e-04 | +0.0000 | -0.0001 | -0.10 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 160 | 1.69e-08 | 1.94e-07 | 5.45e-11 | 1.84e-03 | 1.95e-04 | +0.0001 | +0.0000 | +0.02 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 17 | 320 | -9.23e-09 | 6.96e-08 | 1.57e-11 | 5.66e-04 | 7.50e-05 | +0.0000 | +0.0000 | +0.03 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 40 | -1.16e-07 | 1.67e-06 | 1.43e-09 | 2.68e-03 | 2.10e-03 | +0.0005 | +0.0011 | +0.90 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 80 | -1.52e-08 | 1.13e-06 | 6.41e-10 | 1.99e-03 | 1.45e-03 | -0.0003 | +0.0002 | +0.11 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 160 | 6.65e-08 | 7.60e-07 | 3.22e-10 | 1.43e-03 | 9.61e-04 | -0.0001 | -0.0001 | -0.14 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 60 | 320 | -5.79e-08 | 3.58e-07 | 9.77e-11 | 6.46e-04 | 6.25e-04 | +0.0001 | +0.0001 | -0.01 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 40 | 2.34e-07 | 1.17e-06 | 1.08e-09 | 2.05e-03 | 1.91e-03 | +0.0013 | +0.0003 | -1.12 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 80 | -1.72e-07 | 6.82e-07 | 5.06e-10 | 1.40e-03 | 1.04e-03 | -0.0005 | -0.0006 | -0.39 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 160 | 1.01e-08 | 3.89e-07 | 1.60e-10 | 8.53e-04 | 4.68e-04 | -0.0001 | +0.0002 | +0.31 | +0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+| 90 | 320 | -2.84e-08 | 2.80e-07 | 3.92e-10 | 4.30e-04 | 2.00e-04 | -0.0000 | -0.0000 | -0.00 | -0.00000 | 0.00 | 0.000 | 1.000000 | pass |
+
+Flux after Richardson extrapolation (three finest levels): i = 17°: +6.35e-08 (pass); i = 60°: -2.67e-06 (pass); i = 90°: -4.96e-07 (pass).
+
+Evaluated levels: i = 17°, C = 160: all thresholds met; i = 17°, C = 320: all thresholds met; i = 60°, C = 160: all thresholds met; i = 60°, C = 320: all thresholds met; i = 90°, C = 160: all thresholds met; i = 90°, C = 320: all thresholds met.
+
+s093 (sep 25), resolution at i = 17°, C = 80 (leg b − BlackLightPlus): 240²: L1(I) 2.09e-09, L1(\|P\|) 2.29e-06, m_net BLP 0.0442; 480²: L1(I) 2.63e-09, L1(\|P\|) 2.05e-06, m_net BLP 0.0455; 960²: L1(I) 3.34e-09, L1(\|P\|) 2.16e-06, m_net BLP 0.0452.
+
+### R09 attribution
+
+With the LD85 step the two codes agree on both spinning snapshots to L1 ≤ 1.12e-05 in I, |P| and V at C ≥ 160 (≤ 1.29e-04 at C = 80, ≤ 1.18e-03 at C = 40) at every inclination, with identical end classes: the spinning superposed metric, the frame dragging of each hole, the capture rule, the `.athdf` and 4096-block `.bin` readers and the plasma model are the same in both codes. Leg (b)'s residual in |P| and V falls by about an order of magnitude per doubling of C (the O(h⁴) truncation difference of the Christoffel and Hamiltonian forms of the same RK4 march, concentrated on the photon rings). Leg (a) adds RAPTOR's second-order polarized step; unlike s455 its difference stays small because the Faraday depth through the bright pixels (RAPTOR `tauF`, 10/50/90th percentiles at C = 160) is low: s122 i = 17°: 1.6/4.3/8.7, i = 60°: 5.5/9.4/17, i = 90°: 6/9.5/18; s093 i = 17°: 0.16/0.36/7.5, i = 60°: 0.18/0.34/0.66, i = 90°: 0.16/0.3/0.8 rad, against 13–12772 rad for s455.
+
+**s093 artefacts** (present identically in both codes' input, not corrected): a cold dense ball at r < 8 about the origin, the restart transient of the dump, and 28% (i = 17°), 41% (i = 60°), 46% (i = 90°) of the flux outside the 56 M field of view (`figures/out/eht_bbh` records, 224 M wide-field check).
+
+## i = 90° AMR-figure deck (R10)
+
+Deck of `figures/fig_bbh_i90_pol_amr.jl`: s455 (γ = 13/9), static superposed Kerr–Schild with a = 0 and centres ±12.5 (cos φ₀, sin φ₀, 0), φ₀ = −0.2233022; 230 GHz; i = 90°; FOV 40 M; d = 1000; C = 80; nmax 2500; M = 6.5e9 × 1.989e33 g (total); mass scale 1e24 g; R_low 1, R_high 10, σ > 1 cut. RAPTOR has no image-plane AMR: it renders uniform images (camera blocks of 8² pixels for 1024²; `NPIX1D=8 tools/r07_build.sh`), compared with BlackLightPlus uniform images (`tools/r10_blp.jl`, `af1b2d1`) and with the BlackLightPlus AMR mosaic re-rendered at HEAD (`af1b2d1`; base 256², block 8, max level 4, effective 4096²) block-averaged to 1024². RAPTOR reads γ from the dump header (1.44444444444, 3e−12 from 13/9). The blurred metrics take D = 16.8 Mpc (θ_g = 3.820 µas/M) and compare the codes with each other only.
+
+### Uniform 1024²
+
+| i | C | ΔF/F | L1(I) | NMSE(I) | L1(\|P\|) | L1(V) | Δm_net | Δ⟨\|m\|⟩ | ΔEVPA_net [°] | Δv_net | Δ ring d [µas] max | Δf_C max | class agree | gate |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 90 | 80 | -2.69e-08 | 1.12e-07 | 4.11e-13 | 3.03e-06 | 1.61e-05 | -0.0000 | -0.0000 | -0.00 | -0.00000 | 3.06 | 0.000 | 1.000000 | pass |
+| 90 | 80 | -1.66e-07 | 4.73e-07 | 4.17e-13 | 3.18e-06 | 6.85e-05 | -0.0000 | -0.0000 | -0.00 | -0.00000 | 5.37 | 0.000 | 1.000000 | pass |
+| 90 | 160 | -2.58e-07 | 6.27e-07 | 1.06e-14 | 5.21e-07 | 8.62e-05 | -0.0000 | +0.0000 | -0.00 | +0.00000 | 5.71 | 0.000 | 1.000000 | pass |
+
+Rows: leg (b) at C = 80, then leg (a) at C = 80 and 160 (nmax 5000; BlackLightPlus at the same C).
+The ring column includes hole2's native diameter, which is not gated: at i = 90° its ring cuts cross emission-free sky (smallest half-cut maximum 3.5e-88 of the image peak), where the peak finder lands on values many decades below the image; its blurred ring agrees.
+
+Emission-free tail. Where BlackLightPlus is below 1e−60 of the peak (692205 pixels), leg (b) exceeds 1e−30 of the peak in 15 isolated pixels (at most 3.8e-10 of the peak), and the converse tail reaches 6.4e-10; these single pixels move with C in each code (thin features met or missed by the samples). Leg (a) leaves C = 80: 568886 pixels, up to 1.9e-09 of the peak, 8.0e-09 of the flux, C = 160: 597219 pixels, up to 2.6e-09 of the peak, 1.2e-08 of the flux there. RAPTOR's native step does not extinguish radiation behind optically thick gas: `check_stiffness` selects the implicit trapezoid, whose transmission over one absorbing segment is (1 − τ/2)/(1 + τ/2) → −1 (`tools/r10_trapezoid.jl`, `evidence/R10/trapezoid.json`: τ = 3: -0.200 against e^−τ = 5.0e-02, τ = 10: -0.667 against e^−τ = 4.5e-05, τ = 100: -0.961 against e^−τ = 3.7e-44; the LD85 step returns e^−τ), so a sign-alternating remnant of the radiation behind each thick segment reaches the camera.
+
+**Fork fix (`e6359a6`, `POL_KEEP_I`).** Upstream RAPTOR reads a pixel out as I = Q = U = V = 0 unless its polarized invariant exceeded 1e−100 at the last sample; on this deck that blanked most emission-free pixels and unpolarized emission in general (`tools/r10_polkeep.jl`: Gold T3 through the polarized build, I = 0 on 64 of 64 pixels before, |I_pol/I_unpol − 1| = 4.4e−16 after). The matched build now reads out the transported I.
+- leg (b): pass
+- leg (a): pass
+
+### AMR mosaic against RAPTOR
+
+A uniform 1024² image samples each pixel at its centre; the block-averaged mosaic averages 16 finest sub-pixels wherever the AMR refined. On this edge-on image the two sampling rules differ by more than the threshold in either code (first rows), so the gate compares like with like: the central 20 M × 20 M zone, which holds every refined block (yes), rendered uniformly at the finest AMR pixel (2048², 40/4096 M) and block-averaged into the uniform 1024² frame (composite).
+
+| pair (full frame, block-averaged to the uniform grid) | L1(I) | NMSE(I) | L1(\|P\|) | L1(V) | LP pair | Δm_net | gate |
+|---|---|---|---|---|---|---|---|
+| RAPTOR (b) uniform (point-sampled) vs AMR | 1.52e-01 | 7.35e-02 | 1.48e-01 | 2.01e-01 | 0.8419 / 0.8369 | -0.0040 | report |
+| AMR vs BlackLightPlus uniform (point-sampled) | 1.52e-01 | 6.35e-02 | 1.46e-01 | 1.91e-01 | 0.8369 / 0.8419 | +0.0040 | report |
+| RAPTOR (b) composite vs AMR | 4.34e-03 | 2.26e-04 | 4.50e-03 | 6.97e-03 | 0.8369 / 0.8369 | -0.0003 | pass |
+| BlackLightPlus composite vs AMR | 4.34e-03 | 2.26e-04 | 4.50e-03 | 6.96e-03 | 0.8369 / 0.8369 | -0.0003 | report |
+
+LP of the full 4096² mosaic: 0.8430 (record at bb233b2: 0.843); per-level rays [65536, 16640, 41216, 116992, 333312], 6.3% of the base blocks refined, carrying 99.4% of the flux.
+
+**Zone at the finest pixel** (2048², 7.9% of its pixels at the finest AMR level), pixel by pixel:
+
+| pair | L1(I) | L1(\|P\|) | L1(V) | LP pair |
+|---|---|---|---|---|
+| RAPTOR (b) vs BlackLightPlus uniform | 1.18e-07 | 1.41e-06 | 1.30e-05 | 0.8430 / 0.8430 |
+| RAPTOR (b) vs AMR crop | 5.39e-03 | 5.61e-03 | 8.39e-03 | 0.8430 / 0.8430 |
+| BlackLightPlus uniform vs AMR crop | 5.39e-03 | 5.61e-03 | 8.38e-03 | 0.8430 / 0.8430 |
+
+Over the finest-level pixels alone RAPTOR (b) and the AMR crop differ by L1(I) 1.13e-07; the rest of the zone difference is the coarser painting of the AMR's lower levels.
+
+### Timing (64 threads, same host)
+
+| run | rays | wall [s] | rays/s |
+|---|---|---|---|
+| RAPTOR (b) uniform 1024² | 1048576 | 238.4 | 4398 |
+| RAPTOR (a) uniform 1024² | 1048576 | 285.3 | 3676 |
+| BlackLightPlus uniform 1024² | 1048576 | 102.0 | 10277 |
+| BlackLightPlus uniform 2048² | 4194304 | 357.6 | 11728 |
+| RAPTOR (b) zone 2048² (fov 20) | 4194304 | 1874.0 | 2238 |
+| BlackLightPlus zone 2048² (fov 20) | 4194304 | 438.4 | 9567 |
+| BlackLightPlus AMR (effective 4096²) | 573696 | 83.4 | 6880 |
+
+BlackLightPlus walls are image walls (snapshot load 3.4 s excluded); RAPTOR's are process walls including its load. The AMR wall is `render_amr` over all levels, polarized; the unpolarized level-0 probe that sets the refinement cut (10.0 s, compilation included) is not counted. The zone runs are slower per ray than the full frame: their rays concentrate near the holes, where h = d/C is small.
+
+At 2048²: AMR block-averaged vs BlackLightPlus uniform L1(I) 9.69e-02, L1(\|P\|) 9.40e-02; BlackLightPlus 1024² vs its 2048² block-averaged L1(I) 1.60e-01.
+
 ## Figures
 
 - `figures/images_i17.png`, `images_i60.png`, `images_i90.png`: I, |P|, EVPA and V from BlackLightPlus and RAPTOR (a) at C = 320, with the per-pixel differences of legs (a) and (b).
 - `figures/convergence.png`: normalized L1 of I, |P| and V against C: each code's self-convergence and the code-to-code differences of legs (a) and (b).
 - `figures/timing.png`: phase walls of the R08 runs.
+- `figures/r09_s122_images_i17.png` … `r09_s093_images_i90.png`: the R09 panels (as `images_i*.png`) for s122 and s093 at C = 320; `figures/r09_s122_convergence.png`, `r09_s093_convergence.png`: their convergence curves.
+- `figures/r10_i90.png`: the R10 deck: BlackLightPlus uniform, RAPTOR (b) uniform and the block-averaged AMR mosaic (I, |P|, EVPA, V), with the differences RAPTOR − BlackLightPlus and RAPTOR composite − AMR; `figures/r10_zone.png`: the central 20 M zone at the finest AMR pixel.
 
 ## Caveats
 

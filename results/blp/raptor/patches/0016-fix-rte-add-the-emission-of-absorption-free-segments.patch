@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 12:37:34 -0700
-Subject: [PATCH 16/22] fix(rte): add the emission of absorption-free segments
+Subject: [PATCH 16/23] fix(rte): add the emission of absorption-free segments
  in the unpolarized transfer
 
 - finding: radiative_transfer_unpolarized kept I unchanged when alpha_I = 0 (S = j/alpha undefined), dropping all emission of absorption-free samples; the Gold et al. 2020 tests T1-T3 (A = 0) gave a blank image [SOLID]

@@ -8,7 +8,9 @@
 #   stock  c + upstream constants (model/bhac/definitions.h), the upstream plasma decode
 #          (ATHK_UPSTREAM_PLASMA) and RT_OUTER_CUTOFF 50, on the matched geometry, camera,
 #          march and IEEE/IAU readout
-# Every variant sets max_steps 4e4 (bbh.in nmax = 50 C up to C = 640).
+# Every variant sets max_steps 4e4 (bbh.in nmax = 50 C up to C = 640). NPIX1D (env, default
+# 10) sets RAPTOR's camera block side num_pixels_1d (image sides must be multiples of it;
+# R10 uses 8 for 1024^2).
 # Run from the BlackLightPlus root. Usage: r07_build.sh <dir> [legs]
 # Writes <dir>/src (the exported fork), <dir>/fork_commit and <dir>/<leg>/RAPTOR.
 set -euo pipefail
@@ -27,6 +29,11 @@ for LEG in ${LEGS//,/ }; do
   ( cd "$B" && bash "$RAPTOR/setup.sh" -c=athenak -m=sks -r=pol -i=rk4 > setup.log 2>&1 )
   D="$B/definitions.h"
   setdef "$D" max_steps 4e4
+  if [ -n "${NPIX1D:-}" ]; then
+    sed -i -e "s/^#define num_pixels_1d .*/#define num_pixels_1d $NPIX1D/" \
+           -e "s/^#define tot_pixels .*/#define tot_pixels $((NPIX1D * NPIX1D))/" "$D"
+    grep -q "^#define num_pixels_1d $NPIX1D\$" "$D"
+  fi
   case $LEG in
     a) ;;
     b) sed -i 's/^#define EMIS_MODEL (0)$/#define EMIS_MODEL (0)\n#define POL_SOLVER_LD85 (1)/' "$D"

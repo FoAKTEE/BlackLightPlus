@@ -35,13 +35,14 @@ def flag(ok):
 
 L = []
 w = L.append
-w("# RAPTOR and BlackLightPlus on the s455 binary-black-hole snapshot")
+w("# RAPTOR and BlackLightPlus on the binary-black-hole snapshots")
 w("")
-w("Nodes R07 (image comparison) and R08 (CPU timings) of `dag.md`; design and attribution "
+w("Nodes R07 (s455 image comparison), R08 (CPU timings), R09 (spinning snapshots) and R10 (i = 90° AMR-figure deck) of `dag.md`; design and attribution "
   "rule in `design.md` (§3 conventions, §4 modifications, §5 attribution). Every number below "
   "is read from `evidence/R07/metrics.json`, `evidence/R07/polstep.json`, "
   "`evidence/R07/native_cold.txt` and `evidence/R08/timing.json` by "
-  "`tools/r08_report.py`.")
+  "`tools/r08_report.py`; the R09 and R10 sections (spinning snapshots and the i = 90° AMR-figure deck) "
+  "are read from `evidence/R09` and `evidence/R10` by `tools/r09_report.py`.")
 w("")
 w("## Setup")
 w("")
@@ -297,11 +298,19 @@ w("- RAPTOR: M13 (direct calls instead of the `rk4_step` function pointer, itera
   "`r07_raptor.sh` on the same inputs (one device; RAPTOR has no multi-device path). The port is not "
   "built; `nvc -mp` builds of the CPU sources exist (`fork.md`).")
 w("")
+sys.path.insert(0, HERE)
+import r09_report  # noqa: E402
+has_r09 = r09_report.render_r09(w, EV)
+has_r10 = r09_report.render_r10(w, EV)
 w("## Figures")
 w("")
 w("- `figures/images_i17.png`, `images_i60.png`, `images_i90.png`: I, |P|, EVPA and V from BlackLightPlus and RAPTOR (a) at C = 320, with the per-pixel differences of legs (a) and (b).")
 w("- `figures/convergence.png`: normalized L1 of I, |P| and V against C: each code's self-convergence and the code-to-code differences of legs (a) and (b).")
 w("- `figures/timing.png`: phase walls of the R08 runs.")
+if has_r09:
+    w("- `figures/r09_s122_images_i17.png` … `r09_s093_images_i90.png`: the R09 panels (as `images_i*.png`) for s122 and s093 at C = 320; `figures/r09_s122_convergence.png`, `r09_s093_convergence.png`: their convergence curves.")
+if has_r10:
+    w("- `figures/r10_i90.png`: the R10 deck: BlackLightPlus uniform, RAPTOR (b) uniform and the block-averaged AMR mosaic (I, |P|, EVPA, V), with the differences RAPTOR − BlackLightPlus and RAPTOR composite − AMR; `figures/r10_zone.png`: the central 20 M zone at the finest AMR pixel.")
 w("")
 w("## Caveats")
 w("")
