@@ -132,6 +132,19 @@ The pending acceptance runs are listed there.
 
 ### Fixed
 
+- **Device-pool staging buffers could leave freed host memory registered with
+  CUDA.** A lane's pinned staging buffer was a `CUDA.pin`ned `Vector`, released
+  by a GC finalizer that takes CUDA's pin lock; a buffer replaced by a larger one
+  or dropped by `close(pool)` whose finalizer ran while another lane held that
+  lock failed to unregister ("task switch not allowed from inside gc
+  finalizer"), and a later pin of the reused memory threw
+  `ERROR_HOST_MEMORY_ALREADY_REGISTERED`, aborting the render. Staging buffers
+  are now page-locked allocations freed explicitly when replaced (after the
+  lane's stream drains) and when the lane stops.
+  Cause: `ac31867^:src/gpu_pool.jl:37` (`CUDA.pin`),
+  `ac31867^:src/gpu_pool.jl:367` (replacement) and
+  `ac31867^:src/gpu_pool.jl:255` (`close`). Test: `test/test_pool_pinned.jl`
+  (CUDA only) (`ac31867`).
 - **Camera rays were the time reverse of the received photon.** The camera
   launched the covector $(k_t,k_i)=(-1,\hat n_{\rm in})$ and integrated it
   forward: a future-directed ingoing ray, the $(t,\phi)\to(-t,-\phi)$ image of the
