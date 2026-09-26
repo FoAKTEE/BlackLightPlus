@@ -51,6 +51,7 @@ Branch `blp-bbh` from upstream `b91e937`; the patch series is `patches/` (`fork.
 | `d01fc9a` | test(native-coeffs): check the upstream thermal fits for finite values at cold electrons |
 | `502d876` | fix(native-coeffs): take K1/K2 -> 1 in rho_Q_thermal when K2 underflows |
 | `e6359a6` | fix(pol-readout): keep the transported Stokes I when the polarized invariant stays below the activation threshold |
+| `7fca76e` | docs(fork): list the blp-bbh switches, modifications and upstream defects |
 
 The R07/R08 modifications:
 

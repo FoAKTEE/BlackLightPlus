@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:49:07 -0700
-Subject: [PATCH 07/23] feat(m2b-analytic-connection): add analytic Christoffel
+Subject: [PATCH 07/24] feat(m2b-analytic-connection): add analytic Christoffel
  symbols for SKS
 
 - change: sks_connection_udd forms d_i g_mu nu = sum_A (d_i f_A l l + f_A d_i(l l)) from the implicit Kerr-Schild radius (dr/dx = x r^3/D, dr/dz = z r (r^2+a^2)/D, D = r^4 + a^2 z^2) and contracts it with the exact Woodbury inverse

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:43:17 -0700
-Subject: [PATCH 03/23] feat(m7-coeffs): port the BlackLightPlus thermal
+Subject: [PATCH 03/24] feat(m7-coeffs): port the BlackLightPlus thermal
  coefficients as EMIS_BLP
 
 - change: src/blp_coeffs.c ports thermal_synchrotron_polarized (M21 j_I/j_Q/j_V, Kirchhoff with expm1, rho_Q/rho_V with A&S Bessels, theta_e < 0.01 ramps) operation by operation, in invariant form

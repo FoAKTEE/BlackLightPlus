@@ -1,6 +1,6 @@
 base b91e937b7b746eb24992b6c1dd8831c5dea0cef1
-head e6359a6441621c9473dfbf29c8fdf93bddd09ad3
-tree c4dc9434dd963779046f402530155af8c46966a2
+head 7fca76e34bb4bc84e27c6653460bed31534f9ff0
+tree 51e523f93832b5c91264760a7e1be37e171f903e
 excluded blp-reader 0c865d945f845658dc28334dd008c64ea720ec52
 720a111 test(m7-coeffs): add the R03 thermal coefficient table driver
 ed64b3a feat(m9-constants): add the blp_analytic model headers with BlackLightPlus constants
@@ -25,26 +25,28 @@ e06fd46 feat(m6-plasma): add the upstream RAPTOR plasma model as a switch (ATHK_
 d01fc9a test(native-coeffs): check the upstream thermal fits for finite values at cold electrons
 502d876 fix(native-coeffs): take K1/K2 -> 1 in rho_Q_thermal when K2 underflows
 e6359a6 fix(pol-readout): keep the transported Stokes I when the polarized invariant stays below the activation threshold
-e1ae690f05bee7cdc9e53aaa46b81c91828bad5afc8879b71d767c2d28987c9a  0001-test-m7-coeffs-add-the-R03-thermal-coefficient-table.patch
-8edc124e6bb76c47999fad19ed3005f6eaf44d5a004eeb2143e9ac023c1aedf0  0002-feat-m9-constants-add-the-blp_analytic-model-headers.patch
-da492e64fb3120f589887c72fc355576bba074888f7aa3b62642b164029004f3  0003-feat-m7-coeffs-port-the-BlackLightPlus-thermal-coeff.patch
-b847f27c5271de86b992feae05a1d5ae251ef3bb3e93cebfdd483fc51c1ba5d5  0004-test-m1-metric-add-the-metric-and-connection-probe-f.patch
-2b45182988b9a9d17bd4b528efd94cae9cdff6139a3dee1a610cf82ea214e389  0005-feat-m1-metric-add-the-superposed-Kerr-Schild-binary.patch
-e423a71c0ffac94c2f9a6b934dcb4d8bdeefd02f374d765454cc6f844a5e313e  0006-feat-m2a-fd-connection-use-an-absolute-finite-differ.patch
-2a5610fea8e1298db6df7acec5ae20eb4b7679074de0874ec87b75c5a090712c  0007-feat-m2b-analytic-connection-add-analytic-Christoffe.patch
-93c19492ad7c42296d3dfa966a6b363578e60ecc0fcea474a7c737afa7d8f751  0008-test-m3-march-add-the-ray-dump-interface-and-the-R04.patch
-846e0b984d800599febab39648909f1d268fde4c15de2529739f3fa875558b5c  0009-feat-m3-march-adopt-the-BlackLightPlus-march-control.patch
-7a6709efee83b46c3033d481a6362f421c734e9f4e5086d5ca66c983bd65de4b  0010-test-m4-camera-expose-RAPTOR-s-camera-image-states-t.patch
-4dcac92622236c60d882719ab5be67e35f8adaf74a7fc0e0bf710fbb993fbe38  0011-feat-m4-camera-add-the-BlackLightPlus-plane-parallel.patch
-e609a092e3b8dbd3e0da47a2ec670e2d881731da8cd712cf16d853a144f583c1  0012-test-m8-stokes-add-the-R02-analytic-scenes-and-the-s.patch
-67ce045f4b563b577f0bb02384851d85b421b66381b9921e56043d434a1f05ed  0013-fix-m8-stokes-reset-the-analytic-scene-to-its-defaul.patch
-2a079e11f6d10e1f66b0f0252945ee1b81a30f3cd97cf62ff389d14dd952d461  0014-feat-m8-stokes-read-the-camera-Stokes-out-in-the-IEE.patch
-33fd9f3645c267d64463546e350eca0eba730cc39078de6380c278aca83d56c1  0015-fix-m7-coeffs-mirror-the-BlackLightPlus-emission-adm.patch
-85f453f72557ef2f95ac83844cc873d31a70682cc32688b83b368b474d972993  0016-fix-rte-add-the-emission-of-absorption-free-segments.patch
-21394c727335e396bf3c979bdaf8804936157197a818cbf790b63476c56d6b7b  0017-test-m11-ld85-add-the-single-segment-polarized-trans.patch
-e13da171cc714a7140e3a679487ad689bd767f75c9247dcc7e1b041ba94796ec  0018-feat-m11-ld85-add-the-exact-constant-coefficient-pol.patch
-e972ab18e02ea32cb7a76044b88863e401bc6c673e765a975ad3dc6175d21b38  0019-perf-m12-openmp-trace-every-pixel-in-one-OpenMP-loop.patch
-f7272f987b2ba30026fe185014d78af2f96dfa7da98d77418d93bea24262255e  0020-feat-m6-plasma-add-the-upstream-RAPTOR-plasma-model-.patch
-48fed934fee10a58b7d27cb5eef622b19f32788c48e4090f07a2f75877e73a19  0021-test-native-coeffs-check-the-upstream-thermal-fits-f.patch
-ce225971e66170039e5b4d46ec752a2782518f2b382e381e9d8e1b15f8eae5d2  0022-fix-native-coeffs-take-K1-K2-1-in-rho_Q_thermal-when.patch
-e3708d21b9f32ec53b2f1fa400504db40e63ed1079b5c3394ab38a1720e0990f  0023-fix-pol-readout-keep-the-transported-Stokes-I-when-t.patch
+7fca76e docs(fork): list the blp-bbh switches, modifications and upstream defects
+215b85116a4d07d72e181654bf4eb9d7d55fe3649d8d2315ac42396def5134cb  0001-test-m7-coeffs-add-the-R03-thermal-coefficient-table.patch
+88585a42fc174c1948365591cbf69a8abb9243bc251cecb38960ab1bef62fa3d  0002-feat-m9-constants-add-the-blp_analytic-model-headers.patch
+a4b0ba6e240fb841b62026362cced05d91fbf6c7a16946603c127f5d47a6b978  0003-feat-m7-coeffs-port-the-BlackLightPlus-thermal-coeff.patch
+ad311265b4b628c0d5f34ffdf07cb044b25cf4c2d0444a0f9cebfa337ae3a861  0004-test-m1-metric-add-the-metric-and-connection-probe-f.patch
+cdf56d90477099643f9e333a17f0366c793322819ba63ca0dca143e7c7557008  0005-feat-m1-metric-add-the-superposed-Kerr-Schild-binary.patch
+298b9835d8b395cc9ee8f7831dbc9378994afdaa1f3e181c8b1180361f9075ab  0006-feat-m2a-fd-connection-use-an-absolute-finite-differ.patch
+63040f394ed52cac457bb7f121bbc3f2ac161b37251ac2d0f2f81d179058ca1b  0007-feat-m2b-analytic-connection-add-analytic-Christoffe.patch
+5f66b3aee58f7de1ccdde2993bb4b6bca334e1a01d0243c6281fafc2bf70ec41  0008-test-m3-march-add-the-ray-dump-interface-and-the-R04.patch
+03a528104c912785051e9e4d7b499c930b34ca0e9a71616498d816f484c4a9a0  0009-feat-m3-march-adopt-the-BlackLightPlus-march-control.patch
+6bdfcc75e241d9fd5eabacc57699d93854e59b6a594c3fc1e599df0b28f00361  0010-test-m4-camera-expose-RAPTOR-s-camera-image-states-t.patch
+ad48a7f480c9c1407f131d461e4d714aafb1b64aa0644bb93a48a7e4f43c0f61  0011-feat-m4-camera-add-the-BlackLightPlus-plane-parallel.patch
+177079a181f1cd8efbf5c4f35ff77d668aa1ce6d09c07680af933f8f8e31c2e8  0012-test-m8-stokes-add-the-R02-analytic-scenes-and-the-s.patch
+b1e4d185077ce9df64ef690403f279ad55b509da2cb60bacecf39a1a8e8a264f  0013-fix-m8-stokes-reset-the-analytic-scene-to-its-defaul.patch
+0494ccaf436a7523cf9526fccd6bacc2622286e67a2f92a9e973a0ee128168fc  0014-feat-m8-stokes-read-the-camera-Stokes-out-in-the-IEE.patch
+99be2019b2a3ae439f5c110c8ec4eef0ce82533662c42ebf9e56883acacad96b  0015-fix-m7-coeffs-mirror-the-BlackLightPlus-emission-adm.patch
+e59bced3a89c0aff05599165c03a94508547015951b4a4a0aa58bfa4dfb4426f  0016-fix-rte-add-the-emission-of-absorption-free-segments.patch
+96f3882404df9d97cdd1705c04fc980e7ca3bac1b033efddbc605507426d4216  0017-test-m11-ld85-add-the-single-segment-polarized-trans.patch
+5693c76525f3287f2180b48a25710b379afcbbe7d20adeb0f5eb8bc869ec0c80  0018-feat-m11-ld85-add-the-exact-constant-coefficient-pol.patch
+2f3e5ac1632ce1bdd341fa002d73e9883d3c72c83850691d66b4985216a6a08f  0019-perf-m12-openmp-trace-every-pixel-in-one-OpenMP-loop.patch
+984a17c36250f27111059fe55004d4ddb56ffa214495a41b9ffc3d5fda87b5f3  0020-feat-m6-plasma-add-the-upstream-RAPTOR-plasma-model-.patch
+8c8a6a0cd686e8acb16e068a233a1cd55e04784e24e56b52974f264566444759  0021-test-native-coeffs-check-the-upstream-thermal-fits-f.patch
+9f8f8bc30fbc05771afb785fd1896ed362f13721fd730ec8b9fc3c6b09b29b0f  0022-fix-native-coeffs-take-K1-K2-1-in-rho_Q_thermal-when.patch
+fd725b9505b9dfcc890d4b99bf39c4bfd986cddb6a8d072aaaf09b331fdd719b  0023-fix-pol-readout-keep-the-transported-Stokes-I-when-t.patch
+b019ec4b9729938e3f01c2a016f1faf6511a8cf9a1a427e9e6f169f667e9be57  0024-docs-fork-list-the-blp-bbh-switches-modifications-an.patch

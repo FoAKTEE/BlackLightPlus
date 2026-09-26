@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:47:53 -0700
-Subject: [PATCH 05/23] feat(m1-metric): add the superposed Kerr-Schild binary
+Subject: [PATCH 05/24] feat(m1-metric): add the superposed Kerr-Schild binary
  metric SKS
 
 - change: src/bbh_metric.c: per-hole Kerr-Schild term (hypot-form root, f = 2 m r^3/(r^4 + a^2 z^2), covariant l) exactly as BlackLightPlus _ks_term, g = eta + sum_A f_A l^A l^A without regularisers, and the exact Woodbury inverse (2x2 solve)

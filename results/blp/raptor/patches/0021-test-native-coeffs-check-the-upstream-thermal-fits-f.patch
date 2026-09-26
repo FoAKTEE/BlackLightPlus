@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 14:16:29 -0700
-Subject: [PATCH 21/23] test(native-coeffs): check the upstream thermal fits
+Subject: [PATCH 21/24] test(native-coeffs): check the upstream thermal fits
  for finite values at cold electrons
 
 - finding: rho_Q_thermal is NaN for Theta_e <= 1.26e-3 (7353 of 110808 values on Theta_e 1e-5..1e-1, 86-345 GHz, B 1-1000 G): K1(1/Theta_e)/K2(1/Theta_e) is 0/0 once GSL K_n underflows at 1/Theta_e > ~705; the upstream THETAE_MIN = 1e-3 cut leaves 1e-3 <= Theta_e < 1.4e-3 exposed [SOLID]

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 11:48:06 -0700
-Subject: [PATCH 06/23] feat(m2a-fd-connection): use an absolute
+Subject: [PATCH 06/24] feat(m2a-fd-connection): use an absolute
  finite-difference step for SKS
 
 - change: connection_num_udd for SKS differentiates with h = delta_num max(1, min_A r_A) (4th-order central stencil unchanged) instead of the CKS step h ~ |x^i|, which collapses to 1e-10 at x^i ~ 0

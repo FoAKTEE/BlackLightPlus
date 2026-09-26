@@ -1,0 +1,129 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FoAKTEE <hw609@cantab.ac.uk>
+Date: Fri, 25 Sep 2026 20:21:48 -0700
+Subject: [PATCH 24/24] docs(fork): list the blp-bbh switches, modifications
+ and upstream defects
+
+- change: BLP_CHANGES.md at the root: switch table with defaults, modifications M1-M12 with files and commits, upstream defects D1-D16 at b91e937 with location, symptom, fixed-or-reported status, evidence path in the BlackLightPlus repository, and whether each is a candidate for an upstream fix
+- files: BLP_CHANGES.md
+---
+ BLP_CHANGES.md | 110 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 110 insertions(+)
+ create mode 100644 BLP_CHANGES.md
+
+diff --git a/BLP_CHANGES.md b/BLP_CHANGES.md
+new file mode 100644
+index 0000000..a6b499f
+--- /dev/null
++++ b/BLP_CHANGES.md
+@@ -0,0 +1,110 @@
++# RAPTOR branch `blp-bbh`: changes and upstream defects
++
++Branch `blp-bbh` of RAPTOR (Bronzwaer et al. 2018, A&A 613, A2; Bronzwaer et
++al. 2020, A&A 641, A126) forks upstream `main` at
++`b91e937b7b746eb24992b6c1dd8831c5dea0cef1` (2024-08-12). It runs RAPTOR with
++the geometry, camera, march, plasma model and Stokes convention of
++BlackLightPlus, so that images of binary-black-hole AthenaK snapshots can be
++compared code to code. Branch `blp-reader` (the AthenaK data layer) is merged
++into it at `e0f0570`.
++
++Every change is either behind a compile-time switch whose default keeps the
++upstream behaviour, or is a fix of an upstream defect. With every switch at its
++default the upstream synthetic BHAC image is bitwise identical to `b91e937`
++(BlackLightPlus `results/blp/raptor/evidence/R05/r01_bitwise.json`).
++
++The comparison that uses this branch, its protocol and results are in the
++BlackLightPlus repository: `docs/src/validation.md`,
++`results/blp/raptor/report.md`, and the patch series of this branch in
++`results/blp/raptor/patches/` (rebuild recipe in `results/blp/raptor/fork.md`).
++Evidence paths below are relative to `results/blp/raptor/` in that repository.
++
++## Switches
++
++Defaults are those of `src/functions.h`; `model/blp_analytic/definitions.h`
++sets the values in the third column.
++
++| Switch | Default | `blp_analytic` | Effect |
++|---|---|---|---|
++| `metric == SKS` (id 9) | — | on | M1 superposed Kerr–Schild binary from `bbh.in` (`$RAPTOR_BBH`) |
++| `SKS_CONNECTION` | `SKS_CONN_FD` | FD | M2a finite-difference connection; `SKS_CONN_ANALYTIC` selects M2b |
++| `STEP_BBH` | 0 | 1 | M3 march control, termination and transfer sample set |
++| `CAMERA_PP` | 0 | 1 | M4 plane-parallel camera at `cam_dist` |
++| `EMIS_BLP` | 0 | 1 | M7 BlackLightPlus thermal coefficients with the $j_P\le j_I$ and $\alpha_P\le\alpha_I$ rescales |
++| `STOKES_IAU` | 0 | 1 | M8 camera readout in the IEEE/IAU convention |
++| `EMIS_MODEL` | 0 | 1 | coefficients supplied by the model (`model_evaluate_coeffs`; analytic scenes) |
++| `POL_KEEP_I` | 0 | 1 | polarized readout keeps the transported $I$ of pixels whose polarized invariant never passes the activation threshold (D11) |
++| `POL_SOLVER_LD85` | 0 | 0 | M11 exact constant-coefficient polarized step instead of `check_stiffness` → RK4 / trapezoid |
++| `ATHK_UPSTREAM_PLASMA` | 0 | — | `model/athenak` only (`model_definitions.h`): the `model/bhac` plasma decode on AthenaK data |
++
++`bbh.in` holds `nholes`, `mass`, `spin`, `center1`, `center2`, `C`, `nmax`,
++`escape`, `horizon_eps`, `capture_redshift` and `cam_dist`.
++
++## Modifications
++
++| Id | Change | Switch | Files | Commits |
++|---|---|---|---|---|
++| M1 | Superposed Kerr–Schild binary metric $g=\eta+\sum_A f_A l^A l^A$ with the exact (Woodbury) inverse; runtime geometry from `bbh.in` | `metric == SKS` | `src/bbh_metric.c`, `src/metric.c`, `src/GRmath.c`, `src/constants.c`, `src/functions.h`, `run/makefile`, `model/blp_analytic/model.c`, `tests/metric_dump.c` | `49448b2` (test), `7833602` |
++| M2a | Finite-difference connection for SKS with an absolute step $h=10^{-4}\max(1,\min_A r_A)$; the $t$ column is skipped (stationary metric) | `SKS_CONNECTION = SKS_CONN_FD` | `src/metric.c` | `87883ff` |
++| M2b | Analytic Christoffel symbols of the superposed metric | `SKS_CONNECTION = SKS_CONN_ANALYTIC` | `src/bbh_metric.c`, `src/functions.h`, `src/gr_integrator.c`, `src/pol_rte_integrator.c` | `7e3b422` |
++| M3 | BlackLightPlus march: RK4 step $h=\min_A(r_A-r_{h,A})/C$, capture at $\min_A(r_A-r_{h,A})<10^{-3}$ or normal-frame energy $>10^2$, outbound escape, step budget $n_{\max}$, per-ray end class; each stored state paired with the step taken from it; no $\theta$-turn order cut; no re-nulling of $k$ in the transfer | `STEP_BBH` | `src/gr_integrator.c`, `src/pol_rte_integrator.c`, `src/rte_integrator.c`, `src/functions.h`, `model/blp_analytic/definitions.h`, `tests/ray_dump.c` | `3e3f887` (test), `445ddb1` |
++| M4 | Plane-parallel camera at distance `cam_dist`, pixel map and received covector of BlackLightPlus `camera_rays` | `CAMERA_PP` | `src/metric.c`, `src/functions.h`, `model/blp_analytic/definitions.h`, `tests/ray_dump.c` | `1a3714a` (test), `4965d55` |
++| M5 | AthenaK `.bin` (v1.1) and `.athdf` (`mhd_w_bcc`) reader into Float32 meshblocks; owning-block lookup by dense leaf table, hash or scan; clamped cell-centred trilinear sampling | `model/athenak` | `model/athenak/athenak_mesh.[ch]` | `442feb2` |
++| M6 | AthenaK four-vectors ($b^0=u_iB^i$) and the BlackLightPlus plasma decode ($n_e$, $\Theta_e$ from the total-pressure split with $R_{\rm high}/R_{\rm low}$, $\lvert B\rvert$, $\sigma$, $\beta^{-1}$, $\sigma>1$ cut); `setup.sh -c=athenak -m=sks` | `model/athenak`; `EMIS_MODEL` forced to 0 there | `model/athenak/{athenak_plasma.[ch],model.c,model.mk,model_*.h,tests/athenak_probe.c,tests/fluid_probe.c}`, `run/makefile`, `setup.sh` | `ca010b8`, `5e3640b`, `0c865d9` (test); merged `e0f0570` |
++| M6s | Upstream `model/bhac` plasma decode on AthenaK data (the stock comparison leg) | `ATHK_UPSTREAM_PLASMA` | `model/athenak/model.c`, `model/athenak/model_definitions.h` | `e06fd46` |
++| M7 | Port of the BlackLightPlus thermal coefficients (Marszewski et al. 2021 fits, `expm1` Kirchhoff, Bessel ratios, the sign of the $Q$-type coefficients in the camera basis, $\alpha_P\le\alpha_I$ rescale), then the $j_P\le j_I$ rescale | `EMIS_BLP` | `src/blp_coeffs.c`, `src/functions.h`, `src/pol_rte_integrator.c`, `run/makefile`, `model/blp_analytic/definitions.h`, `tests/coeff_table.c` | `720a111` (test), `066295b`, `82c904f` |
++| M8 | IEEE/IAU camera readout: normal observer, up = image north, Stokes in (north, east); analytic scenes (`slab`, `ring`, `gold`) and the single-pixel transfer library | `STOKES_IAU`, `EMIS_MODEL` | `src/pol_rte_integrator.c`, `src/functions.h`, `model/blp_analytic/{definitions.h,model.c}`, `tests/pixel_rt.c` | `840784d` (test), `82b8ba2` (scene reset), `b9d7443` |
++| M9 | BlackLightPlus CGS constants and `RT_OUTER_CUTOFF` $1.1\times10^3$ in the `blp_analytic` model headers | `model/blp_analytic` | `model/blp_analytic/{definitions.h,model_definitions.h,model_functions.h,model_global_vars.h}` | `ed64b3a` |
++| M11 | Exact constant-coefficient polarized step `pol_rte_ld85_step` (port of BlackLightPlus `stokes_segment` and `stokes_admissible`); agrees with BlackLightPlus `stokes_couple` to $4.2\times10^{-14}$ on 20000 random segments | `POL_SOLVER_LD85` | `src/pol_rte_integrator.c`, `src/functions.h`, `tests/pol_step.c`, `tests/build_tests.sh` | `d1bc730` (test), `59adab6` |
++| M12 | One `parallel for schedule(dynamic, 64)` over every pixel instead of one parallel region per 10×10 block; `RAPTOR_TIMERS` phase timers; per-pixel end class and stored-state count in the HDF5 image (under `STEP_BBH`) | always, without image AMR | `src/core.c`, `src/main.c`, `src/io.c`, `src/functions.h` | `bffead8` |
++
++Images are read from the HDF5 output with BlackLightPlus
++`results/blp/raptor/tools/raptor_h5_to_array.py` (M10, no change here). An
++OpenACC port (M13) is not implemented.
++
++## Upstream defects
++
++Locations are at `b91e937`. "Fixed" means fixed on this branch; "reported"
++means documented and avoided in the comparison, with upstream code unchanged.
++The last column marks a defect as a candidate for an upstream fix, as opposed
++to a convention that only matters for matching BlackLightPlus.
++
++| Id | Defect | Location | Symptom | Status | Evidence | Upstream |
++|---|---|---|---|---|---|---|
++| D1 | CKS metric regularisers: $1/(\Sigma+10^{-3})$ and $l_z=z/(r+10^{-3})$ in $g_{\mu\nu}$, but $l_z=z/r$ in $g^{\mu\nu}$ | `src/metric.c:183-184`, `:195`; `:371-372` | $g\,g^{-1}\ne\mathbb 1$: $7.3\times10^{-4}$ at $r=1.3$–3, $1.2\times10^{-4}$ at 5–10, $3.4\times10^{-5}$ at 10–40; finite-difference $\Gamma$ off by up to $1.8\times10^{-3}$; CKS Kerr rays converge at order 0.9 instead of 4 | reported; M1 is a separate metric without regularisers | `evidence/R04/metric.json` (`kerr_upstream_cks`) | yes |
++| D2 | Finite-difference Christoffel step relative to the coordinate, $h=10^{-4}\max(\lvert x^i\rvert,10^{-6})$ | `src/metric.c:461-485` | $h\to10^{-10}$ near a coordinate plane, about six digits lost there; 16 metric calls per right-hand side | fixed for SKS (M2a, `87883ff`): $\Gamma$ within $6.1\times10^{-11}$ of AD; CKS unchanged | `evidence/R04/metric.json`, `evidence/R09/metric.json` | yes |
++| D3 | Electron temperature with a fixed $(\gamma-1)=1/3$: $\Theta_e=(u/\rho)\tfrac13(m_p/m_e)/(1+R)$ while $\beta$ uses the dump's $\gamma$ | `model/bhac/model.c:1184`, `:1186` | $0.75\times$ the pressure-based $\Theta_e$ for $\gamma=13/9$; with the $\Theta_e\in[10^{-3},100]$ and $r<1$, $r>50$ cuts and floors (`:1022`, `:1025`, `:1070`, `:1138-1139`, `:1191-1193`) the stock leg is 43–47% fainter on s455 | reported; available as M6s for the stock leg | `evidence/R07/metrics.json` (`report_legs`) | yes (the $\gamma$ inconsistency) |
++| D4 | Trilinear interpolation weights measured from the lower cell face while the data sit at cell centres | `model/bhac/model.c:885-926` (`:906`); centres `:312` | samples shifted by half a cell | reported; not on the compared path (M5 samples at cell centres) | — | yes |
++| D5 | ASCII image writer truncates `(x-corner)/dx - 0.5` | `src/camera.c:261-262` | on the synthetic BHAC image 8278 of 10000 rows unique; ASCII flux 1.1% high | reported; images read from HDF5 | — | yes |
++| D6 | Planck function as `exp(hν/kT) - 1` | `src/pol_emission.c:54-60` | at 230 GHz $h\nu/kT\approx1.9\times10^{-9}/\Theta_e$: about half the double-precision digits of the Kirchhoff absorptivities lost | fixed in M7 only (`expm1`); native fits unchanged | — | yes |
++| D7 | Camera readout basis: `cam_up` $=-\hat z$ with the Kerr observer gives $e_{(1)}$ west, $e_{(2)}$ north | `src/pol_rte_integrator.c:709-725` (`:712`) | $Q=-Q_{\rm IAU}$, $U=-U_{\rm IAU}$, $V=V_{\rm IEEE}$ on every orientation slab and on the ring, against the IEEE/IAU convention stated in Bronzwaer et al. (2020) | fixed behind `STOKES_IAU` (`b9d7443`): ring within $7\times10^{-8}$ of BlackLightPlus | `evidence/R02/orientation.json` | report the convention mismatch |
++| D8 | Unpolarized transfer drops the emission of absorption-free segments: `if (K_inv == 0) Icurrent = Ii;` | `src/rte_integrator.c:125-126` | Gold et al. (2020) tests T1–T3 (no absorption) render blank | fixed, unconditional (`aaa32ce`): adds $j\,ds$; T1–T5 then agree with BlackLightPlus to $L_1\le1.6\times10^{-8}$ | `evidence/R02/analytic.json` | yes |
++| D9 | `check_stiffness` evaluates the RK4 amplification with $\tau=+\lambda\,dl$ (wrong sign, without `C_CONST`) against 0.99 | `src/pol_rte_integrator.c:360-407` (`:375-378`, `:400-404`) | every absorbing segment takes the implicit trapezoid (100% of test segments), second order (measured 2.00); median per-segment phase error 0.20 at Faraday depth 1–10, 0.32 at 10–300 | reported; M11 is the exact alternative | `evidence/R07/polstep.json` | yes |
++| D10 | $\rho_Q$ thermal: $K_1(1/\Theta_e)/K_2(1/\Theta_e)$ is 0/0 once GSL $K_n$ underflows | `src/pol_emission.c:133` ($\rho_V$ already guards $K_0/K_2$ at `:220-227`) | NaN for $\Theta_e<1.26\times10^{-3}$ (7353 of 110808 test values); a NaN clears `POLARIZATION_ACTIVE` and blanks the pixel: 20%, 30%, 100% of the s455 flux lost at $i=17^\circ,60^\circ,90^\circ$ | fixed, unconditional (`d01fc9a` test, `502d876`): ratio → 1 when $K_2=0$; 0 of 110808 non-finite | `evidence/R07/native_cold.txt` | yes |
++| D11 | Polarized readout returns $I=Q=U=V=0$ unless the polarized invariant exceeded $10^{-100}$ at the last sample | `src/pol_rte_integrator.c:692-702`, `:821-828` | unpolarized or faint pixels zeroed: Gold T3 64 of 64 pixels; 823127 of 1048576 pixels on the $i=90^\circ$ deck | fixed behind `POL_KEEP_I` (`e6359a6`): $\lvert I_{\rm pol}/I_{\rm unpol}-1\rvert=4.4\times10^{-16}$ | `evidence/R10/metrics.json` | yes |
++| D12 | Implicit trapezoid transmission $(1-\tau/2)/(1+\tau/2)$ is negative for $\tau>2$ (A-stable, not L-stable) | `src/pol_rte_integrator.c:493-544` | $\tau=3$: $-0.200$ against $e^{-\tau}=0.050$; $\tau=10$: $-0.667$; $\tau=100$: $-0.961$; sign-alternating remnants of radiation behind thick gas reach the camera (up to $2.6\times10^{-9}$ of the peak on the $i=90^\circ$ deck) | reported, not fixed; M11 returns $e^{-\tau}$ | `evidence/R10/trapezoid.json` | yes |
++| D13 | Transfer pairs stored state $n$ with the step into it and skips state 0 | `src/rte_integrator.c:49-55`; `src/pol_rte_integrator.c:762-768` | a different quadrature of the same samples | changed under `STEP_BBH` (M3) to BlackLightPlus's pairing | `evidence/R04/rays_kerr_s455_s122.json` | no (convention) |
++| D14 | One OpenMP parallel region per 10×10 block, `schedule(static,1)`, per-pixel `malloc` | `src/core.c:108-146` (`:113`); `src/main.c:136-150` | synthetic image 11.7× at 16 threads, 19.3× at 64 | fixed (M12, `bffead8`), output bitwise identical; 16 → 64 threads 3.52× on s455 | `evidence/R08/timing.json`, `evidence/R05/r01_bitwise.json` | yes (performance) |
++| D15 | `setup.sh -g` compares the default `GRID="smr"` with `"SMR"`/`"AMR"` | `setup.sh:9`, `:124`, `:131` | the flag has no effect; `AMR 0 / SMR 1` of `definitions.h:49-50` always hold | reported | — | yes |
++| D16 | `thetadot_prev` read uninitialised in the $\theta$-turn order cut, which also uses `photon_u[6]` ($k^y$ in CKS) | `src/gr_integrator.c:340`, `:386-391` | undefined behaviour; the cut never fires at `max_order = 100` | removed under `STEP_BBH` (M3) | — | yes |
++
++Upstream limitations that the comparison works around: the polarized march
++runs only inside `RT_OUTER_CUTOFF` = 50 (`src/pol_rte_integrator.c:780`,
++raised to $1.1\times10^3$ by M9); $k$ is re-nulled when $\lvert k\cdot k\rvert>10^{-6}$
++at $r>2$ (`:771-772`, off under M3); $j_P$ and $\alpha_P$ are rescaled by
++$1/(p+0.005)$ (`:345-356`) and $\lvert P\rvert$ is renormalised (`:653-664`),
++both bypassed by M11; images are square with a multiple of 10 pixels
++(`src/camera.c:28-33`); the native step control and termination refer to one
++hole at the origin.
++
++## Test drivers
++
++`tests/build_tests.sh <dir>` builds, against `model/blp_analytic`:
++`coeff_table` (coefficient table), `metric_dump` and `metric_dump_cks` (metric
++and connection), `ray_dump` and the `ccall` libraries `libraptor_sks_fd.so`,
++`libraptor_sks_an.so`, `libraptor_cks.so` (rays and camera),
++`libraptor_rt_pol.so`, `libraptor_rt_unpol.so` (one image point through camera,
++march and transfer), `libraptor_pol_step.so` (one polarized segment, native and
++M11 step) and `native_cold` (finiteness of the upstream thermal fits for cold
++electrons). `model/athenak/tests/athenak_probe.c` and `fluid_probe.c` probe the
++AthenaK data layer and `get_fluid_params` on the binary metric.

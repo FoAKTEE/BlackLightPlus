@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 18:27:19 -0700
-Subject: [PATCH 23/23] fix(pol-readout): keep the transported Stokes I when
+Subject: [PATCH 23/24] fix(pol-readout): keep the transported Stokes I when
  the polarized invariant stays below the activation threshold
 
 - finding: radiative_transfer_polarized reads a pixel out as I = Q = U = V = 0 unless POLARIZATION_ACTIVE, which pol_integration_step sets only while I_pol,inv > 1e-100; unpolarized emission (Gold T3: 64 of 64 pixels) and faint pixels whose polarized part was absorbed below the threshold lose their I (R10 deck, i = 90: 823127 of 1048576 pixels, 7e-12 of the flux, up to 6e-10 of the peak) [SOLID]

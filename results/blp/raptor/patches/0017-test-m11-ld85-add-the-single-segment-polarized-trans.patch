@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FoAKTEE <hw609@cantab.ac.uk>
 Date: Fri, 25 Sep 2026 13:17:13 -0700
-Subject: [PATCH 17/23] test(m11-ld85): add the single-segment polarized
+Subject: [PATCH 17/24] test(m11-ld85): add the single-segment polarized
  transfer library for R07
 
 - change: tests/pol_step.c exposes one constant-coefficient polarized segment of the transfer, the native check_stiffness -> RK4/trapezoid step (solver 0) and the exact LD85 step pol_rte_ld85_step (solver 1); build_tests.sh builds libraptor_pol_step.so with --no-undefined

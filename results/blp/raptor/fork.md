@@ -11,6 +11,7 @@
 | fork branch | `blp-bbh`, branched from `b91e937`; every modification is one commit on it |
 | provenance | `ref-code/jordydavelaar-raptor/PROVENANCE.md` (listed in `.git/info/exclude`, so it never enters the fork history) |
 | patch series | `results/blp/raptor/patches/NNNN-*.patch` plus `patches/SERIES` (base, head, one line per commit, sha256 per patch) |
+| change log | `BLP_CHANGES.md` at the fork root: every switch with its default, modifications M1–M12 with files and commits, and the upstream defects D1–D16 (fixed on the branch or reported) |
 
 `ref-code/` is ignored by the BlackLightPlus repository. The patch series is
 therefore the tracked record of the fork. After every commit on `blp-bbh`, run
@@ -95,17 +96,14 @@ BlackLightPlus primitives exactly as `primitive_four_vectors` and `plasma_decode
 `bbh.in` holds `nholes`, `mass`, `spin`, `center1`, `center2`, `C`, `nmax`,
 `escape`, `horizon_eps`, `capture_redshift` and `cam_dist`.
 
-Upstream fix on the matched path: the unpolarized transfer adds `j ds` on
-absorption-free segments (upstream dropped them).
-
 M12 (always on without AMR): `calculate_image_all` runs every pixel of every block in one
 OpenMP loop (`schedule(dynamic, 64)`); `main` prints `RAPTOR_TIMERS` (load, setup, loop,
 trace, transfer, output walls; thread-summed geodesic and transfer times; rays; stored
 states); under `STEP_BBH` the HDF5 image carries `endclass` and `nsamples` per pixel.
 
-Upstream fix on the native path: `rho_Q_thermal` takes K₁/K₂ → 1 when K₂(1/Θ_e)
-underflows (Θ_e < 1.4e−3), as `rho_V_thermal` does for K₀/K₂; before, the NaN blanked the
-pixel.
+Fixes of upstream defects on the branch (D8 absorption-free unpolarized segments, D10
+`rho_Q_thermal` underflow, D11 `POL_KEEP_I`) and the defects reported without a fix are
+listed in the fork's `BLP_CHANGES.md`.
 
 ## Unit-test drivers
 
