@@ -5,7 +5,8 @@
 #   BENCH  warm best-of-BLP_REPEAT wall time, first-call (JIT-inclusive) time, rate,
 #          speedup T1/Tn and bitwise equality of the n-device output with the 1-device one;
 #   PHASE  (CUDA) from one CUPTI-profiled warm run: host prologue / epilogue, and per device
-#          kernel busy, host-to-device, device-to-host and idle time;
+#          kernel busy (of which raygen: camera-ray kernel), host-to-device, device-to-host
+#          and idle time;
 #   SKIP   one line per leg that cannot run (no functional CUDA, missing snapshot).
 # Legs, Kerr: fused unpolarized 384² / 768² (fp64) and 768² (`precision = :mixed`), fused
 # polarized 256² / 384², native AMR I / IQUV at 384², the AMR driver on the production deck
@@ -354,22 +355,59 @@ end
 
 # Activity class of a CUPTI device-trace row name.
 function row_class(name)
-    m = match(r"^\[copy (\S+) to (\S+) memory\]", name)
-    m === nothing || return occursin("DEVICE", m[1]) ?
-        (occursin("DEVICE", m[2]) ? :d2d : :d2h) : (occursin("DEVICE", m[2]) ? :h2d : :h2h)
+    m = match(r"^\[copy (\S+) to (\S+) memory\]", name)   # e.g. [copy pinned to device memory]
+    dev(k) = occursin("device", lowercase(k))
+    m === nothing || return dev(m[1]) ? (dev(m[2]) ? :d2d : :d2h) : (dev(m[2]) ? :h2d : :h2h)
     return startswith(name, "[") ? :other : :kernel
 end
 
-cupti_now() = (t = Ref{UInt64}(0); CUDA.CUPTI.cuptiGetTimestamp(t); t[] / 1e9)
+# CUPTI.jl's activity-buffer callbacks push to shared vectors without a lock; the pool's
+# lanes issue CUDA calls from several threads, so CUPTI requests buffers concurrently and
+# Julia aborts ("Vector can not be resized concurrently"). The same bodies, serialized
+# (the @cfunction pointers CUPTI registers dispatch to the latest method).
+const _CUPTI_LOCK = Threads.SpinLock()
+@eval CUDA.CUPTI begin
+    function request_buffer(dest_ptr, sz_ptr, max_num_records_ptr)
+        dest = Base.unsafe_wrap(Array, dest_ptr, 1)
+        sz = Base.unsafe_wrap(Array, sz_ptr, 1)
+        max_num_records = Base.unsafe_wrap(Array, max_num_records_ptr, 1)
+        Base.@lock $(_CUPTI_LOCK) begin
+            cfg = activity_config[]
+            if cfg !== nothing
+                buf = isempty(cfg.available_buffers) ? allocate_buffer() :
+                      pop!(cfg.available_buffers)
+                push!(cfg.active_buffers, buf)
+                sizehint!(cfg.results, length(cfg.active_buffers))
+                dest[] = pointer(buf); sz[] = sizeof(buf)
+            else
+                dest[] = C_NULL; sz[] = 0
+            end
+            max_num_records[] = 0
+        end
+        return
+    end
+    function complete_buffer(ctx_handle, stream_id, buf_ptr, sz, valid_sz)
+        Base.@lock $(_CUPTI_LOCK) begin
+            cfg = activity_config[]
+            cfg === nothing || push!(cfg.results, (ctx_handle, stream_id, buf_ptr, sz, valid_sz))
+        end
+        return
+    end
+end
+
+cupti_now() =(t = Ref{UInt64}(0); CUDA.CUPTI.cuptiGetTimestamp(t); t[] / 1e9)
 
 # One profiled warm run -> PHASE records (seconds on the CUPTI clock).
 function emit_cuda_phases(leg, run, devs)
     t0 = Ref(0.0); t1 = Ref(0.0)
     prof = CUDA.@profile (t0[] = cupti_now(); run(devs); t1[] = cupti_now())
     d = prof.device
-    rows = [(start = d.start[i], stop = d.stop[i], dev = d.device[i], cls = row_class(d.name[i]))
+    rows = [(start = d.start[i], stop = d.stop[i], dev = d.device[i], cls = row_class(d.name[i]),
+             name = d.name[i])
             for i in eachindex(d.start)]
     base = (:leg => leg, :backend => BACKEND, :ndev => length(devs))
+    println("# trace rows ", leg, " ndev=", length(devs), ": ",
+            join(sort!(unique(n for n in d.name if row_class(n) !== :kernel)), " | "))
     isempty(rows) && return emit("PHASE", base..., :device => "all", :phase => "no_device_activity",
                                  :seconds => t1[] - t0[])
     emit("PHASE", base..., :device => "all", :phase => "host_prologue",
@@ -382,6 +420,10 @@ function emit_cuda_phases(leg, run, devs)
         for (ph, c) in (("kernel", :kernel), ("h2d", :h2d), ("d2h", :d2h))
             emit("PHASE", base..., :device => dev, :phase => ph, :seconds => union_length(iv(c)))
         end
+        # device camera-ray generation (part of `kernel`)
+        rg = [(r.start, r.stop) for r in mine if r.cls === :kernel && occursin("camray", r.name)]
+        isempty(rg) || emit("PHASE", base..., :device => dev, :phase => "raygen",
+                            :seconds => union_length(rg))
         busy = union_length([(r.start, r.stop) for r in mine])
         emit("PHASE", base..., :device => dev, :phase => "idle", :seconds => (t1[] - t0[]) - busy)
     end
