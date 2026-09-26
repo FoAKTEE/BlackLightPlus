@@ -32,6 +32,7 @@ makedocs(;
         ],
         "Method" => "method.md",
         "Benchmarks" => "benchmarks.md",
+        "Validation" => "validation.md",
         "API Reference" => [
             "Overview" => "api/index.md",
             "Configuration" => "api/inputs.md",

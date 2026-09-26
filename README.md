@@ -12,7 +12,7 @@ transfer in **arbitrary spacetimes**, written in Julia.
 *Stokes I, linear polarization fraction |P|/I, Q and U of an analytic
 magnetized torus (`PolishDoughnut`, pressure maximum at r = 9 M) around a Kerr
 black hole with a/M = 0.94, at 230 GHz and i = 60°, 128² pixels, from the
-coherency-tensor march. Produced by [`figures/fig_examples.jl`](figures/fig_examples.jl).*
+polarized reverse march. Produced by [`figures/fig_examples.jl`](figures/fig_examples.jl).*
 
 A single code path renders images from analytic metrics, superposed
 Kerr–Schild binaries, and numerical-relativity spacetimes, on CPU and GPU, with
@@ -26,7 +26,7 @@ automatic differentiation through the entire pipeline.
 - **Arbitrary spacetimes** — any analytic metric via AD (`UserMetric`), binary
   black holes (`SuperposedKerrSchild`), and real numerical-relativity slices
   from AthenaK Z4c dumps (`z4c_grid_spacetime`).
-- **Radiative transfer** — full IQUV transport via the coherency tensor, with
+- **Radiative transfer** — full IQUV transport in a parallel-transported camera frame, with
   thermal, power-law, and kappa synchrotron emission, Faraday rotation and
   conversion, and R_high/R_low electron temperatures (`render`).
 - **GPU** — fused single-kernel imaging with geodesics, fluid sampling, and
@@ -87,6 +87,7 @@ result = render(cfg, "torus.athdf"; polarized = true)       # (I, Q, U, V)
 | [Monte Carlo spectra](https://foaktee.github.io/BlackLightPlus/dev/guide/montecarlo/) | Compton scattering, GRMHD spectra, reproducibility |
 | [Method](https://foaktee.github.io/BlackLightPlus/dev/method/) | the physics and numerical methods |
 | [Benchmarks](https://foaktee.github.io/BlackLightPlus/dev/benchmarks/) | measured performance and accuracy cross-checks |
+| [Validation](https://foaktee.github.io/BlackLightPlus/dev/validation/) | cross-code comparison with RAPTOR on analytic and binary GRMHD images |
 | [API Reference](https://foaktee.github.io/BlackLightPlus/dev/api/) | every exported symbol |
 
 ## Testing

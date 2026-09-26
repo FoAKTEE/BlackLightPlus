@@ -96,8 +96,42 @@ write_npy("stokes_I.npy", img.I)
 For interferometric observables, `radon_cut` and `visamp` compute visibility
 amplitudes from an image — see [Outputs](@ref "Outputs API").
 
+## Known input issues
+
+These concern the AthenaK binary-black-hole runs imaged by
+`figures/fig_eht_bbh.jl` and the [RAPTOR comparison](@ref "Validation against RAPTOR"),
+not either ray tracer.
+
+- **Spin in units of the total mass.** The AthenaK `dynbbh` problem generator
+  (`src/pgen/dynbbh.cpp` at AthenaK commit `6df4d7e8`, lines 1346–1352) sets each
+  hole's Kerr–Schild spin to the header value `a1`, `a2` in units of the total
+  mass while the hole mass is $1/(1+q)$. The spinning runs (snapshots 00093 and
+  00122: $a_1=a_2=0.8$, $q=1$) therefore evolve a Kerr–Schild term with
+  $a/m=1.6$, beyond the extremal limit, which no geodesic code can trace.
+  `fig_eht_bbh.jl` images such a hole at dimensionless spin $\chi=a$
+  ($a_{\rm used}=\chi\,m_A=0.4$) and records the mapping as `spin_mapping` in
+  each run record.
+- **Spin cross terms in `dynbbh.cpp`.** Hole 1's $\boldsymbol a\cdot\boldsymbol x$
+  uses `o13 = x2BH1*a2x` (line 1485) where $a_{1y}$ belongs, its $a^2$ term uses
+  $a_{2x}^2$ (line 1479), and hole 2's spin vector is built from `bbh.a1`
+  (lines 1349–1351). None of these changes the runs imaged here, which have both
+  spins along $z$ and $a_1=a_2$.
+- **Snapshot 00093** carries a cold, dense ball at $r<8$ about the origin and the
+  transient of its restart; 28%, 41% and 46% of its 230 GHz flux at
+  $i=17^\circ,60^\circ,90^\circ$ lies outside the 56 $M$ field of view. Both codes
+  image the data as is.
+- **Orbital phase of snapshot 00455.** The hole positions follow from the
+  analytic trajectory, $\phi_0={\rm rem2pi}(\Omega t)$ with
+  $\Omega={\rm sep}^{-3/2}=0.008$ for separation 25. The dump header stores the
+  time to six significant digits (±0.004 rad in $\phi_0$), so
+  `fig_eht_bbh.jl` takes $t$ from `tlim` $=453146.89818$ when it lies within 0.5
+  of the header time, giving $\phi_0=-0.2227368$ and centres
+  $\pm(12.19120680,-2.76124551,0)$. The adaptive-refinement deck of
+  `figures/fig_bbh_i90_pol_amr.jl` fixes $\phi_0=-0.2233022$, $5.7\times10^{-4}$
+  rad (0.007 $M$ in position) from that value.
+
 ## Where to go next
 
-- [GPU rendering](@ref) — the same images, roughly 100× faster.
+- [GPU rendering](@ref) — the same images on one or more GPUs.
 - [Numerical-relativity and binary spacetimes](@ref) — non-Kerr backgrounds.
 - [Method](@ref "Method") — the transfer scheme and coefficient fits.
