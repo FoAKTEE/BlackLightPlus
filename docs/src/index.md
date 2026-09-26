@@ -8,7 +8,7 @@ Kerr–Schild binaries, and numerical-relativity spacetimes, on CPU and GPU, wit
 automatic differentiation through the entire pipeline.
 
 ```@raw html
-<img src="assets/torus_IQUV.png" alt="Polarized image of an AthenaK GRMHD torus"
+<img src="assets/torus_IQUV.png" alt="Polarized image of an analytic magnetized torus around a Kerr black hole"
      style="max-width:100%; border-radius:6px; margin:1.5rem 0;">
 ```
 
@@ -46,6 +46,7 @@ automatic differentiation through the entire pipeline.
 | Compute Compton spectra | [Monte Carlo spectra](@ref) |
 | Understand the physics and numerics | [Method](@ref "Method") |
 | See measured performance | [Benchmarks](@ref) |
+| See the cross-code validation | [Validation against RAPTOR](@ref) |
 | Look up a function | [API Overview](@ref) |
 
 ## Citing
