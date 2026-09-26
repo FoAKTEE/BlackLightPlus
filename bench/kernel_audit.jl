@@ -16,11 +16,16 @@
 #   julia --project=. bench/kernel_audit.jl                   # print the table
 #   julia --project=. bench/kernel_audit.jl --write           # record the baseline
 #   julia --project=. bench/kernel_audit.jl --check           # exit 1 on a regression
+#   julia --project=. bench/kernel_audit.jl --device          # on-device cross-check (GPU)
 # Options: --baseline <path> (default bench/kernel_audit_baseline.json)
 #          --only <name,name,...>   --tol-regs <n> (default 0)   --tol-stack <bytes> (default 0)
 # --check fails when a kernel's registers or stack exceed baseline + tolerance, when any
 # of its spill counts grows at all, when a kernel fails to compile, or when a baseline
 # kernel is no longer audited. Kernels absent from the baseline are reported as NEW.
+# --device also compiles each kernel for CUDA device 0 through `cufunction` (the path of a
+# CUDABackend launch) and prints, per kernel,
+#   KDEV <name> regs=<device> offline=<offline> local=<device local bytes> stack=<offline> match=<bool>
+# and `DEVICE PASS` / `DEVICE FAIL` (exit 1) on whether every register count matches.
 using BlackLightPlus, CUDA, KernelAbstractions, StaticArrays, Printf
 using ForwardDiff: Dual
 using BlackLightPlus: EquatorialDisk, SuperposedKerrSchild, SphereModel, Spectrum, MCRng,
@@ -185,6 +190,15 @@ function ptxas_resources(asm)
     return (regs = regs, stack = stack, spill_st = st, spill_ld = ld, callee_spill = callee)
 end
 
+# Registers and local memory of the kernel as compiled for the current CUDA device.
+function device_resources(kfun, argT)
+    k = kfun(CUDABackend())
+    _, _, isp, _ = KernelAbstractions.launch_config(k, 1024, nothing)
+    ctx = KernelAbstractions.mkcontext(k, (1024,), isp)
+    hk = CUDA.cufunction(k.f, Tuple{typeof(ctx), argT...})
+    return (regs = CUDA.registers(hk), local_bytes = CUDA.memory(hk).local)
+end
+
 # ---------------------------------------------------------------- baseline JSON (flat)
 const FIELDS = (:regs, :stack, :spill_st, :spill_ld, :callee_spill)
 
@@ -224,7 +238,8 @@ end
 # ---------------------------------------------------------------- main
 function main(args)
     opt(flag, default) = (i = findfirst(==(flag), args); i === nothing ? default : args[i + 1])
-    mode = "--write" in args ? :write : "--check" in args ? :check : :print
+    mode = "--write" in args ? :write : "--check" in args ? :check :
+           "--device" in args ? :device : :print
     path = opt("--baseline", joinpath(REPO, "bench", "kernel_audit_baseline.json"))
     only = opt("--only", nothing)
     tol_regs = parse(Int, opt("--tol-regs", "0"))
@@ -251,7 +266,24 @@ function main(args)
     end
     failed = any(p -> p.second === nothing, rows)
 
-    if mode === :write
+    if mode === :device
+        CUDA.functional() || (println("DEVICE SKIP: CUDA not functional"); return 1)
+        println("# device ", CUDA.name(CUDA.device()), " capability ", CUDA.capability(CUDA.device()))
+        for ((name, (kfun, argT)), (_, r)) in zip(sel, rows)
+            d = try
+                device_resources(kfun, argT)
+            catch err
+                println("KDEV ", name, " ERROR ", sprint(showerror, err)[1:min(end, 300)])
+                failed = true; continue
+            end
+            ok = r !== nothing && d.regs == r.regs
+            ok || (failed = true)
+            @printf("KDEV %-18s regs=%d offline=%s local=%d stack=%s match=%s\n", name, d.regs,
+                    r === nothing ? "?" : string(r.regs), d.local_bytes,
+                    r === nothing ? "?" : string(r.stack), ok)
+        end
+        println(failed ? "DEVICE FAIL" : "DEVICE PASS")
+    elseif mode === :write
         failed && (println("NOT WRITTEN: a kernel failed to compile"); return 1)
         write_baseline(path, rows, tc)
         println("# baseline written to ", path)
