@@ -32,9 +32,17 @@ _backend(::HostDevice) = CPU()
 _upload(backend, x::AbstractArray) =
     copyto!(KernelAbstractions.allocate(backend, eltype(x), size(x)), x)
 
-# Page-locked host memory for the per-chunk staging copies (pageable elsewhere).
-_pin(backend, v::Vector) = v
-_pin(::CUDABackend, v::Vector) = CUDA.pin(v)
+# Host staging buffer of `n` elements of `T` and its release handle: page-locked memory
+# from `cuMemHostAlloc` on CUDA, freed explicitly by `_stage_free` (a `CUDA.pin`ned Vector
+# is unregistered by a GC finalizer that fails when another thread holds CUDA's pin lock,
+# leaving freed memory registered), a plain Vector elsewhere.
+_stage_alloc(backend, ::Type{T}, n::Integer) where {T} = (Vector{T}(undef, n), nothing)
+function _stage_alloc(::CUDABackend, ::Type{T}, n::Integer) where {T}
+    mem = CUDA.alloc(CUDA.HostMemory, max(n, 1) * sizeof(T))
+    return (unsafe_wrap(Array, convert(Ptr{T}, pointer(mem)), n; own = false), mem)
+end
+_stage_free(::Nothing) = nothing
+_stage_free(mem) = CUDA.free(mem)
 
 """
     select_devices(candidates=[0,1]; util_threshold=15, min_free_gb=8) -> Vector{Int}
@@ -166,6 +174,14 @@ function _lane_loop(lane::PoolLane)
             put!(job.done, nothing)
         end
     end
+    init_err === nothing && _free_stage!(lane)
+end
+
+# Release the lane's staging buffers (on the lane, after its last job).
+function _free_stage!(lane::PoolLane)
+    KernelAbstractions.synchronize(lane.backend)
+    foreach(s -> _stage_free(s[2]), values(lane.stage))
+    empty!(lane.stage)
 end
 
 # Workers outlive the world age they started in, so job functions (defined later) run
@@ -360,12 +376,17 @@ function lane_array(lane::PoolLane, key, ::Type{T}, dims::Dims) where {T}
     return b
 end
 
-# Pinned host staging buffer of `n` or more elements of `T` for `key`.
+# Pinned host staging buffer of `n` or more elements of `T` for `key`. A buffer that is
+# too small is freed once the lane's stream has drained (no copy still reads it).
 function lane_stage(lane::PoolLane, key, ::Type{T}, n::Integer) where {T}
     s = get(lane.stage, (key, T), nothing)
-    (s === nothing || length(s) < n) &&
-        (s = lane.stage[(key, T)] = _pin(lane.backend, Vector{T}(undef, n)))
-    return s
+    s === nothing || length(s[1]) >= n && return s[1]
+    if s !== nothing
+        KernelAbstractions.synchronize(lane.backend)
+        _stage_free(s[2])
+    end
+    s = lane.stage[(key, T)] = _stage_alloc(lane.backend, T, n)
+    return s[1]
 end
 
 # ---------------------------------------------------------------- per-ray march executor
