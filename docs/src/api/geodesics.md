@@ -61,6 +61,23 @@ rk4_step_fixed
 nullify_covariant
 ```
 
+### Shared kernels of the CPU and device marches
+
+The functions every fixed-control march calls, on the CPU and inside the fused
+kernels: the metric and its inverse from one evaluation, index raising and
+lowering, the geodesic right-hand side extended by parallel-transported frame
+vectors, and the step control and termination of the binary and ADM
+spacetimes ([March termination](@ref)).
+
+```@docs
+BlackLightPlus.Geodesics.metric_and_inverse
+BlackLightPlus.Geodesics.lower_index
+BlackLightPlus.Geodesics.raise_and_norm
+BlackLightPlus.Geodesics.geodesic_transport_rhs
+BlackLightPlus.Geodesics.spacetime_control
+BlackLightPlus.Geodesics.adm_control
+```
+
 ## Conserved quantities and diagnostics
 
 ```@docs

@@ -23,6 +23,7 @@ BlackLightPlus.Radiation.plasma_decode
 
 ```@docs
 fluid_tetrad
+BlackLightPlus.Radiation.fluid_tetrad_checked
 ```
 
 ## Transfer coefficients
@@ -71,6 +72,9 @@ eigenstructure.
 ```@docs
 stokes_couple
 couple_unpolarized
+BlackLightPlus.Radiation.stokes_segment
+BlackLightPlus.Radiation.unpolarized_segment
+BlackLightPlus.Radiation.stokes_admissible
 ```
 
 ## Marching along a ray
@@ -81,8 +85,25 @@ them for you.
 
 ```@docs
 BlackLightPlus.Radiation.eight_coefficients
+BlackLightPlus.Radiation.unpolarized_coefficients
+BlackLightPlus.Radiation.coefficient_params
 BlackLightPlus.Radiation.unpolarized_march
 BlackLightPlus.Radiation.polarized_march
+```
+
+### Reverse marches
+
+One march per transfer mode, shared by the CPU drivers and every fused kernel
+([the transfer scheme](@ref "Radiative transfer")). A march control supplies the
+geodesic: a fixed-control Kerr march, a generic spacetime march, or the stored
+states of a traced path.
+
+```@docs
+BlackLightPlus.Radiation.reverse_unpolarized_march
+BlackLightPlus.Radiation.reverse_polarized_march
+BlackLightPlus.Radiation.KerrMarch
+BlackLightPlus.Radiation.SpacetimeMarch
+BlackLightPlus.Radiation.StoredPath
 ```
 
 ## Equatorial disk source

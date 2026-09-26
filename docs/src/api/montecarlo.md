@@ -12,8 +12,10 @@ BlackLightPlus.MonteCarlo
 ## Random numbers
 
 The counter-based Philox4x32-10 generator [Salmon2011](@citep). It is
-stateless and keyed per superphoton, so GPU runs replay the CPU result
-photon-for-photon at matched seeds.
+stateless; every stream is named by the photon's genealogy (primary index,
+then the scattering event of each ancestor), so no draw depends on the thread,
+chunk, device or buffer slot that processes the photon
+([the stream scheme](@ref "Monte Carlo spectral synthesis")).
 
 ```@docs
 philox4x32
@@ -24,6 +26,16 @@ mc_gauss
 sample_direction
 standard_gamma
 chi_square
+```
+
+### Stream identities
+
+```@docs
+BlackLightPlus.MonteCarlo.MCStreamLayout
+BlackLightPlus.MonteCarlo.mc_primary_rng
+BlackLightPlus.MonteCarlo.mc_child_rng
+BlackLightPlus.MonteCarlo.mc_stream_id
+BlackLightPlus.MonteCarlo.mc_stream_layer
 ```
 
 ## Superphotons
@@ -128,6 +140,18 @@ nuLnu_solid
 total_power
 total_weight
 mean_energy
+```
+
+### Exact accumulation
+
+Spectrum bins and scattering diagnostics are summed exactly, as integer
+multiples of $2^{-1074}$ in a 68-limb integer accumulator, and rounded once,
+so the result does not depend on summation order.
+
+```@docs
+BlackLightPlus.MonteCarlo.ExactSpectrum
+BlackLightPlus.MonteCarlo.xsum_add!
+BlackLightPlus.MonteCarlo.xsum_round
 ```
 
 ## Sphere models
