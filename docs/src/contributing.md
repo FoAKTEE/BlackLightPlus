@@ -30,9 +30,9 @@ does not run them: `test_ray_orientation.jl`, `test_bbh_superposed.jl`,
 `test_athdf_press_layout.jl`, `test_leaf_hash.jl`, `test_device_pool.jl`,
 `test_device_rays.jl`, `test_device_schedule.jl`, `test_device_amr.jl`,
 `test_device_invariance.jl`, `test_mc_exact.jl` and `test_bench_lines.jl`.
-Together they pass on the KernelAbstractions CPU backend (2006 passed, 2
-broken, about 3 minutes at 16 threads). To add them, place these lines inside
-the top-level `@testset "BlackLightPlus"` of `test/runtests.jl`:
+To add them, place these lines inside the top-level `@testset "BlackLightPlus"`
+of `test/runtests.jl`. With them the suite passes on the KernelAbstractions CPU
+backend (63441 passed, 2 broken, 5.6 minutes at 16 threads):
 
 ```julia
     isfile(joinpath(@__DIR__, "..", "src", "radiation", "transfer.jl")) &&
@@ -46,7 +46,11 @@ the top-level `@testset "BlackLightPlus"` of `test/runtests.jl`:
         withenv("BLP_SKIP_GPU" => "1") do
             include("test_ray_orientation.jl")
             include("test_bbh_superposed.jl")
-            include("test_march_termination.jl")
+            # own module: its file-scope names collide with earlier suite files
+            let m = Module(:TestMarchTermination)
+                Core.eval(m, :(include(p) = Base.include($m, p)))
+                Base.include(m, joinpath(@__DIR__, "test_march_termination.jl"))
+            end
         end
     # Multi-device suite on HostDevice logical devices; CUDA blocks skip themselves
     isfile(joinpath(@__DIR__, "..", "src", "gpu_pool.jl")) &&
