@@ -85,7 +85,7 @@ construction of Jipole [NaetheMotta2025](@citep).
 
 ## Monte Carlo
 
-### `mc_spectrum_gpu(model, n; devices=select_devices())`
+### `mc_spectrum_gpu(model, n; device=0, devices=nothing, chunk=2^20)`
 
 Monte Carlo spectral synthesis on device. Multi-order scattering is layered,
 not recursive: the host relaunches once per scattering generation. Devices
@@ -93,7 +93,11 @@ run chunks of `chunk` (default 2²⁰) contiguous global photon ids on the devic
 the host tables are built once per call and uploaded once per device. Streams are
 keyed by genealogy and bins are exact integer-limb sums merged in chunk order, so the
 output is bitwise independent of the device count and the chunking. `devices` accepts
-CUDA ordinals, `HostDevice`s (the KernelAbstractions CPU backend) or a `DevicePool`.
+CUDA ordinals, `HostDevice`s (the KernelAbstractions CPU backend) or a `DevicePool`;
+without it the run uses the single device `device`. The scattering method's child
+buffer holds `capacity_factor` (default 0.5) times the layer's photon count, at least
+`min_capacity` (default 4096) entries, and a layer that overflows it is rerun at the
+exact size.
 
 *File:* `src/montecarlo/mc_gpu.jl`
 

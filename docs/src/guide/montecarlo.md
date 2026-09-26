@@ -64,8 +64,8 @@ rises.
 ## Reproducibility
 
 Randomness comes from the counter-based Philox4x32-10 generator
-[Salmon2011](@citep). It is stateless and keyed per superphoton, so runs
-replay exactly:
+[Salmon2011](@citep). It is stateless and every photon has its own stream, so
+runs replay exactly:
 
 ```julia
 a = mc_spectrum(SphereModel(), 1e5; seed = 42)

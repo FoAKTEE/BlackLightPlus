@@ -47,6 +47,9 @@ These hold throughout the API and are not repeated in every docstring:
   $\alpha_\nu \nu$, $\rho_\nu \nu$, with invariant intensity
   $\mathcal{I} = I_\nu/\nu^3$.
 - Physics arithmetic is `Float64`. Plasma quantities are in cgs.
+- Camera rays are the received photon traced backward ($p_\mu=-k_\mu$,
+  $p_t=+1$), and Stokes parameters follow IEEE/IAU; the full table is in
+  [Method](@ref method-conventions).
 
 Where a function departs from any of these, its docstring says so.
 
