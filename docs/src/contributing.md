@@ -22,6 +22,52 @@ Test blocks that need a GPU or external simulation data skip automatically when
 the device or file is absent, and report the skip — a skip is never a silent
 pass.
 
+### Test files not yet in the suite
+
+Thirteen test files are not included by `test/runtests.jl`, so `Pkg.test`
+does not run them: `test_ray_orientation.jl`, `test_bbh_superposed.jl`,
+`test_march_termination.jl`, `test_emission_admissibility.jl`,
+`test_athdf_press_layout.jl`, `test_leaf_hash.jl`, `test_device_pool.jl`,
+`test_device_rays.jl`, `test_device_schedule.jl`, `test_device_amr.jl`,
+`test_device_invariance.jl`, `test_mc_exact.jl` and `test_bench_lines.jl`.
+Together they pass on the KernelAbstractions CPU backend (2006 passed, 2
+broken, about 3 minutes at 16 threads). To add them, place these lines inside
+the top-level `@testset "BlackLightPlus"` of `test/runtests.jl`:
+
+```julia
+    isfile(joinpath(@__DIR__, "..", "src", "radiation", "transfer.jl")) &&
+        include("test_emission_admissibility.jl")
+    if isfile(joinpath(@__DIR__, "..", "src", "simulation", "athenak_reader.jl"))
+        include("test_athdf_press_layout.jl")
+        include("test_leaf_hash.jl")
+    end
+    # Kernels on the KernelAbstractions CPU backend; no CUDA device is touched
+    isfile(joinpath(@__DIR__, "..", "src", "gpu_image.jl")) &&
+        withenv("BLP_SKIP_GPU" => "1") do
+            include("test_ray_orientation.jl")
+            include("test_bbh_superposed.jl")
+            include("test_march_termination.jl")
+        end
+    # Multi-device suite on HostDevice logical devices; CUDA blocks skip themselves
+    isfile(joinpath(@__DIR__, "..", "src", "gpu_pool.jl")) &&
+        withenv("BLP_SKIP_GPU" => "1") do
+            include("test_device_pool.jl")
+            include("test_device_rays.jl")
+            include("test_device_schedule.jl")
+            include("test_device_amr.jl")
+            include("test_device_invariance.jl")
+        end
+    isfile(joinpath(@__DIR__, "..", "bench", "bench_lines.jl")) &&
+        include("test_bench_lines.jl")
+```
+
+and, inside the existing `if isfile(... "montecarlo", "montecarlo.jl")` block:
+
+```julia
+        isfile(joinpath(@__DIR__, "..", "src", "montecarlo", "mc_gpu.jl")) &&
+            include("test_mc_exact.jl")
+```
+
 ### Environment variables
 
 | Variable | Effect |
