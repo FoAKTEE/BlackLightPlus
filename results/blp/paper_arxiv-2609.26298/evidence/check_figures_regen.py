@@ -11,6 +11,9 @@
 3b. fig_polarized.pdf and figures/out/pol_hires come from a run whose SHA also contains
    6031897 (the shared transported-frame polarized march that replaced the Strang-split
    coherency march; figures 2 and 4 do not use it, see paper/figures/CAPTIONS.md).
+3c. Every saved polarized run comes from a SHA that contains 2fab069 (the j_P <= j_I
+   emission rescale): figures/out/pol_hires/meta.txt, figures/out/examples_meta.txt
+   (polarized torus) and figures/out/bbh_i90_pol_amr/records.json.
 4. paper/scripts/plot_analytic.py reads the .npy data (no PNG decoding).
 5. No `PENDING sign-fix` marker remains in paper/sections.
 Exit status 0 = pass. Run from the repository root.
@@ -24,6 +27,7 @@ import sys
 
 FIX = "706b55f"
 MARCH = "6031897"   # shared transported-frame polarized march (MG13)
+EMIS = "2fab069"    # j_P <= j_I emission admissibility rescale
 ROOT = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True,
                       text=True, check=True).stdout.strip()
 
@@ -72,6 +76,17 @@ def main():
     print("ok  " if ok else "FAIL", "fig_polarized and pol_hires after", MARCH)
     if not ok:
         bad.append("fig_polarized not rebuilt after " + MARCH)
+
+    bbh = json.load(open(os.path.join(ROOT, "figures/out/bbh_i90_pol_amr/records.json")))
+    pol_runs = {k: shas[k] for k in ("figures/out/pol_hires/meta.txt",
+                                     "figures/out/examples_meta.txt")}
+    pol_runs["figures/out/bbh_i90_pol_amr/records.json"] = bbh.get("git_sha")
+    for name, sha in pol_runs.items():
+        ok = (sha is not None and not sha.endswith("-dirty")
+              and git("merge-base", "--is-ancestor", EMIS, sha).returncode == 0)
+        print("ok  " if ok else "FAIL", f"{name} after {EMIS} (git={sha})")
+        if not ok:
+            bad.append(f"{name} predates {EMIS}")
 
     src = open(os.path.join(ROOT, "paper", "scripts", "plot_analytic.py")).read()
     if "analytic_disk_I.npy" not in src or "PIL" in src:
