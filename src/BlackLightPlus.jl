@@ -2,7 +2,7 @@
     BlackLightPlus
 
 General-relativistic ray tracing and polarized radiative transfer in Julia,
-after blacklight (C++/Kokkos) and ipole: a two-phase driver (geodesics, then
+after blacklight (C++/OpenMP) and ipole: a two-phase driver (geodesics, then
 radiation) over pure StaticArrays staged functions shared by CPU, GPU, and AD.
 Conventions: signature (−,+,+,+); G = c = M = 1; Cartesian Kerr-Schild; state
 y = [x^μ; p_μ] (covariant momentum, p_t conserved for stationary metrics);
