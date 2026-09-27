@@ -20,9 +20,10 @@ holes with spins along ±z,
 
 exact for one BH, the standard large-separation binary initial-data ansatz for
 two. The single-KS inverse shortcut is invalid for the sum (cross term
-f_A f_B l^A·l^B), so `inverse_metric` uses the full 4×4 inverse (StaticArrays)
-and `inverse_metric_gradient` differentiates THAT with ForwardDiff — reducing
-exactly to single Kerr when a second mass is zero.
+f_A f_B l^A·l^B), so `inverse_metric` uses the Woodbury identity (an N×N solve,
+2×2 for a binary; see `_superposed_gcon`) and `inverse_metric_gradient`
+differentiates THAT with ForwardDiff — reducing exactly to single Kerr when a
+second mass is zero.
 """
 struct SuperposedKerrSchild{N,T} <: StationarySpacetime{T}
     mass::SVector{N,T}

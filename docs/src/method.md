@@ -63,8 +63,11 @@ metric never needs hand-coded derivatives.
 - **`SuperposedKerrSchild(masses, spins, centers)`** — superposes $N$
   Kerr–Schild holes, $g_{\mu\nu}=\eta_{\mu\nu}+\sum_A f_A l^A_\mu l^A_\nu$,
   an analytic approximate binary (or $N$-body) spacetime. The cross terms break
-  the single-hole inverse identity, so the full $4\times4$ inverse is taken and
-  differentiated by AD. The construction reduces bitwise to single Kerr when a
+  the single-hole inverse identity; the inverse follows from the Woodbury
+  identity $g^{-1}=\eta^{-1}-U(\mathbf 1_N+FU^{\mathsf T}L)^{-1}FU^{\mathsf T}$, with
+  $L$ the $4\times N$ matrix of the $l^A_\mu$, $U=\eta^{-1}L$ and
+  $F={\rm diag}(f_A)$, so a binary needs one $2\times2$ solve, and AD
+  differentiates through it. The construction reduces bitwise to single Kerr when a
   second mass vanishes; rays end by the shared rule of [March termination](@ref).
 - **`ADMGridSpacetime`** — a frozen-slice numerical spacetime: a Cartesian grid
   of the ten ADM fields $(\alpha,\beta^i,\gamma_{ij})$, reassembled into the
