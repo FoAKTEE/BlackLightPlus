@@ -21,6 +21,8 @@ Checks, each a hard failure:
      (% E12) from evidence/claims.md, or % SRC:, % FIG:, % CONV: for code parameters,
      figure setup (paper/figures/CAPTIONS.md), and convention constants; [OPEN] ids
      (E32-E34) appear only in sections/discussion.tex, the limitations section;
+     sections/acknowledgments.tex is author-controlled (funding, allocation and grant
+     identifiers, tool versions) and carries no results, so it is exempt from this rule;
   6. the introduction has exactly three paragraphs.
 """
 import pathlib, re, subprocess, sys
@@ -104,6 +106,8 @@ TAG = re.compile(r"%.*?(\bE\d+\b|SRC:|FIG:|CONV:)")
 MATH_ENV = re.compile(r"\\(begin|end)\{(equation|align|gather)\*?\}")
 used = set()
 for name, text in src.items():
+    if name == "acknowledgments.tex":
+        continue
     in_math = False
     for n, line in enumerate(text.splitlines(), 1):
         if MATH_ENV.search(line):
