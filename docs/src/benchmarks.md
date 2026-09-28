@@ -1,7 +1,7 @@
 # Benchmarks
 
 Measured performance of BlackLightPlus. All numbers below were measured on one
-machine: 2× NVIDIA A100 80 GB, 2× Intel Xeon Platinum 8360Y (144 cores),
+machine: 2× NVIDIA A100 80 GB, 2× Intel Xeon Platinum 8360Y (72 cores, 144 hardware threads),
 CUDA 13.2, Julia 1.12.6. Timings are warm (JIT excluded), best-of-N, taken with
 each leg running sequentially and exclusively. Imaging throughput is rays/s
 (= pixels/wall); Monte Carlo throughput counts tracked superphotons/s
