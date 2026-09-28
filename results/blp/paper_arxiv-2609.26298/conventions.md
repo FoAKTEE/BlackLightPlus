@@ -26,6 +26,18 @@ Gralla & Lupsasca 2020, DOC = docs/src/method.md + docs/src/guide/*.md. Import n
 | Electron temperature ($R_{\rm high}/R_{\rm low}$) | $R\equiv T_i/T_e=\dfrac{R_{\rm high}\beta^2+R_{\rm low}}{1+\beta^2}$ ($\beta_{\rm crit}=1$), $\beta=p_{\rm gas}/p_{\rm mag}$; default $k_BT_e=\dfrac{1+n_e/n_i}{R+n_e/n_i}\,\dfrac{\mu m_p p_{\rm gas}}{\rho}$ (total-pressure split); alternative internal-energy split with $\gamma_i=5/3$, $\gamma_e=4/3$ | src/radiation/coefficients.jl:215–229; src/inputs/parameters.jl:25–29 | M16 l.273–281: $T_p/T_e=R_{\rm high}b^2/(1+b^2)+R_{\rm low}/(1+b^2)$, $b=\beta/\beta_{\rm crit}$, $\beta_{\rm crit}=1$: identical. KP: same $R(\beta)$ with free $\beta_{\rm crit}$ and the Wong+2022 internal-energy $\Theta_e$; maps to the code's `use_p=false` branch. |
 | Monte Carlo weights and superphotons | Superphoton state $(x^\mu,k_\mu,w)$, $dN=w\,dN_s$, $E=-k_t$ in $m_ec^2$; weight table $w(\nu)=\sum_{\rm zones}\!\int j_\nu\,dV/(hN_s)$; spectrum $\nu L_\nu=m_ec^2\,\frac{4\pi}{\Delta\Omega}\,\frac{1}{\Delta\ln\nu}\sum_j w_jE_j$; hot cross section $\sigma_h(\varepsilon,\Theta_e)$ | src/montecarlo/superphoton.jl:3–7, :15–24; src/montecarlo/emission_tables.jl:5–7, :89–111; src/montecarlo/spectrum.jl:4–8 | D09 l.171–179: $w$, $N_s$, $dN=w\,dN_s$, contravariant $k^\mu$ in $m_ec^2$; map $k_\mu=g_{\mu\nu}k^\nu$. GPUmonty (arXiv:2602.13198, not in bib) for weight-table and bias details. |
 
+## Manuscript symbols that differ from the table
+
+The manuscript keeps one meaning per symbol: tensor indices are $\mu,\nu,\alpha,\beta$
+(unindexed $\alpha,\beta$ are screen coordinates); power-law index $p_{\rm pl}$ (`\ppl`),
+$\kappa$-distribution index $\kappa_{\rm d}$ and width $w_{\rm d}$ (`\kapd`), Planck function
+$\mathcal B_\nu$ (`\Bnu`), adiabatic indices $\hat\gamma_{\rm i},\hat\gamma_{\rm e}$, electron
+temperature $T_{\rm e}$, $R=[R_{\rm high}(\beta_{\rm p}/\beta_{\rm crit})^2+R_{\rm low}]/[1+(\beta_{\rm p}/\beta_{\rm crit})^2]$,
+thermal $\rho_Q$ fitting function $\Psi_{\rm m}(X)$ (M21's $f_m$), scattering bias $\zeta$
+(`\bias`, D09's $b$), transported vector $Z^\mu$, polarized part $\boldsymbol{\mathcal S}_{\rm P}$
+(`\SvecP`), segment count $N_{\rm seg}$ (`\Nseg`), unpolarized segment emission $J_m$ and
+transmission $e^{-\Delta\tau_m}$, redshift factor written $\nu_{\rm obs}/\nu$.
+
 ## Open items
 
 - **[OPEN-1] Ray time-orientation — resolved.** The camera launched the covector
