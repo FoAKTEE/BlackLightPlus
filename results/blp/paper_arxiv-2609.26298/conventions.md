@@ -29,7 +29,10 @@ Gralla & Lupsasca 2020, DOC = docs/src/method.md + docs/src/guide/*.md. Import n
 ## Manuscript symbols that differ from the table
 
 The manuscript keeps one meaning per symbol: tensor indices are $\mu,\nu,\alpha,\beta$
-(unindexed $\alpha,\beta$ are screen coordinates); power-law index $p_{\rm pl}$ (`\ppl`),
+(unindexed $\alpha,\beta$ are screen coordinates), and a subscript $\nu$ on $I_\nu$, $j_\nu$,
+$\alpha_\nu$, $\rho_\nu$, $\mathcal B_\nu$ marks a quantity per unit frequency; coherency tensor
+$\mathcal N^{\mu\nu}$ (`\Ncoh`; $N$ and $N^i$ are the lapse and shift); binary hole index $\varpi$
+($f_\varpi$, $l^{(\varpi)}_\mu$, $m_\varpi$, $a_\varpi$; a roman subscript h means horizon); power-law index $p_{\rm pl}$ (`\ppl`),
 $\kappa$-distribution index $\kappa_{\rm d}$ and width $w_{\rm d}$ (`\kapd`), Planck function
 $\mathcal B_\nu$ (`\Bnu`), adiabatic indices $\hat\gamma_{\rm i},\hat\gamma_{\rm e}$, electron
 temperature $T_{\rm e}$, $R=[R_{\rm high}(\beta_{\rm p}/\beta_{\rm crit})^2+R_{\rm low}]/[1+(\beta_{\rm p}/\beta_{\rm crit})^2]$,
