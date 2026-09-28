@@ -21,6 +21,13 @@ native, 10 uas and 20 uas images. Pairs closer than 8 M in projection are flagge
 Writes figures/examples/eht_bbh/fig{1..4}_*.png and .pdf, adds a "metrics" block to
 each image's records.json, and writes figures/out/eht_bbh/metrics_summary.json.
 Usage: python3 figures/plot_eht_bbh.py   [BLP_OUT=<run dir>] [BLP_FIG=<figure dir>]
+
+--native: only the unblurred counterpart of fig 1,
+fig1_snapshot_inclination_grid_native.{png,pdf}: native Stokes I (no beam), same 3x3
+layout, log10 stretch over NATIVE_DECADES below each row's peak brightness temperature
+(one colour scale per row), projected punctures marked. Reads the saved arrays only and
+leaves records.json untouched.
+    python3 figures/plot_eht_bbh.py --native [--pdf <extra pdf path>]
 """
 import json
 import os
@@ -49,6 +56,8 @@ LIM2_UAS = 160.0          # fig 2 / 3 / 4 panel half-width
 NG_BEAM_UAS = 10.0        # ngEHT-like resolution, the second blur in fig 2
 RING_CUTS_DEG = np.arange(0, 180, 30)   # cut position angles through each hole
 FC_DISC_UAS = 5.0         # f_C: mean inside this radius over the mean on the ring
+
+NATIVE_DECADES = 3.0      # native grid: log10 T_b over [peak / 10^3, peak] per row
 
 SNAP_LABEL = {
     "s455": "00455  sep 25, a=0 (zoom-in SANE)",
@@ -445,5 +454,67 @@ def main():
         save(fig, "fig4_rhigh_survey")
 
 
+def native_grid(extra_pdf=None, rh_fid=40):
+    """Unblurred fig 1: native Stokes I of the snapshot x inclination grid.
+
+    log10 T_b with one colour scale per row spanning NATIVE_DECADES below the row's
+    native peak; cyan '+' = projected punctures; no beam (the image is not convolved)."""
+    from matplotlib.colors import LogNorm
+    with open(os.path.join(OUT, "index.json")) as f:
+        names = [e["name"] for e in json.load(f)["images"]]
+    snaps = [s for s in ("s455", "s093", "s122") if any(n.startswith(s + "_") for n in names)]
+    incs = sorted({int(n.split("_i")[1].split("_")[0]) for n in names})
+    plt.rcParams.update({"font.size": 8, "axes.titlesize": 8})
+    fig, axs = plt.subplots(len(snaps), len(incs), figsize=(7.0, 2.2 * len(snaps) + 0.25),
+                            squeeze=False, facecolor="white",
+                            gridspec_kw={"wspace": 0.04, "hspace": 0.22})
+    for r, s in enumerate(snaps):
+        row = [f"{s}_i{i:02d}_Rh{rh_fid}" for i in incs]
+        data = {n: load(n) for n in row if n in names}
+        vmax = max(tb(img["I"].max(), rec) for rec, img in data.values()) / 1e9
+        norm = LogNorm(vmin=vmax * 10 ** -NATIVE_DECADES, vmax=vmax)
+        for c, n in enumerate(row):
+            ax = axs[r, c]
+            ax.set_facecolor("black")
+            if n not in data:
+                ax.axis("off"); continue
+            rec, img = data[n]
+            T = np.clip(tb(img["I"], rec) / 1e9, norm.vmin, None)
+            im = ax.imshow(T, origin="lower", extent=extent_uas(rec), cmap="afmhot",
+                           norm=norm, interpolation="nearest")
+            set_lim(ax, LIM1_UAS)
+            mark_holes(ax, rec)
+            ax.text(0.04, 0.95, f"$\\theta_{{\\rm o}}={incs[c]}^\\circ$", transform=ax.transAxes, color="w",
+                    va="top")
+            ax.text(0.96, 0.95, f"{rec['flux_Jy']:.2f} Jy", transform=ax.transAxes,
+                    color="w", va="top", ha="right")
+            if c == 0:
+                ax.text(0.04, 0.05, s[1:].rjust(5, "0"), transform=ax.transAxes, color="w",
+                        bbox=dict(fc="black", ec="none", alpha=0.6, pad=1.5))
+            style_axes(ax, left=c == 0, bottom=r == len(snaps) - 1)
+            ax.tick_params(colors="0.2", labelcolor="k")
+        cb = fig.colorbar(im, ax=axs[r, :].tolist(), fraction=0.02, pad=0.01)
+        cb.set_label(r"$T_{\rm b}$ ($10^9$ K)", fontsize=7)
+        cb.ax.tick_params(labelsize=7)
+    stem = "fig1_snapshot_inclination_grid_native"
+    os.makedirs(FIG, exist_ok=True)
+    fig.savefig(os.path.join(FIG, stem + ".png"), dpi=200, bbox_inches="tight")
+    fig.savefig(os.path.join(FIG, stem + ".pdf"), bbox_inches="tight")
+    if extra_pdf:
+        fig.savefig(extra_pdf, bbox_inches="tight")
+        print("wrote", extra_pdf)
+    plt.close(fig)
+    print("wrote", os.path.join(FIG, stem + ".png"))
+
+
 if __name__ == "__main__":
-    main()
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--native", action="store_true",
+                    help="only the unblurred snapshot x inclination grid")
+    ap.add_argument("--pdf", default=None, help="extra PDF path for the native grid")
+    args = ap.parse_args()
+    if args.native:
+        native_grid(args.pdf)
+    else:
+        main()
