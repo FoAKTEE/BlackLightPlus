@@ -9,24 +9,25 @@ Supplement Series. Checks, each a hard failure:
      six \uat{}{} concepts and a \software statement;
   2. main.log reports no undefined references or citations, and no overfull \hbox or
      \vbox wider than 1 pt;
-  3. document order. The layout is: abstract ... conclusions, data availability,
-     acknowledgments, software, then sections/appendix.tex, which issues \clearpage before
-     \appendix, then the bibliography. The main text ends where the "APPENDIX" heading
-     page P begins, so it occupies pages 1..P-1; the check requires the \clearpage, the
-     heading, and that the "REFERENCES" heading follows the appendix start. The main-text
-     page count is reported but not limited: the former 10-page bound was the Physical
-     Review D target, and ApJS sets no page limit;
-  4. exactly six figure environments in the main-text section files (every sections/*.tex
-     except appendix*.tex), each of the six PDFs in paper/figures/ used once, and
-     "Figure N." captions 1-6 in the PDF; figures in appendix*.tex are counted separately
-     and reported;
+  3. document order. The layout is two-column: abstract ... conclusions, acknowledgments,
+     software, then sections/appendix.tex, which issues \clearpage before \appendix (one
+     column), then the bibliography. The main text ends where the "APPENDIX" heading page
+     P begins, so it occupies pages 1..P-1; the check requires the \clearpage, the heading,
+     and that the "REFERENCES" heading follows the appendix start. The main-text page
+     count is reported but not limited: the former 10-page bound was the Physical Review D
+     target, and ApJS sets no page limit;
+  4. exactly six figure environments (figure, figure*, or \paperfig) in the main-text
+     section files (every sections/*.tex except appendix*.tex), each of the six PDFs in
+     paper/figures/ used once, and "Figure N." captions 1-6 in the PDF; figures in
+     appendix*.tex are counted separately and reported;
   5. every number-bearing source line carries a provenance comment: an evidence id
      (% E12) from evidence/claims.md, or % SRC:, % FIG:, % CONV: for code parameters,
      figure setup (paper/figures/CAPTIONS.md), and convention constants; [OPEN] ids
-     (E32-E34) appear only in sections/discussion.tex, the limitations section;
+     (E32-E34) do not appear, since the manuscript has no limitations section;
+     language-model version identifiers (e.g. Opus 4.8) are names, not results;
      sections/acknowledgments.tex is author-controlled (funding, allocation and grant
      identifiers, tool versions) and carries no results, so it is exempt from this rule;
-  6. the introduction has exactly three paragraphs.
+  6. the introduction, up to its first \subsection, has exactly three paragraphs.
 """
 import pathlib, re, subprocess, sys
 
@@ -119,7 +120,7 @@ if caps != [str(i) for i in range(1, 7)]:
 ids = set(re.findall(r"^\| (E\d+) \|", CLAIMS.read_text(), re.M))
 open_ids = {i for i in ids if re.search(rf"^\| {i} \| \[OPEN\]", CLAIMS.read_text(), re.M)}
 NUM = re.compile(r"\d+\.\d+|\d\s*\\times\s*10|10\^\{?-?\d|\d+\s*\\?%|\d{2,}")
-NAMES = re.compile(r"A100|8360Y|M87|Z4c|aastex702|aasjournalv7")
+NAMES = re.compile(r"A100|8360Y|M87|Z4c|aastex702|aasjournalv7|(?:Opus|ChatGPT)\s+\d+(?:\.\d+)*")
 TAG = re.compile(r"%.*?(\bE\d+\b|SRC:|FIG:|CONV:)")
 MATH_ENV = re.compile(r"\\(begin|end)\{(equation|align|gather)\*?\}")
 used = set()
@@ -141,7 +142,7 @@ for name, text in src.items():
             if eid not in ids:
                 fail.append(f"{name}:{n}: unknown evidence id {eid}")
             elif eid in open_ids and name != "discussion.tex":
-                fail.append(f"{name}:{n}: [OPEN] claim {eid} used outside the limitations section")
+                fail.append(f"{name}:{n}: [OPEN] claim {eid} used, but the manuscript has no limitations section")
         if in_math or not code.strip():
             continue
         c = re.sub(r"\\(cite[a-z]*|ref|eqref|label|input)\{[^}]*\}", "", code)
@@ -154,8 +155,9 @@ for name, text in src.items():
         if NUM.search(c) and not TAG.search(line):
             fail.append(f"{name}:{n}: number without provenance comment: {code.strip()[:90]}")
 
-# 6. introduction: exactly three paragraphs
+# 6. introduction: exactly three paragraphs before its first subsection
 intro = re.sub(r"(?m)^[ \t]*%.*\n", "", src["introduction.tex"])
+intro = re.split(r"\\subsection\*?\{", intro)[0]
 intro = re.sub(r"\\section\{[^}]*\}\s*\\label\{[^}]*\}", "", intro).strip()
 paras = [p for p in re.split(r"\n\s*\n", intro) if p.strip()]
 if len(paras) != 3:
