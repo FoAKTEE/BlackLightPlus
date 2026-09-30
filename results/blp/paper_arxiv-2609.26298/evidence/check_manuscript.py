@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Verify the method-paper manuscript in paper/ (run from the repository root).
+r"""Verify the method-paper manuscript in paper/ (run from the repository root).
 
-Checks, each a hard failure:
-  1. paper/main.tex builds with latexmk (pdflatex + bibtex);
+The manuscript uses the AASTeX v7.0.2 class (paper/aastex702.cls) with the AAS bibliography
+style (paper/aasjournalv7.1.bst), both bundled in paper/, for The Astrophysical Journal
+Supplement Series. Checks, each a hard failure:
+  1. paper/main.tex builds with latexmk (pdflatex + bibtex); main.tex loads aastex702 and
+     the bundled aasjournalv7.1 style, and the front matter carries \keywords with at most
+     six \uat{}{} concepts and a \software statement;
   2. main.log reports no undefined references or citations, and no overfull \hbox or
      \vbox wider than 1 pt;
-  3. main-text length. The layout is: abstract ... conclusions, acknowledgments, then
-     sections/appendix.tex, which issues \clearpage before \appendix, then the
-     bibliography. The appendices therefore come before the bibliography, so the main text
-     is measured at the appendix start: the first page carrying the heading
-     "Appendix A:" is page P, the main text (abstract through conclusions, plus the
-     acknowledgments) occupies pages 1..P-1, and P-1 must be <= 10. Appendices and the
-     bibliography are not counted. The check also requires the \clearpage, and that the
-     bibliography starts after the appendix;
+  3. document order. The layout is: abstract ... conclusions, data availability,
+     acknowledgments, software, then sections/appendix.tex, which issues \clearpage before
+     \appendix, then the bibliography. The main text ends where the "APPENDIX" heading
+     page P begins, so it occupies pages 1..P-1; the check requires the \clearpage, the
+     heading, and that the "REFERENCES" heading follows the appendix start. The main-text
+     page count is reported but not limited: the former 10-page bound was the Physical
+     Review D target, and ApJS sets no page limit;
   4. exactly six figure environments in the main-text section files (every sections/*.tex
      except appendix*.tex), each of the six PDFs in paper/figures/ used once, and
      "Figure N." captions 1-6 in the PDF; figures in appendix*.tex are counted separately
@@ -40,6 +43,23 @@ if r.returncode != 0 or not (PAPER / "main.pdf").exists():
     print(r.stdout[-3000:], r.stderr[-2000:])
     sys.exit("FAIL: latexmk build failed")
 
+# 1b. AASTeX class, bundled AAS bibliography style, UAT keywords, software statement
+main_tex = (PAPER / "main.tex").read_text()
+main_code = "\n".join(re.sub(r"(?<!\\)%.*", "", l) for l in main_tex.splitlines())
+if not re.search(r"\\documentclass(\[[^]]*\])?\{aastex702\}", main_code):
+    fail.append("main.tex does not load the aastex702 class")
+if not re.search(r"\\bibliographystyle\{aasjournalv7\.1\}", main_code):
+    fail.append("main.tex does not use the aasjournalv7.1 bibliography style")
+for f in ("aastex702.cls", "aasjournalv7.1.bst"):
+    if not (PAPER / f).exists():
+        fail.append(f"paper/{f} is not bundled")
+kw = re.search(r"\\keywords\{(.*)\}", main_code)
+n_uat = len(re.findall(r"\\uat\{[^}]+\}\{\d+\}", kw.group(1))) if kw else 0
+if not 1 <= n_uat <= 6:
+    fail.append(f"\\keywords carries {n_uat} UAT concepts, expected 1-6")
+if not re.search(r"\\software\{", main_code):
+    fail.append("main.tex has no \\software statement")
+
 # 2. undefined references / citations
 log = (PAPER / "main.log").read_text(errors="replace")
 bad = re.findall(r".*(?:undefined references|Citation .* undefined|Reference .* undefined).*", log)
@@ -56,17 +76,15 @@ def page_text(p):
 npages = int(re.search(r"Pages:\s+(\d+)", subprocess.run(["pdfinfo", "main.pdf"], cwd=PAPER,
              capture_output=True, text=True).stdout).group(1))
 texts = {p: page_text(p) for p in range(1, npages + 1)}
-app_page = next((p for p in texts if re.search(r"Appendix A:", texts[p])), None)
-bib_page = next((p for p in texts if re.search(r"^\s*\[1\]\s", texts[p], re.M)), None)
+app_page = next((p for p in texts if re.search(r"^\s*(\d+\s+)?APPENDIX\s*$", texts[p], re.M)), None)
+bib_page = next((p for p in texts if re.search(r"^\s*(\d+\s+)?REFERENCES\s*$", texts[p], re.M)), None)
 appsrc = (PAPER / "sections" / "appendix.tex").read_text()
 if not re.search(r"\\clearpage\s*\n\s*\\appendix", appsrc):
     fail.append("sections/appendix.tex must issue \\clearpage before \\appendix")
 if app_page is None:
-    fail.append("appendix heading 'Appendix A:' not found in PDF")
-elif app_page - 1 > 10:
-    fail.append(f"main text occupies {app_page - 1} pages (> 10)")
+    fail.append("appendix heading 'APPENDIX' not found in PDF")
 if bib_page is None:
-    fail.append("bibliography not found in PDF")
+    fail.append("bibliography heading 'REFERENCES' not found in PDF")
 elif app_page is not None and bib_page < app_page:
     fail.append(f"bibliography (page {bib_page}) precedes the appendix (page {app_page})")
 main_pages = None if app_page is None else app_page - 1
@@ -101,7 +119,7 @@ if caps != [str(i) for i in range(1, 7)]:
 ids = set(re.findall(r"^\| (E\d+) \|", CLAIMS.read_text(), re.M))
 open_ids = {i for i in ids if re.search(rf"^\| {i} \| \[OPEN\]", CLAIMS.read_text(), re.M)}
 NUM = re.compile(r"\d+\.\d+|\d\s*\\times\s*10|10\^\{?-?\d|\d+\s*\\?%|\d{2,}")
-NAMES = re.compile(r"A100|8360Y|M87|Z4c|revtex4-2|apsrev4-2")
+NAMES = re.compile(r"A100|8360Y|M87|Z4c|aastex702|aasjournalv7")
 TAG = re.compile(r"%.*?(\bE\d+\b|SRC:|FIG:|CONV:)")
 MATH_ENV = re.compile(r"\\(begin|end)\{(equation|align|gather)\*?\}")
 used = set()
@@ -126,7 +144,7 @@ for name, text in src.items():
                 fail.append(f"{name}:{n}: [OPEN] claim {eid} used outside the limitations section")
         if in_math or not code.strip():
             continue
-        c = re.sub(r"\\(cite|ref|eqref|label|input)\{[^}]*\}", "", code)
+        c = re.sub(r"\\(cite[a-z]*|ref|eqref|label|input)\{[^}]*\}", "", code)
         c = re.sub(r"\\paperfig(\[[^]]*\])?\{[^}]*\}", r"\\paperfig", c)
         c = re.sub(r"\\begin\{tabular\}\{[^\n]*?\}(?=\s*$)", "", c)
         c = re.sub(r"\\(begin|end)\{[^}]*\}(\[[^]]*\])?", "", c)
@@ -146,8 +164,9 @@ if len(paras) != 3:
 if fail:
     print("\n".join("FAIL: " + f for f in fail))
     sys.exit(1)
-print(f"OK: builds; main text {main_pages} pages (appendix starts on page {app_page}, "
-      f"bibliography on page {bib_page}, {npages} pages total); {n_main} main-text figures, "
+print(f"OK: builds (AASTeX v7.0.2, {n_uat} UAT keywords); main text {main_pages} pages "
+      f"(appendix starts on page {app_page}, references on page {bib_page}, {npages} pages "
+      f"total); {n_main} main-text figures, "
       f"{n_app} appendix figures; no undefined refs; no overfull box > 1 pt; "
       f"intro 3 paragraphs; evidence ids used: "
       f"{', '.join(sorted(used, key=lambda s: int(s[1:])))}")
