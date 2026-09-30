@@ -16,10 +16,12 @@ Supplement Series. Checks, each a hard failure:
      and that the "REFERENCES" heading follows the appendix start. The main-text page
      count is reported but not limited: the former 10-page bound was the Physical Review D
      target, and ApJS sets no page limit;
-  4. exactly six figure environments (figure, figure*, or \paperfig) in the main-text
-     section files (every sections/*.tex except appendix*.tex), each of the six PDFs in
-     paper/figures/ used once, and "Figure N." captions 1-6 in the PDF; figures in
-     appendix*.tex are counted separately and reported;
+  4. exactly seven figure environments in the main-text section files (every
+     sections/*.tex except appendix*.tex), each written out explicitly as
+     \begin{figure*}[!t] \centering \includegraphics[width=...]{<pdf>} \caption{...}
+     \label{fig:...} \end{figure*}; no \paperfig macro is defined (macros.tex) or used;
+     each of the seven PDFs in paper/figures/ used once, and "Figure N." captions 1-7 in
+     the PDF; figures in appendix*.tex are counted separately and reported;
   5. every number-bearing source line carries a provenance comment: an evidence id
      (% E12) from evidence/claims.md, or % SRC:, % FIG:, % CONV: for code parameters,
      figure setup (paper/figures/CAPTIONS.md), and convention constants; [OPEN] ids
@@ -90,7 +92,8 @@ elif app_page is not None and bib_page < app_page:
     fail.append(f"bibliography (page {bib_page}) precedes the appendix (page {app_page})")
 main_pages = None if app_page is None else app_page - 1
 
-# 4. figures: six in the main text, appendix figures counted separately
+# 4. figures: seven explicit figure environments in the main text, appendix figures
+#    counted separately
 def strip_comments(line):
     return re.sub(r"(?<!\\)%.*", "", line)
 src = {f.name: f.read_text() for f in SECTIONS}
@@ -98,23 +101,35 @@ def body_of(names):
     return "\n".join(strip_comments(l) for n in names for l in src[n].splitlines())
 main_names = [n for n in src if not n.startswith("appendix")]
 app_names = [n for n in src if n.startswith("appendix")]
+N_FIG = 7
+FIG_ENV = re.compile(r"\\begin\{figure\*\}\[!t\]\s*\\centering\s*"
+                     r"\\includegraphics\[width=[^]]+\]\{[^}]+\.pdf\}\s*\\caption\{.*?"
+                     r"\\label\{fig:[^}]+\}\s*\\end\{figure\*\}", re.S)
 def n_fig(text):
-    return len(re.findall(r"\\paperfig\b", text)) + len(re.findall(r"\\begin\{figure\*?\}", text))
+    return len(re.findall(r"\\begin\{figure\*?\}", text))
 body = body_of(src)
-n_main, n_app = n_fig(body_of(main_names)), n_fig(body_of(app_names))
-if n_main != 6:
-    fail.append(f"{n_main} figure environments in the main text, expected 6")
+main_body = body_of(main_names)
+n_main, n_app = n_fig(main_body), n_fig(body_of(app_names))
+if n_main != N_FIG:
+    fail.append(f"{n_main} figure environments in the main text, expected {N_FIG}")
+n_explicit = len(FIG_ENV.findall(main_body))
+if n_explicit != n_main:
+    fail.append(f"{n_main - n_explicit} main-text figures are not explicit figure* "
+                "environments with centering, includegraphics, caption and label")
+macros = "\n".join(strip_comments(l) for l in (PAPER / "macros.tex").read_text().splitlines())
+if re.search(r"\\paperfig\b", body + macros):
+    fail.append("\\paperfig is still defined or used")
 figs = sorted(p.name for p in (PAPER / "figures").glob("*.pdf"))
-if len(figs) != 6 + n_app:
-    fail.append(f"{len(figs)} PDFs in paper/figures, expected {6 + n_app}")
+if len(figs) != N_FIG + n_app:
+    fail.append(f"{len(figs)} PDFs in paper/figures, expected {N_FIG + n_app}")
 for f in figs:
     k = body.count("{" + f + "}")
     if k != 1:
         fail.append(f"figures/{f} used {k} times")
 full = "\n".join(texts[p] for p in range(1, (main_pages or npages) + 1))
 caps = sorted(set(re.findall(r"Figure (\d+)\.", full)), key=int)
-if caps != [str(i) for i in range(1, 7)]:
-    fail.append(f"main-text PDF figure captions {caps}, expected 1-6")
+if caps != [str(i) for i in range(1, N_FIG + 1)]:
+    fail.append(f"main-text PDF figure captions {caps}, expected 1-{N_FIG}")
 
 # 5. provenance of every number-bearing line
 ids = set(re.findall(r"^\| (E\d+) \|", CLAIMS.read_text(), re.M))
@@ -146,7 +161,7 @@ for name, text in src.items():
         if in_math or not code.strip():
             continue
         c = re.sub(r"\\(cite[a-z]*|ref|eqref|label|input)\{[^}]*\}", "", code)
-        c = re.sub(r"\\paperfig(\[[^]]*\])?\{[^}]*\}", r"\\paperfig", c)
+        c = re.sub(r"\\includegraphics(\[[^]]*\])?\{[^}]*\}", "", c)
         c = re.sub(r"\\begin\{tabular\}\{[^\n]*?\}(?=\s*$)", "", c)
         c = re.sub(r"\\(begin|end)\{[^}]*\}(\[[^]]*\])?", "", c)
         c = re.sub(r"p\{0\.\d+\\columnwidth\}", "", c)
