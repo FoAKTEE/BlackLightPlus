@@ -503,4 +503,5 @@ function main()
     println("Z4C-PHASESPACE DONE -> ", OUT)
 end
 
-main()
+# run only as a program, so fig_z4c_amr.jl can include the ray functions
+abspath(PROGRAM_FILE) == (@__FILE__) && main()
