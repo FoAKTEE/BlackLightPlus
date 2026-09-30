@@ -95,7 +95,7 @@ const AMRBlock = Tuple{Int,Int,Int,Float64,Float64,Float64}
                tracer=trace_rays_sampled, stokes=nothing,
                rel_grad_cut=0.15, rel_grad_frac=0.03,
                rel_lapl_cut=1.0, rel_lapl_frac=0.03,
-               abs_grad_cut=nothing, abs_grad_count=5)
+               abs_grad_cut=nothing, abs_grad_count=5, refine=nothing)
         -> (I, Q, U, V, levels, nrays)
 
 Adaptive-refinement render: mosaic images at `cfg.camera.resolution * 2^max_level`
@@ -104,7 +104,12 @@ ray count; the resolution must be a multiple of `block`. Default indicator:
 relative gradient + Laplacian; setting `abs_grad_cut` selects White 2022's
 value-based absolute gradient instead and disables the relative pair (see
 `_block_needs_refinement`) — use it on dim-background decks where the relative
-pair saturates. `tracer` is the phase-1 backend of the default Stokes closure
+pair saturates. `refine`, when given, replaces both built-in indicators with a
+user-supplied one, `refine(blk::AMRBlock, vals) -> Bool`, where `vals[c, i, j]` is
+Stokes row `c` of block pixel `(i, j)` at `(a0 + (i - 0.5) ps, b0 + (j - 0.5) ps)` and
+`blk = (bi, bj, level, a0, b0, span)`, `ps = span / block`; it may run concurrently for
+different blocks (e.g. a class indicator on a `stokes` closure that returns ray fates).
+`tracer` is the phase-1 backend of the default Stokes closure
 (e.g. a GPU tracer). `stokes`, when given, replaces that closure wholesale:
 
     stokes(coords::Vector{Tuple{Float64,Float64}}) -> 4 × length(coords) Matrix
@@ -123,7 +128,9 @@ function render_amr(cfg::RunConfig, snapshot_path::AbstractString;
                     rel_grad_cut::Float64=0.15, rel_grad_frac::Float64=0.03,
                     rel_lapl_cut::Float64=1.0, rel_lapl_frac::Float64=0.03,
                     abs_grad_cut::Union{Nothing,Float64}=nothing,
-                    abs_grad_count::Int=5)
+                    abs_grad_count::Int=5, refine=nothing)
+    refine !== nothing && abs_grad_cut !== nothing &&
+        error("render_amr: pass either `refine` or `abs_grad_cut`, not both")
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
     cam.npix % block == 0 ||
@@ -187,9 +194,15 @@ function render_amr(cfg::RunConfig, snapshot_path::AbstractString;
         _paint_block!(planes, S, col, a0, b0, block, 2^(max_level - l), fov, eff)
         Threads.atomic_add!(nblocks, 1)
         l < max_level || return AMRBlock[]
-        vals = [S[1, col + (i-1)*block + j] for i in 1:block, j in 1:block]
-        _block_needs_refinement(vals; rel_grad_cut, rel_grad_frac, rel_lapl_cut,
-                                rel_lapl_frac, abs_grad_cut, abs_grad_count) || return AMRBlock[]
+        need = if refine === nothing
+            vals = [S[1, col + (i-1)*block + j] for i in 1:block, j in 1:block]
+            _block_needs_refinement(vals; rel_grad_cut, rel_grad_frac, rel_lapl_cut,
+                                    rel_lapl_frac, abs_grad_cut, abs_grad_count)
+        else
+            refine(blk, [S[c, col + (i-1)*block + j]
+                         for c in 1:size(S, 1), i in 1:block, j in 1:block])::Bool
+        end
+        need || return AMRBlock[]
         @lock levels_lock levels[bj, bi] = max(levels[bj, bi], l + 1)   # [β-block, α-block]
         half = span / 2
         return [(bi, bj, l + 1, a0 + da, b0 + db, half)
