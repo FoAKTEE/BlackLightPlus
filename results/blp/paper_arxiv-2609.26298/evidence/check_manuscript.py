@@ -10,16 +10,17 @@ Supplement Series. Checks, each a hard failure:
   2. main.log reports no undefined references or citations, and no overfull \hbox or
      \vbox wider than 1 pt;
   3. document order. The layout is two-column: abstract ... conclusions, acknowledgments,
-     software, then sections/appendix.tex, which issues \clearpage before \appendix (one
-     column), then the bibliography. The main text ends where the "APPENDIX" heading page
-     P begins, so it occupies pages 1..P-1; the check requires the \clearpage, the heading,
-     and that the "REFERENCES" heading follows the appendix start. The main-text page
+     software, then \appendix in main.tex (one column, the derivation appendix
+     sections/appendix_deriv.tex), then \clearpage and the bibliography. The main text ends
+     where the "APPENDIX" heading page P begins, so it occupies pages 1..P-1; the check
+     requires \appendix in main.tex, the heading, and that the "REFERENCES" heading follows
+     the appendix start. The main-text page
      count is reported but not limited: the former 10-page bound was the Physical Review D
      target, and ApJS sets no page limit;
   4. exactly seven figure environments in the main-text section files (every
      sections/*.tex except appendix*.tex), each written out explicitly as
-     \begin{figure*}[!t] \centering \includegraphics[width=...]{<pdf>} \caption{...}
-     \label{fig:...} \end{figure*}; no \paperfig macro is defined (macros.tex) or used;
+     \begin{figure*}[!t] (or a one-column \begin{figure}[!t]) \centering
+     \includegraphics[width=...]{<pdf>} \caption{...} \label{fig:...} \end{figure*}; no \paperfig macro is defined (macros.tex) or used;
      each of the seven PDFs in paper/figures/ used once, and "Figure N." captions 1-7 in
      the PDF; figures in appendix*.tex are counted separately and reported;
   5. every number-bearing source line carries a provenance comment: an evidence id
@@ -81,9 +82,8 @@ npages = int(re.search(r"Pages:\s+(\d+)", subprocess.run(["pdfinfo", "main.pdf"]
 texts = {p: page_text(p) for p in range(1, npages + 1)}
 app_page = next((p for p in texts if re.search(r"^\s*(\d+\s+)?APPENDIX\s*$", texts[p], re.M)), None)
 bib_page = next((p for p in texts if re.search(r"^\s*(\d+\s+)?REFERENCES\s*$", texts[p], re.M)), None)
-appsrc = (PAPER / "sections" / "appendix.tex").read_text()
-if not re.search(r"\\clearpage\s*\n\s*\\appendix", appsrc):
-    fail.append("sections/appendix.tex must issue \\clearpage before \\appendix")
+if not re.search(r"\\appendix\b", main_code):
+    fail.append("main.tex does not issue \\appendix")
 if app_page is None:
     fail.append("appendix heading 'APPENDIX' not found in PDF")
 if bib_page is None:
@@ -102,9 +102,9 @@ def body_of(names):
 main_names = [n for n in src if not n.startswith("appendix")]
 app_names = [n for n in src if n.startswith("appendix")]
 N_FIG = 7
-FIG_ENV = re.compile(r"\\begin\{figure\*\}\[!t\]\s*\\centering\s*"
+FIG_ENV = re.compile(r"\\begin\{figure(\*?)\}\[!t\]\s*\\centering\s*"
                      r"\\includegraphics\[width=[^]]+\]\{[^}]+\.pdf\}\s*\\caption\{.*?"
-                     r"\\label\{fig:[^}]+\}\s*\\end\{figure\*\}", re.S)
+                     r"\\label\{fig:[^}]+\}\s*\\end\{figure\1\}", re.S)
 def n_fig(text):
     return len(re.findall(r"\\begin\{figure\*?\}", text))
 body = body_of(src)
