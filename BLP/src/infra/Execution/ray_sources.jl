@@ -130,6 +130,6 @@ Adapt.@adapt_structure CameraRays
 
 @inline function ray(src::CameraRays, item)
     α, β = image_coords(src.gen, item)
-    y, ok = Spacetime.camera_ray(src.st, src.frame, α, β)
+    y, ok = camera_ray(src.st, src.frame, α, β)
     return (y, ok::Bool)
 end

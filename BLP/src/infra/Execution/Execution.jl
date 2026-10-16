@@ -12,7 +12,7 @@ module Execution
 using StaticArrays: SVector
 using KernelAbstractions: KernelAbstractions, @index, @Const
 using Adapt: Adapt
-import ..Spacetime
+using ..Spacetime: camera_ray
 
 include("devices.jl")
 include("pool.jl")
