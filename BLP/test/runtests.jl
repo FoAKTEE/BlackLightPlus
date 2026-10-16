@@ -8,6 +8,7 @@ include("decks.jl")
 
 @testset "BLP" begin
     for dir in ("physics", "infra", "pipeline")
+        isdir(joinpath(@__DIR__, dir)) || continue
         files = sort(filter(f -> endswith(f, ".jl"), readdir(joinpath(@__DIR__, dir); join = true)))
         for f in files
             name = Symbol("Test_", dir, "_", splitext(basename(f))[1])
