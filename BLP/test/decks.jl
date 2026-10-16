@@ -11,10 +11,13 @@ valid kernel argument once adapted to a device.
 module Decks
 
 using StaticArrays
-using Adapt: Adapt
 using BLP.Execution: HostDevice
 using BLP.Spacetime: CameraFrame, pixel_centres, npixels, pixel_coords, camera_ray,
                      MarchBudget, march_control, rk4_step
+
+# Adapt, a dependency of BLP, loaded by identity: Decks then loads in every environment
+# that has BLP, including the oracle's, which does not list Adapt.
+const Adapt = Base.require(Base.PkgId(Base.UUID("79e6a3ab-5dfb-504d-930d-738a2a938a0e"), "Adapt"))
 
 "Bit pattern of every number in `x`; equal patterns mean bitwise-identical output, NaN and -0.0 included."
 bits(x::AbstractArray{<:Real}) = reinterpret(UInt64, Float64.(vec(x)))
