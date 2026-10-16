@@ -4,7 +4,8 @@
 # Each script is included into its own module, so their file-scope names never clash.
 using Test
 
-const ORACLE_SCRIPTS = ("numerics.jl", "spacetime.jl", "camera.jl", "analytic.jl", "data.jl")
+const ORACLE_SCRIPTS = ("numerics.jl", "spacetime.jl", "camera.jl", "analytic.jl", "matter.jl",
+                        "data.jl")
 
 @testset "BLP oracle" begin
     for f in ORACLE_SCRIPTS
