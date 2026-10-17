@@ -109,8 +109,11 @@ preparation and the product entry points), *Analysis* (image-plane refinement
 indicators, interferometry, writers). No file at root scope composes modules.
 *Why.* D9. Back edges are today resolved by callbacks (`equatorial_intensity`'s
 `source`), re-exports and root-scope files.
-*Check.* A script lists each module's `using ..X` lines; every edge points
-down. `render.jl` and `amr.jl` no longer exist at root scope.
+*Check.* `BLP/test/structure.jl`, "layering": every `using ..X` or `import ..X`
+of a module names a module before it in `Numerics, Spacetime, Matter, Transfer,
+MonteCarlo, Data, Execution, Plans, Analysis, Products`; no physics module
+imports `KernelAbstractions`, `HDF5`, `CUDA` or `Base.Threads`; no physics or
+pipeline file contains `Threads.@threads`.
 
 **P2. One package; optional backends are extensions.**
 *Rule.* All kernels, the device pool and the executors are package code
@@ -122,9 +125,10 @@ include-order contract anywhere in `src/`, `test/`, `bench/` or `figures/`.
 *Why.* D1, D2. The kernels already run on the KA CPU backend (`HostDevice`),
 which is how the device tests run without a GPU; nothing but the CUDA-specific
 glue requires CUDA at load time.
-*Check.* `grep -r "isdefined(@__MODULE__" src test bench figures` is empty;
-`using BlackLightPlus` on a CUDA-free machine loads every driver; the device
-tests run in CI on `HostDevice`s.
+*Check.* `structure.jl`, "one kernel, no device files, no include guards, no
+CUDA in src": no `isdefined(@__MODULE__` and no `gpu_*.jl` file in `BLP/src`, no
+`using CUDA`/`import CUDA` and no `CUDA.` call there, and `BLP/ext` loads
+`CUDA`; the device tests run on `HostDevice`s.
 
 **P3. Declared interfaces; private stays private.**
 *Rule.* Each module declares its interface by `export`. Another module may use
@@ -133,8 +137,11 @@ module. What the top-level package exports is the *public* API (P16); what a
 submodule exports is an *internal interface*, documented, stable within a
 minor version, and the only thing tests may import from it.
 *Why.* D3.
-*Check.* `grep -rE "\b[A-Z][A-Za-z]+\._[a-z]|using [.A-Za-z]+: [^#]*\b_[a-z]" src test bench figures`
-is empty.
+*Check.* `structure.jl`, "private names stay private": no `Module._name` between
+the ten modules and no `using ..X: _name` in `BLP/src`, no `BLP.X._name` in
+`BLP/test` or `BLP/test/oracle`; "eponymous files own includes and exports": a
+module's `include(` and `export` lines are in its eponymous file only; "public
+API": every name a submodule exports is defined and has a docstring.
 
 ### B. Composition
 
@@ -151,9 +158,9 @@ primary and layer kernels, the camera-ray kernel. The sampler and the
 spacetime enter a kernel as arguments.
 *Why.* D4, D5. The current marches already take the sampler and the control as
 arguments; the drivers and kernels do not.
-*Check.* The kernel count is at most 9. No entry point name contains a
-backend, a sampler, a mode or a time-dependence suffix (`_gpu`, `_amr`,
-`_polarized`, `_slow`, `_fused`, `_spacetime`).
+*Check.* `structure.jl`: exactly one `@kernel` in `BLP/src` ("one kernel, …");
+at most 10 exported names in the `render`/`trace`/`shadow`/`mc_spectrum`/
+`sensitivity`/`variants`/`photon_ring_layers` family ("public API").
 
 **P5. One matter protocol.**
 *Rule.* A `PlasmaProvider` answers `plasma(provider, x)` for a four-position
@@ -165,11 +172,9 @@ the transfer layer, once. A provider's device twin is the same struct with
 device arrays (`Adapt.@adapt_structure`), sampling through the same body. One
 trilinear interpolant, one time blend, one vacuum sentinel.
 *Why.* D7, D8. `DevADMParams` already proves the pattern for spacetimes.
-*Check.* One definition each of trilinear interpolation, time blending and
-the vacuum record in `src/`; `fig_examples.jl`'s `source_sampler` adapter is
-deleted and the torus renders through the public entry point; the 37
-"keep in sync" comments drop to those that describe arithmetic order, not
-copies.
+*Check.* `structure.jl`, "one concept, one home": the trilinear blend
+(`c100 - c000`) in one file and one `vacuum` definition in `BLP/src`; no "keep in
+sync", "twin of", "byte-for-byte" or "ported from" there.
 
 **P6. Prepare once.**
 *Rule.* `RunConfig` is declarative user input. `prepare(cfg; spacetime,
@@ -179,8 +184,10 @@ emission-confinement radius, the units, the frequency, the transfer parameters
 with their precomputed nonthermal constants, and the lanes. Drivers, kernels
 and executors consume the plan. No derived scalar is computed in a driver.
 *Why.* D5, D6.
-*Check.* `grep -rn "1 + sqrt(1 - \|1.1 \* cfg\|PlaneParallelCamera(cfg" src`
-returns one site each, inside the preparation module.
+*Check.* `structure.jl`, "one concept, one home": `1 + sqrt(1 - a` only in
+`kerr_schild.jl`, `kerr_orbits.jl` and `analytic_kerr.jl`, and no `sqrt(1 - a`
+in `BLP/src/pipeline`; `1.1 * ` in the pipeline only in `config.jl`; at most one
+`PlaneParallelCamera(` in the pipeline.
 
 **P7. Typed parameter records and explicit lanes.**
 *Rule.* The march parameter set is an immutable, documented struct
@@ -213,10 +220,10 @@ per-item function.
 already; the CPU side hand-rolls 23 loops; today the backend is chosen by
 calling a differently named function after a differently ordered set of
 `include`s.
-*Check.* `Threads.@threads` appears only inside the threaded executor and the
-host-side table builders; each product entry point's body is at most ~40 lines
-and contains no loop over rays; every product accepts `backend`; no `Plan`
-field names a device.
+*Check.* `structure.jl`, "threads only in the executor and the Data loaders
+and builders": the files with `Threads.@threads` are `infra/Execution/executor.jl`
+and files under `infra/Data/`, at most five; "layering": none in physics or
+pipeline. Every product accepts `backend` (`BLP/test/pipeline/products_backend.jl`).
 
 ### C. Readability
 
@@ -227,8 +234,7 @@ Stokes-plane reshape, the camera vertical, the Kerr orbit radii. Modules
 replace prefix pseudo-namespaces. Re-exports are allowed only upward through
 the layer stack, never sideways.
 *Why.* D5, D8, D9; the Kerr orbit primitives are exported by `Geodesics`, re-exported by `Radiation` and `Sources`.
-*Check.* The duplicate-definition grep set of §5 returns one site each; no
-identifier carries a `_gimg_`/`_gpol_`/`_gamr_`/`_gsp_`/`_famr_` prefix.
+*Check.* `structure.jl`, "one concept, one home": the greps of P5, P6 and P10.
 
 **P10. Records over positional tuples; accessors over indices.**
 *Rule.* A value with three or more fields crossing a function boundary is a
@@ -237,8 +243,8 @@ tuple. The eight-component ray state has `position(y)`, `momentum(y)` and a
 constructor; callers never index `y[5]`. Multi-flag results (`stop`, `h`, `r`)
 are named.
 *Why.* D10.
-*Check.* No function returns a tuple of length ≥ 3 without names; the
-`SVector(y[1], y[2], y[3], y[4])` pattern appears once, in the accessor.
+*Check.* `structure.jl`, "one concept, one home": the
+`SVector(y[1], y[2], y[3], y[4])` pattern appears only in `Numerics/raystate.jl`.
 
 **P11. Comments carry contracts; documents carry derivations.**
 *Rule.* A docstring states the contract: inputs, units, conventions, outputs,
@@ -248,9 +254,10 @@ reference codes, measured errors and history live in `docs/src/method.md`,
 `NOTICE` and `CHANGELOG.md`, and the code points to them by section. A file
 head is at most ten lines: role, layer, counterpart, reference.
 *Why.* D11; STANDARDS §3 "one fact, one home".
-*Check.* No numeric measurement (a tolerance, a timing, an error) appears in a
-code comment unless it is the value of a constant defined on the next line;
-every "Deviation from X" paragraph is in `method.md`.
+*Check.* `structure.jl`: no "keep in sync", "twin of", "byte-for-byte" or
+"ported from" in `BLP/src` ("one concept, one home"), and no attribution line in
+`BLP/src`, `BLP/ext`, `BLP/test`, `BLP/README.md` or `BLP/Project.toml` ("no
+attribution or process prose").
 
 **P12. Size and arity budgets.**
 *Rule.* A function takes at most six positional arguments; beyond that the
@@ -259,8 +266,8 @@ kernel body is one call to a march plus the output write. A product entry
 point is at most ~40 lines.
 *Why.* D10, D4; `_mc_grmhd_loop!` takes 20 positional arguments,
 `gpu_image.jl` and `gpu_amr.jl` each mix four concerns.
-*Check.* A script reports functions over the arity budget and files over the
-line budget; both lists are empty.
+*Check.* `structure.jl`, "file budgets": every file of `BLP/src` is at most 600
+lines, and no stray `test_*.jl` file sits in `BLP/test`.
 
 ### D. Contracts
 
@@ -305,8 +312,9 @@ and device selection, the product entry points (`render`, `render_amr`,
 the analysis and writer functions. Target: about 40 names. Everything else is
 a submodule interface (P3). Semantic versioning applies to the public API.
 *Why.* D14.
-*Check.* `length(names(BlackLightPlus))` ≤ 50; every exported name appears in
-a tutorial, how-to or the API index as something a user calls.
+*Check.* `structure.jl`, "public API": `names(BLP)` holds at most 54 names, each
+defined, at most 10 of them in the product family of P4; every name a submodule
+exports is defined and documented.
 
 **P17. Global state confined to the execution layer.**
 *Rule.* Mutable global state exists only in *Execution*: the pool registry,
@@ -327,31 +335,38 @@ Each principle's *Check* above that is mechanical (P1, P3, P6, P9, P10, P12,
 P16, P17) is a test in `test/test_structure.jl`, so the structure cannot
 regress silently.
 *Why.* D3, D14.
-*Check.* No `isfile(joinpath(…, "src", …))` in `runtests.jl`; the structure
-test exists and passes.
+*Check.* `BLP/test/runtests.jl` includes `structure.jl` and every file under
+`physics/`, `infra/` and `pipeline/` without condition; `structure.jl` keeps
+leading-underscore names out of `BLP/test` and `BLP/test/oracle` and stray
+`test_*.jl` files out of `BLP/test`.
 
 ## 5. Gates
 
-The numbers a reviewer reads off the tree to confirm the principles hold.
+The numbers a reviewer reads off the tree to confirm the principles hold: the
+reference package `src/` at `e364c7d`, the package `BLP/`, and the gate
+`BLP/test/structure.jl` holds `BLP/` to.
 
-| Metric | Now | Target |
-|---|---|---|
-| `_`-prefixed names used across a module boundary (`src`) | 29 | 0 |
-| Private names reached from `test`, `bench`, `figures` | 5 | 0 |
-| `isdefined(@__MODULE__ …) \|\| include` guards | 12 | 0 |
-| Kernels (`@kernel`) | 21 | ≤ 9 |
-| Entry points in the `render`/`march`/`trace`/`mc_spectrum` family | 29 | ≤ 10 |
-| Top-level exported names | 183 | ≤ 50 |
-| Camera constructed from `cfg` | 13 sites | 1 |
-| Horizon radius inlined | 18 sites | 1 |
-| Escape radius inlined | 14 sites | 1 |
-| Trilinear interpolant implementations | 4 | 1 |
-| Vacuum sentinel definitions | 2 | 1 |
-| "keep in sync" / "twin of" / "byte-for-byte" comments | 37 | ≤ 5 |
-| `Threads.@threads` sites outside the executor and table builders | 23 | ≤ 4 |
-| `SVector(y[1], y[2], y[3], y[4])` sites | 17 | 1 |
-| Parameter representations between `PlasmaConfig` and the march | 4 | 1 |
-| Test files not included by `runtests.jl` | ~13 | 0 |
+| Metric | `src/` | `BLP/` | Gate |
+|---|---|---|---|
+| `_`-prefixed names used across a module boundary | 29 | 0 | none |
+| Private names reached from the tests | 5 | 0 | none in `BLP/test` and `BLP/test/oracle` |
+| `isdefined(@__MODULE__ …) \|\| include` guards | 12 | 0 | none |
+| `include` sites outside the eponymous module files | 11 | 0 | none, nor `export` |
+| Kernels (`@kernel`) | 21 | 1 | exactly 1 |
+| Entry points in the `render`/`trace`/`shadow`/`mc_spectrum`/`sensitivity`/`variants`/`photon_ring_layers` family | 29 | 9 | ≤ 10 exported |
+| Top-level exported names | 183 | 54 | ≤ 54, each defined |
+| Files over 600 lines | 5 | 0 (largest 522) | none |
+| Camera constructed from the configuration | 13 sites | 1 (`prepare`) | ≤ 1 `PlaneParallelCamera(` in the pipeline |
+| Horizon radius inlined | 18 sites | 5, all in `kerr_schild.jl`, `kerr_orbits.jl`, `analytic_kerr.jl`; 0 in the pipeline | `1 + sqrt(1 - a` only in those three files |
+| Escape radius inlined | 14 sites | 1 (`prepare`) | no `1.1 * ` in the pipeline outside `config.jl` |
+| Trilinear interpolant implementations | 4 | 1 (`lerp8`) | `c100 - c000` in one file |
+| Vacuum sentinel definitions | 2 | 1 | one |
+| "keep in sync" / "twin of" / "byte-for-byte" comments | 37 | 0 | none, nor "ported from" |
+| `Threads.@threads` sites (files) | 23 (10) | 10 (5) | only in `Execution/executor.jl` and `Data`, ≤ 5 files |
+| `Threads.@threads` sites outside the executor and table builders | 23 | 4 (the `Data` loaders) | — |
+| `SVector(y[1], y[2], y[3], y[4])` sites | 17 | 1 (`raystate.jl`) | only in `raystate.jl` |
+| Parameter representations between `PlasmaConfig` and the march | 4 | 1 (`TransferParams`) | — |
+| Test files not included by `runtests.jl` | ~13 | 0 | no stray `test_*.jl` |
 
 ## 6. Decisions requested
 

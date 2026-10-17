@@ -1,267 +1,181 @@
-# BlackLightPlus next-generation architecture
+# BLP architecture
 
-**Status:** proposal for review. Applies the principles of
-`docs/DESIGN_PRINCIPLES.md` (P1–P18) to a concrete code structure.
-**Assumptions:** the nine decisions of `DESIGN_PRINCIPLES.md` §6 are taken as
-recommended: GPU code in the package behind a CUDA extension, a product-shaped
-public API, the fused march as the default CPU path, bitwise continuity where
-the arithmetic order is unchanged and documented tolerance elsewhere, a
-redesigned configuration with a one-release shim, diagnostics out of the
-package, layer-vocabulary module names, incremental migration, and provenance
-prose moved to `method.md`. Each is reversible; §12 lists what changes if one
-is reversed.
+The package `BLP` (`BLP/`, version 0.2.0, Julia ≥ 1.10) applies the principles of
+`docs/DESIGN_PRINCIPLES.md` (P1–P18); `BLP/test/structure.jl` holds their mechanical
+gates. `BlackLightPlus`, the package in `src/`, is the reference implementation the
+oracle suite compares against (§6).
 
 ---
 
 ## 1. Three tiers, one direction
 
 ```
-pipeline/   Plans · Products · Analysis            composition: configuration, preparation,
-                                                   products, image-plane analysis
+pipeline/   Plans · Analysis · Products            composition: configuration, plans,
+                                                   image-plane analysis, products
     │  uses both tiers below
-infra/      Data · Execution   (+ ext/CUDA)        machinery: file formats, fluid containers,
+infra/      Data · Execution  (+ ext/BLPCUDAExt)   machinery: file formats, fluid containers,
                                                    executors, device pool, residency, scheduling
     │  implements the protocols of, and uses, the tier below
-physics/    Numerics · Spacetime · Matter ·        equations: pure, isbits, StaticArrays,
-            Transfer · MonteCarlo                  no arrays of its own, no threads, no I/O
+physics/    Numerics · Spacetime · Matter ·        equations: pure, isbits after Adapt,
+            Transfer · MonteCarlo                  allocation-free on the hot path, no threads
 ```
 
-Rules.
+Rules, each a gate of `BLP/test/structure.jl`.
 
-- A module imports only from its own tier or a lower tier, and within a tier
-  only from the modules included before it: `Numerics → Spacetime → Matter →
-  Transfer → MonteCarlo`; `Data → Execution`; `Plans → Analysis → Products`
-  (`Products` uses the refinement indicators of `Analysis`).
-- The physics tier defines protocols (`Spacetime`, `PlasmaProvider`,
-  `TransferMode`, `MarchControl`, `Sink`). The infra tier supplies concrete
-  providers (fluid blocks, grids, windows) and the machinery that runs
-  per-item programs. The pipeline tier builds programs from a plan and hands
-  them to an executor.
-- Nothing imports `ext/`. The extension adds methods to `Execution` functions
-  for the `CUDADevice` handle.
-- There is exactly one `@kernel` in the package (`Execution/kernel.jl`). Every
-  device computation is a per-item program run through it.
+- `BLP.jl` includes the modules in the order `Numerics → Spacetime → Matter → Transfer →
+  MonteCarlo → Data → Execution → Plans → Analysis → Products`; a module imports
+  (`using ..X`, `import ..X`) only modules before it.
+- No physics module imports `KernelAbstractions`, `HDF5`, `CUDA` or `Base.Threads`.
+  `Threads.@threads` appears only in `Execution/executor.jl` and in the `Data` loaders
+  and table builders (`athenak_hdf5.jl`, `athenak_bin.jl`, `uniform_grid.jl`, `tables.jl`).
+- There is exactly one `@kernel`, `_foreach!` in `Execution/kernel.jl`. Every device
+  computation is a per-item program run through it.
+- `src/` neither loads nor calls `CUDA`; `ext/BLPCUDAExt.jl` adds the `CUDADevice` methods
+  of the `Execution` device protocol. Nothing imports `ext/`.
+- A module's eponymous file holds all its `include`s and `export`s. A name with a leading
+  underscore is never referenced outside its module, from `src/` or from the tests.
+- No file of `src/` exceeds 600 lines.
+
+The physics tier defines the protocols (`Spacetime`, `PlasmaProvider`, `TransferMode`, the
+march-control functions, `Sink`); the infra tier supplies the grid-backed providers and the
+machinery that runs per-item programs; the pipeline tier turns a configuration into a plan,
+builds programs from it and hands them to an executor.
 
 ## 2. Directory layout
 
+Paths relative to `BLP/`; each directory lists its files in include order, the eponymous
+file first. §8 gives the role and the main definitions of every file.
+
 ```
 src/
-├── BlackLightPlus.jl                 includes the tiers in order; `export` of the public API (§9)
+├── BLP.jl
 ├── physics/
-│   ├── Numerics/
-│   │   ├── Numerics.jl
-│   │   ├── constants.jl              CGS constants                                  ← constants.jl
-│   │   ├── units.jl                  `Units{T}` record and `units(m_bh, mass_scale)` ← athenak_reader.jl
-│   │   ├── raystate.jl               `RayState{T}`, `position`, `momentum`, `raystate`
-│   │   ├── stencils.jl               trilinear lerp on 8 corners, Catmull-Rom weights,
-│   │   │                             log-linear table lookup                        ← athenak_reader, numerical_spacetime, mc_common
-│   │   ├── exactsum.jl               limbs, `xsum_parts`, host and atomic add, round ← exact_sum.jl, mc_gpu.jl
-│   │   ├── philox.jl                 Philox4x32, `MCRng`, stream identity, samplers  ← rng.jl
-│   │   └── special.jl                A&S Bessel fits, host 2F1                       ← coefficients.jl
-│   ├── Spacetime/
-│   │   ├── Spacetime.jl
-│   │   ├── protocol.jl               abstract types, method table (§3.2), lane conversion
-│   │   ├── kerr_schild.jl            `_ks_term`, `KerrSchildCartesian`, `Minkowski`  ← metrics.jl
-│   │   ├── user_metric.jl            `UserMetric`                                    ← metrics.jl
-│   │   ├── superposed.jl             `SuperposedKerrSchild`, Woodbury inverse         ← spacetimes.jl
-│   │   ├── adm_grid.jl               `ADMGrid{T,A}` (one struct for host and device), builder ← numerical_spacetime.jl, gpu_spacetime.jl
-│   │   ├── metric_ops.jl             AD gradients, Christoffel, index-op defaults    ← metrics.jl
-│   │   ├── geodesic.jl               RHS, transport RHS, RK4 step, null root, energies ← integrator.jl
-│   │   ├── termination.jl            `MarchBudget`, `march_stop`, `march_control` per type ← integrator.jl, spacetimes.jl, numerical_spacetime.jl
-│   │   ├── adaptive.jl               `trace_geodesic` (OrdinaryDiffEq), host only    ← integrator.jl, spacetimes.jl, numerical_spacetime.jl
-│   │   ├── camera.jl                 `PlaneParallelCamera`, `CameraFrame` (with `up`), `camera_ray` ← camera.jl, render.jl `_camera_up`
-│   │   ├── kerr_orbits.jl            unchanged
-│   │   └── analytic_kerr.jl          `pixel_prep`, `band_landing`, `Landing`, `critical_curve` ← analytic_kerr.jl, lensing_bands.jl
-│   ├── Matter/
-│   │   ├── Matter.jl
-│   │   ├── records.jl                `PlasmaPrimitives`, `PlasmaState`, `vacuum`
-│   │   ├── electrons.jl              `ElectronModel`, `PlasmaCuts`, `electron_theta`, `omitted` ← coefficients.jl
-│   │   ├── decode.jl                 `primitive_four_vectors`, `decode`             ← primitives.jl, coefficients.jl `plasma_decode`
-│   │   ├── protocol.jl               `PlasmaProvider`, `plasma_state` default method
-│   │   ├── sources/
-│   │   │   ├── shared.jl             Killing scalars, circular velocity, toroidal field ← sources.jl
-│   │   │   ├── polish_doughnut.jl    unchanged physics, new signature
-│   │   │   ├── page_thorne.jl
-│   │   │   ├── hotspot.jl
-│   │   │   └── gdisk.jl              `EquatorialDisk`, g-factors, Johnson-SU, `intensity(disk, landing)` ← radiation/equatorial_source.jl
-│   │   └── zones.jl                  `EmissionZone`, `UniformSphere` provider        ← emission_tables.jl, sphere_model.jl
-│   ├── Transfer/
-│   │   ├── Transfer.jl
-│   │   ├── params.jl                 `Thermal`, `PowerLaw`, `Kappa` (precompute in constructors), `TransferParams` ← coefficients.jl, render.jl
-│   │   ├── synchrotron.jl            thermal / power-law / kappa fits, unpolarized and polarized ← coefficients.jl
-│   │   ├── tetrads.jl                `fluid_tetrad(_checked)`, `normal_observer`, `qu_rotation` ← tetrads.jl, reverse_march.jl, integrator.jl
-│   │   ├── coefficients.jl           `coefficients(::StokesI, …)`, `coefficients(::IQUV, …)` ← integrator.jl
-│   │   ├── segments.jl               segment operators, admissibility                ← transfer.jl
-│   │   ├── controls.jl               `SpacetimeMarch{S,T}`, `StoredPath`, `march_control` ← reverse_march.jl (KerrMarch folded in)
-│   │   └── march.jl                  `march(::StokesI, …)`, `march(::IQUV, …)`        ← reverse_march.jl
-│   └── MonteCarlo/
-│       ├── MonteCarlo.jl
-│       ├── superphoton.jl            unchanged
-│       ├── emissivity.jl             `j_nu`, `alpha_nu`, `int_jnu_zone`, `emission_tetrad` ← emissivity.jl
-│       ├── tables.jl                 `WeightTable`, `IntJnuTable` records and lookups (builders are infra) ← emission_tables.jl
-│       ├── hotcross.jl               KN, boosted cross section, Maxwell–Jüttner, `HotcrossTable` lookup ← hotcross.jl
-│       ├── generate.jl               `generate(zone, tables, rng)`                   ← generate.jl, sphere_model.jl, mc_gpu.jl
-│       ├── scatter.jl                Compton kick                                    ← scatter.jl
-│       ├── opacity.jl                `absorption_rate`, `scattering_rate`, `Bias`     ← track.jl, mc_cpu.jl, mc_gpu.jl (6 copies → 2)
-│       ├── sinks.jl                  `Sink` protocol: `record!`, `spawn!`
-│       └── track.jl                  `track!` (one march), `FlatMarch` control        ← track.jl, mc_common.jl, mc_cpu.jl, mc_gpu.jl (6 trackers → 1)
+│   ├── Numerics/      Numerics.jl constants.jl units.jl raystate.jl stencils.jl exactsum.jl
+│   │                  philox.jl special.jl
+│   ├── Spacetime/     Spacetime.jl protocol.jl kerr_schild.jl user_metric.jl superposed.jl
+│   │                  adm_grid.jl metric_ops.jl geodesic.jl termination.jl adaptive.jl
+│   │                  camera.jl kerr_orbits.jl analytic_kerr.jl
+│   ├── Matter/        Matter.jl records.jl electrons.jl decode.jl protocol.jl
+│   │   ├── sources/   shared.jl polish_doughnut.jl page_thorne.jl hotspot.jl gdisk.jl
+│   │   └── zones.jl
+│   ├── Transfer/      Transfer.jl params.jl synchrotron.jl tetrads.jl coefficients.jl
+│   │                  segments.jl controls.jl march.jl
+│   └── MonteCarlo/    MonteCarlo.jl superphoton.jl emissivity.jl hotcross.jl tables.jl
+│                      generate.jl scatter.jl opacity.jl sinks.jl track.jl
 ├── infra/
-│   ├── Data/
-│   │   ├── Data.jl
-│   │   ├── fluid_blocks.jl           `FluidBlocks` provider, locate strategies, `primitives`, Adapt ← athenak_reader.jl, gpu_amr.jl, gpu_spacetime.jl
-│   │   ├── athenak_hdf5.jl           `.athdf` → `AthenaKSnapshot`                    ← athenak_reader.jl
-│   │   ├── athenak_bin.jl            `.bin` reader, GRMHD adapter, Z4c → `ADMGrid`    ← athenak_z4c.jl
-│   │   ├── uniform_grid.jl           `UniformGrid` provider, `resample`               ← gpu_image.jl
-│   │   ├── series.jl                 `SnapshotSeries` (LRU), `FrameWindow`, `SeriesProvider`, `blend` ← time_series.jl, gpu_image.jl, gpu_amr.jl
-│   │   ├── tables.jl                 threaded builders of weight / zone / int-jnu tables, hotcross load and build ← emission_tables.jl, hotcross.jl
-│   │   └── npy.jl                    `write_npy`                                     ← outputs.jl
-│   └── Execution/
-│       ├── Execution.jl
-│       ├── devices.jl                `HostDevice`, `CUDADevice`, `backend`, `upload`, staging hooks ← gpu_pool.jl
-│       ├── executor.jl               `Executor`, `ThreadedExecutor`, `PoolExecutor`, `foreach_item!`
-│       ├── backend.jl                the CPU/GPU switch: `resolve`, `backend!`, `backend`, `BLP_BACKEND` (§5.4)
-│       ├── kernel.jl                 the one `@kernel`
-│       ├── pool.jl                   `DevicePool`, lanes, jobs, `enqueue!`            ← gpu_pool.jl
-│       ├── residency.jl              `resident`, per-device adapted twins             ← gpu_pool.jl, gpu_image.jl, gpu_amr.jl, gpu_spacetime.jl
-│       ├── ray_sources.jl            `RaySource`: `HostRays`, `CameraRays{PixelGrid|BlockGrid|CoordList}` ← gpu_camera.jl, gpu_pool.jl
-│       ├── accumulators.jl           `ExactBins` (atomic), `ChildBuffer`, merges      ← exact_sum.jl, spectrum.jl, mc_gpu.jl, track.jl
-│       ├── schedule.jl               `cost_order`, `rescue_pixels`, `mixed_partition`, `march_sort_order` ← gpu_image.jl
-│       └── worklist.jl               `stream_blocks!` over any executor              ← amr.jl, gpu_amr.jl
-├── pipeline/
-│   ├── Plans/
-│   │   ├── Plans.jl
-│   │   ├── config.jl                 `CameraConfig`, `PlasmaConfig`, `RunConfig`, deprecation shim ← inputs/parameters.jl
-│   │   ├── lanes.jl                  `Lanes{Tg,Tt,A}`, `MixedLanes`
-│   │   ├── plan.jl                   `Plan` record
-│   │   └── prepare.jl                `prepare(cfg; spacetime, matter, mode, lanes)` ← render.jl `_pipeline_setup`/`_scc_config`/`_prepared_scc`, every `_g*_params`
-│   ├── Analysis/
-│   │   ├── Analysis.jl
-│   │   ├── refinement.jl             block indicators                                ← amr.jl `_block_needs_refinement`
-│   │   ├── lensing_bands.jl          apparent horizon, band edges, band grids         ← geodesics/lensing_bands.jl
-│   │   └── interferometry.jl         unchanged                                       ← outputs/interferometry.jl
-│   └── Products/
-│       ├── Products.jl
-│       ├── programs.jl               `ImagingProgram`, `TraceProgram`, `ShadowProgram`, `AnalyticProgram`, `MCPrimary`, `MCLayer`
-│       ├── image.jl                  `Image`, `render(plan)`, `render(plan, coords)`  ← render.jl, gpu_image/pol/amr/spacetime.jl
-│       ├── amr.jl                    `render_amr`                                    ← amr.jl, gpu_amr.jl `AMRStokes`
-│       ├── analytic.jl               `render_analytic`, `photon_ring_layers`         ← render.jl, gpu_analytic.jl
-│       ├── trace.jl                  `trace`, `shadow`, `Trajectories`               ← integrator.jl, gpu_tracer.jl, gpu_spacetime.jl
-│       ├── sensitivity.jl            `sensitivity`, `variants`                       ← gpu_image_ad.jl, gpu_image.jl kvariant
-│       └── montecarlo.jl             `emission_zones`, `mc_spectrum`, results        ← mc_cpu.jl, mc_gpu.jl, grmhd_model.jl
+│   ├── Data/          Data.jl fluid_blocks.jl athenak_hdf5.jl athenak_bin.jl uniform_grid.jl
+│   │                  series.jl npy.jl tables.jl
+│   └── Execution/     Execution.jl devices.jl pool.jl residency.jl kernel.jl executor.jl
+│                      backend.jl ray_sources.jl schedule.jl worklist.jl accumulators.jl
+└── pipeline/
+    ├── Plans/         Plans.jl config.jl lanes.jl plan.jl prepare.jl
+    ├── Analysis/      Analysis.jl refinement.jl lensing_bands.jl interferometry.jl
+    └── Products/      Products.jl programs.jl image.jl trace.jl sensitivity.jl analytic.jl
+                       amr.jl
 ext/
-└── BlackLightPlusCUDAExt.jl         `CUDADevice` methods: activate, `CUDABackend`, pinned staging,
-                                      NVML probe for `select_devices`, stack limit, `unsafe_free!`
+└── BLPCUDAExt.jl
 ```
-
-Estimated size after migration: 9,000–10,000 lines against 13,831 today. The
-reduction is the driver prologues, the kernel enumeration, the sampler and
-tracker copies, and the provenance prose (§6, §7, §8).
 
 ## 3. Physics tier
 
-Everything here is pure, allocation-free, `isbits` (or `isbits` after
-`Adapt`), `StaticArrays`-typed and number-type generic. No module here imports
-`KernelAbstractions`, `HDF5`, `Threads` or `CUDA`. `Adapt` is used only to
-declare structure.
+Everything here is pure, `isbits` (or `isbits` after `Adapt`), `StaticArrays`-typed and
+number-type generic, and allocates nothing on the hot path. `Adapt` only declares
+structure. The adaptive tracer `trace_geodesic` is the one host-only solver.
 
 ### 3.1 Numerics
 
-| Item | Signature | Replaces |
-|---|---|---|
-| Ray state | `const RayState{T} = SVector{8,T}`; `position(y)`, `momentum(y)`, `raystate(x, p)` | 17 sites of `SVector(y[1], y[2], y[3], y[4])` |
-| Trilinear | `lerp8(c000, …, c111, d1, d2, d3)`; `corner_weights(f) -> (i0, d)` | four interpolants |
-| Catmull-Rom | `cr_weights(t)`, `cr_axis(c, c0, dc, n)` | `numerical_spacetime.jl` |
-| Log-linear table | `loglinear_at(x, table, x0, dx, n)` | `_mc_weight_at` |
-| Exact sum | `xsum_parts`, `xsum_add!(acc, x, I...)`, `xsum_atomic_add!`, `xsum_round` | `exact_sum.jl` + `_xsum_atomic_add!` |
-| RNG | `MCRng`, `mc_uniform`, `mc_gauss`, `sample_direction`, `standard_gamma`, `chi_square`, `MCStreamLayout`, `primary_rng`, `child_rng` | `rng.jl` |
-| Units | `struct Units{T}; L; T; dens; Ne; B; e; end`; `Units(m_bh, mass_scale)` | `units()` NamedTuple, `_unit_fields` |
+| Item | Definitions |
+|---|---|
+| Constants | `CL`, `EE`, `ME`, `MP`, `KB`, `HPL`, `GNEWT`, `MSUN`, `SQRT2`, `SIGMA_THOMSON` (cgs) |
+| Units | `Units{T}` with fields `L_unit`, `T_unit`, `dens_unit`, `Ne_unit`, `B_unit`, `e_unit`; `Units(m_bh_cgs, mass_scale_cgs)`, a `Dual` mass scale promotes every field |
+| Ray state | `const RayState{T} = SVector{8,T}`; `position(y)`, `momentum(y)`, `raystate(x, p)` |
+| Stencils | `primal(x)`; `corner_weights(f, n) -> (i0, d)`; `lerp8(c::NTuple{8}, d1, d2, d3)`, the one trilinear blend, association order fixed; `cr_weights`, `cr_axis`, `cr_sample` (Catmull-Rom); `loglinear_at(x, table, x0, dx, n)` |
+| Exact sum | 68 signed limbs of 31 bits per cell; `xsum_parts`, `xsum_add!(acc, x, I...)`, `xsum_atomic_add!(acc, x, I...)`, `xsum_round`, `xsum_zeros`, `xsum_round_all`, `XSUM_MAX_ADDENDS` |
+| RNG | `philox4x32`, `philox_rand`, `MCRng`; samplers `mc_uniform`, `mc_gauss`, `sample_direction`, `standard_gamma`, `chi_square`, each returning `(value, rng)`; `MCStreamLayout(n_primary, track_max, max_layer)`, `primary_rng(seed, gid)`, `child_rng(parent, event, layout)`, `stream_id`, `stream_layer` |
+| Special | `bessel_i0`, `bessel_i1`, `bessel_k0`, `bessel_k1`, `bessel_k2` (A&S 9.8), `harmonic_bridge`, host `hypergeometric_2f1` |
 
 ### 3.2 Spacetime
 
-Protocol (the method table replaces the implicit one in `metrics.jl`,
-`spacetimes.jl`, `numerical_spacetime.jl`, `reverse_march.jl` and
-`gpu_spacetime.jl`):
-
 ```julia
-abstract type Spacetime{T} end
-abstract type StationarySpacetime{T} <: Spacetime{T} end
+abstract type Spacetime{T} end                            # T: the lane (Float64, Float32, Dual)
+abstract type StationarySpacetime{T} <: Spacetime{T} end  # ∂_t g ≡ 0
 
-# required
-metric(st, x)::SMatrix{4,4}
-
-# defaults, overridden by closed forms
-inverse_metric(st, x) = inv(metric(st, x))
-metric_and_inverse(st, x)
+metric(st, x)::SMatrix{4,4}                               # required
+inverse_metric(st, x) = inv(metric(st, x))                # defaults, closed forms override
+metric_and_inverse(st, x) -> (gcov, gcon)
 lower_index(st, x, v); raise_index(st, x, p); raise_and_norm(st, x, p)
-inverse_metric_gradient(st, x)            # ForwardDiff; spatial seeding when stationary
+horizon_radius(st)                                        # Kerr r₊; per-hole radii; ADM alpha_min
+lane(st, ::Type{T})                                       # scalars converted from the held values
+
+inverse_metric_gradient(st, x); metric_gradient(st, x); christoffel(st, x[, gcon, dg])   # ForwardDiff
 geodesic_rhs(st, y); geodesic_transport_rhs(st, y, vs); rk4_step(st, y, h)
+null_error(st, y); null_covariant(st, x, p_spatial) -> (p, ok)
 
-# termination (one rule; per-type horizon proxy)
-struct MarchBudget{T}; C::T; escape::T; R_em::T; nmax::Int; end
-march_control(st, y, r_prev, b::MarchBudget) -> MarchStep{T}   # (stop, h, R)
-horizon_radius(st)                         # Kerr: closed form; binary: per hole; ADM: lapse floor
-
-# lanes
-lane(st, ::Type{T})                        # KerrSchildCartesian{Float32}(a), ADMGrid data untouched
-
-# host only
-trace_geodesic(st, y0; …)                  # adaptive solve with per-type callbacks (unchanged)
+struct MarchBudget{T}; C::T; escape::T; R_em::T; nmax::Int; end     # lane(b, T) converts
+struct MarchStep{T}; stop::Bool; h::T; R::T; end
+march_control(st, y, r_prev, b::MarchBudget) -> MarchStep           # the one termination rule
+trace_geodesic(st, y0; λmax, reltol, abstol, escape, solver = Vern7(), save_everystep)
 ```
 
-Concrete types: `KerrSchildCartesian{T}` (fields `a`, `r_h`; the horizon
-radius is computed once in `Float64` and narrowed by `lane`, as the drivers
-narrow `r_h` today, so the fp32 lane stays bitwise), `Minkowski{T}`,
-`UserMetric{F,T}`, `SuperposedKerrSchild{N,T}`, `ADMGrid{T,A<:AbstractArray{T,4}}`.
-`ADMGrid`
-is one struct: with `A = Array` it is today's `ADMGridSpacetime`, after
-`Adapt.adapt(backend, st)` it is today's `DevADMParams`; the sampling body is
-written once. `KerrMarch` disappears: a Kerr march is
-`SpacetimeMarch{KerrSchildCartesian{Tg},Tg}` whose `march_control` method is
-the closed-form `ks_radius_energy` rule, bitwise what `KerrMarch` does today.
+| Type | Fields | `lane(st, T)` | Capture in `march_control` |
+|---|---|---|---|
+| `KerrSchildCartesian{T}` | `a`, `r_h` (computed once from `a`) | narrows both | `r − r_h` on the Kerr-Schild radius |
+| `Minkowski{T}` | — | `Minkowski{T}()` | none |
+| `UserMetric{F,T}` | `g`, a closure `x -> SMatrix{4,4}` | same closure | none |
+| `SuperposedKerrSchild{N,T}` | `mass`, `spin`, `center`, `r_h` per hole | every field | `min_A(r_A − r_h,A)` |
+| `ADMGrid{T,A}` | origin, spacing, node counts, `data`, `alpha_min`, `offgrid_eta` | the grid itself | lapse below `alpha_min` |
 
-`CameraFrame{T}` gains the vertical: `sin_i, cos_i, d, up::SVector{4,T}`. The
-polarized march reads `frame.up`; `cu1..cu4` and `_camera_up` disappear.
-
-`analytic_kerr.jl` exports `pixel_prep(α, β, θo, a; ro)` and
-`band_landing(prep, n) -> Landing` with named fields `(r, φ, t, νr, valid, λ, η)`
-(today's seven-tuple), plus `critical_curve`. The intensity seam leaves this
-module: painting is `intensity(source, landing)` in `Matter.sources/gdisk.jl`,
-composed in `Products/analytic.jl`. `Geodesics` no longer takes a source
-callback.
+- A march stops when the distance above the horizon proxy falls below
+  `HORIZON_EPS_SAMPLED` (ADM: the lapse margin below zero) or is non-finite, when the
+  normal-frame photon energy exceeds `CAPTURE_REDSHIFT = 100`, or when the ray is outbound
+  beyond `escape` or `R_em`. The step is that distance over `C` on Kerr and binaries,
+  `max(R, 1)/C` on the coordinate radius `R` elsewhere. The rule's arguments share one
+  type: a `Float64` scalar in a `Float32` march is a `MethodError`.
+- `ADMGrid` is one struct for host and device: `Adapt.adapt` replaces `data`, and every
+  method reads it through the same Catmull-Rom body. Its scalars share the data type, so
+  it has no `Float32` lane.
+- `PlaneParallelCamera(; inc_deg, d, fov, npix)`; `CameraFrame{T}(sin_i, cos_i, d, up)`
+  with `up = (0, −cos i, 0, sin i)`, the polarization vertical the IQUV march transports.
+  `camera_ray(st, frame, α, β) -> (y, ok)` is the received photon traced backward
+  (`p = −k`, `p_t = +1`); `ok` is false without a positive-energy null root at the camera.
+- Exact Kerr: `pixel_prep(α, β, θo, a; ro)` once per screen point, then
+  `band_landing(prep, n) -> Landing{T}` with fields `r, φ, t, νr, valid, λ, η`;
+  `critical_curve(a, θo; n)`. Painting a landing is `Matter.intensity(disk, landing)`.
 
 ### 3.3 Matter
 
 ```julia
-struct PlasmaPrimitives{T}    # code units, AthenaK layout
+struct PlasmaPrimitives{T}    # code units, AthenaK layout; inside = false ⇒ every field zero
     rho::T; uu::SVector{3,T}; eint::T; bb::SVector{3,T}; inside::Bool
 end
 struct PlasmaState{T}         # cgs, with the fluid kinematics at the sample
     n_e::T; theta_e::T; B::T
     ucon::SVector{4,T}; ucov::SVector{4,T}; bcon::SVector{4,T}; bcov::SVector{4,T}
-    b_sq::T; sigma::T; beta_inv::T
-    valid::Bool
+    b_sq::T; sigma::T; beta_inv::T; valid::Bool
 end
-vacuum(::Type{T}) -> PlasmaState{T}       # the single sentinel
+vacuum(::Type{T}) -> PlasmaState{T}                        # the one invalid state
 
-struct ElectronModel{T}; mu; ne_ni; use_p::Bool; rat_low; rat_high; gamma; gamma_i; gamma_e; end
-struct PlasmaCuts{T}; rho; n_e; pgas; theta_e; b; sigma; beta_inv; end   # each a Bound{T}(lo, hi), ±Inf = off
+ElectronModel{T}(; mu, ne_ni, use_p::Bool, rat_low, rat_high, gamma, gamma_i, gamma_e, thermal_frac)
+Bound{T}(lo, hi)                                           # an infinite end is inactive
+legacy_bound(T, lo, hi)                                    # a negative end becomes ∓Inf
+PlasmaCuts{T}(; rho, n_e, pgas, theta_e, b, sigma, beta_inv)   # Bounds, inactive by default
+decode(prim, g, units, electrons, cuts) -> PlasmaState     # one decode, imaging and Monte Carlo
 
 abstract type PlasmaProvider end
-plasma_state(p::PlasmaProvider, st, x, g::MetricPair, params) -> PlasmaState
-    # default: decode(primitives(p, x), g, params.units, params.electrons, params.cuts)
-primitives(p::PlasmaProvider, x) -> PlasmaPrimitives      # grid-backed providers implement this
+abstract type GridProvider <: PlasmaProvider end           # primitives(p, x) -> PlasmaPrimitives
+abstract type AnalyticProvider <: PlasmaProvider end       # plasma_state(p, st, x, g, params)
+domain_radius(p) -> Float64                                # vacuum beyond this coordinate radius
+sample(p, st, x, params) -> (state, g)                     # g = metric_and_inverse(st, x)
 ```
 
-Providers in this tier: `PolishDoughnut`, `PageThorneDisk`,
-`EquatorialHotspot` (implement `plasma_state` directly in cgs, taking the
-metric pair instead of recomputing it) and `UniformSphere` (the Monte Carlo
-sphere). Grid-backed providers live in `Data` (§4.1). The Monte Carlo
-`plasma_at` and the imaging `eight_coefficients` decode become one call to
-`decode`; `fig_examples.jl`'s inverse-decode adapter is deleted because a
-torus is a provider the public `render` accepts.
-
-The cut convention changes from `-1` disables to `±Inf` disables; every
-comparison is unchanged in effect, so the images are bitwise identical.
+- `sample` on a grid provider evaluates the metric only where `prim.rho > 0`; elsewhere
+  it returns `vacuum` and a zero pair that must not be read. A NaN quantity never trips a
+  cut; `electron_theta` is NaN when `thermal_frac` is zero.
+- Analytic providers, which take the metric pair instead of recomputing it:
+  `PolishDoughnut`, `PageThorneDisk`, `EquatorialHotspot` and `UniformSphere` (the Monte
+  Carlo sphere). The grid providers live in `Data` (§4.1). `EquatorialDisk` is not a
+  provider: the exact-Kerr products paint a landing with `intensity(disk, landing)`.
+  `EmissionZone{T}` is the input of superphoton generation.
 
 ### 3.4 Transfer
 
@@ -270,668 +184,582 @@ abstract type TransferMode end
 struct StokesI <: TransferMode end
 struct IQUV    <: TransferMode end
 
-struct Thermal{T};  frac::T; end
-struct PowerLaw{T}; frac; p; gamma_min; gamma_max; jj; aa; jj_q; jj_v; aa_q; aa_v; rho; rho_q; rho_v; end
-struct Kappa{T};    frac; kappa; w; …30 fitted constants…; end          # constructors do the precompute
-struct TransferParams{T, P<:Union{Nothing,PowerLaw{T}}, K<:Union{Nothing,Kappa{T}}}
-    units::Units{T}; electrons::ElectronModel{T}; cuts::PlasmaCuts{T}
-    thermal::Thermal{T}; powerlaw::P; kappa::K
-    nu_obs::T; L_unit::T
+PowerLaw(frac, p, gamma_min, gamma_max); Kappa(frac, kappa, w)     # fit constants computed once
+struct TransferParams{T,P,K,E,C,N}
+    units::Units{T}; electrons::E; cuts::C; powerlaw::P; kappa::K; nu_obs::N
 end
-has_powerlaw(::TransferParams{T,Nothing}) = false   # compile-time, as `hasfield` is today
+TransferParams(units, electrons, cuts, nu_obs; powerlaw = nothing, kappa = nothing)
+has_powerlaw(p); has_kappa(p)          # false at compile time for `nothing`
+output_type(mode, params)              # StokesI: the promoted scalar, SVector{K} for K sets; IQUV: SVector{4}
 
-coefficients(::StokesI, p, state, kcov, ν)                 -> (j, α)
-coefficients(::IQUV,    p, state, kcov, kcon, g, ν, renorm) -> (j4, α4, ρ4, tetrad, valid)
-segment(::StokesI, j, α, ds)    -> (A, B)
-segment(::IQUV,    j, α, ρ, ds) -> (M, b)
+coefficients(::StokesI, p, state, kcov, ν_obs)                -> (j, α)
+coefficients(::IQUV, p, state, kcov, kcon, g, ν_obs, renorm)  -> (j, α, ρ, tetrad, valid)
+segment(::StokesI, j, α, ds) -> (A, B);  segment(::IQUV, j, α, ρ, ds) -> (M, b)
 
-struct SpacetimeMarch{S,T}; st::S; budget::MarchBudget{T}; end      # geodesic lane
-struct StoredPath{S,V,D};  st::S; ys::V; dls::D; end
-march(mode, y0, prog) -> Float64 | Dual | SVector{K} | SVector{4}
+struct SpacetimeMarch{S,T}; st::S; budget::MarchBudget{T}; end  # fixed control, geodesic lane
+struct StoredPath{S,V,D}; st::S; ys::V; dls::D; end             # replay of a trace
+march_control(ctl, y, r_prev, it); geodesic_step(ctl, y, h, it); max_steps(ctl)
+march(mode, y0, prog)
 ```
 
-`SimCoeffConfig` (mutable, 90 flat fields), `coefficient_params`,
-`_march_params`, `_gimg_params`, `_gpol_params` and the `gp` NamedTuple are
-replaced by `TransferParams`. The AD lane is `TransferParams{Dual}`; the
-mass-scale ladder is an `NTuple{K,TransferParams}` with an `SVector{K}`
-accumulator, as today. `use_p` is a `Bool`. The march bodies of
-`reverse_march.jl` move unchanged except for field access through the
-sub-records, so the arithmetic order is unchanged.
+- A march reads five fields of its program: `st` (the `Float64` transfer spacetime of the
+  plasma decode, the wave vector and the tetrads), `control`, `provider`, `params` and
+  `frame` (a `CameraFrame{Float64}`). The geodesic, and under `IQUV` the transported
+  camera frame, run in the lane of `y0`; the transfer runs in `Float64`.
+- The derivative lane is a `TransferParams` whose units or electron model are `Dual`; the
+  mass-scale ladder is an `NTuple{K,TransferParams}` with an `SVector{K}` accumulator
+  (Stokes I, grid providers, primitives sampled once per step).
+- `SpacetimeMarch` defines its own `Adapt.adapt_structure` (in `controls.jl`), adapting its
+  spacetime, so an ADM grid's data reaches the device with the control. The IQUV march
+  also ends where the transported frame admits no spacelike screen leg.
 
 ### 3.5 MonteCarlo
 
 ```julia
-generate(zone::EmissionZone, tables, rng) -> (Superphoton, rng)     # one generator; the sphere draws its
-                                                                   # emission point through UniformSphere
-absorption_rate(state, p)              -> ν α_ν                     # replaces 3 copies
-scattering_rate(table, state, p)       -> ν n_e σ_h                 # replaces 3 copies
-struct Bias{T}; b0::T; end; bias(b::Bias, nscatt)
+generate(zone::EmissionZone, tables::GenerationTables, rng) -> (Superphoton, rng)
+generate(sphere::UniformSphere, tables, rng)                 # uniform point, then the zone method
+GenerationTables(weights::WeightTable, dnmax[, int_jnu::IntJnuTable])
 
-abstract type Sink end                  # record!(sink, sph); spawn!(sink, child, rng, event)
-struct FlatMarch{T}; R::T; step_frac::T; nmax::Int; end             # the sphere's straight-line control
-track!(ctl, st, provider, opacities, sph, rng, sink; absorb, scatter) -> (sph, recorded, rng)
+rate_frame(provider) -> FluidFrame() | StaticFrame()         # StaticFrame for UniformSphere
+absorption_rate(state, p); absorption_rate(::StaticFrame, state, kcon)   # ν α_ν
+scattering_rate(table::HotcrossTable, state, p)              # ν n_e σ_h
+struct Bias{T}; b0::T; end; bias(b, nscatt)                  # max(1, b0 (n + 1)²)
+Opacities(; params, table, bias = Bias(1.0), L_unit = 1.0, weight_min = MC_WEIGHT_MIN, max_scatt = 0)
+
+abstract type Sink end      # record!(sink, sph); spawn!(sink, child, rng, event); tally!(sink, sph, loss, spawned)
+may_scatter(provider, state); scatter_site(provider, st, x, params) -> (zone, ok)
+FlatMarch(sphere; step_frac = SPHERE_STEP_FRAC, nmax = SPHERE_MAX_STEPS)
+CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS)
+track!(ctl, st, provider, opac, sph, rng, sink; absorb = Val(true), scatter = Val(false))
+    -> (sph, recorded, rng)
 ```
 
-One tracker replaces `track_superphoton`, `track_superphoton_scatter!`,
-`_mc_march_scatter_core`, `_mc_track_thin_w`, `_mc_march_scatter!`,
-`track_superphoton_grmhd` and `track_superphoton_grmhd_scatter!`. The control
-decides the step (`FlatMarch`: `step_frac R / |k|`; `SpacetimeMarch`: the
-`_grmhd_dlam` rule), the provider supplies the plasma, `absorb`/`scatter`
-are compile-time switches (`Val`), and the sink receives escapes and
-children. The exponential-transform scatter decision stays one function.
+- One tracker serves the sphere and the GRMHD fluid, with and without scattering. The
+  control decides the step and the stop (`FlatMarch`: straight lines, `h = step_frac
+  R/|k|`; `CurvedMarch`: RK4, `h = (r − r_h)/(C |k|)`) through the march-control functions
+  of `Transfer`; the provider supplies the plasma through `Matter.sample`; `absorb` and
+  `scatter` are compile-time switches.
+- `rate_frame(provider)` selects the absorption rule; the two rules agree in exact
+  arithmetic on a null `k` and differ in rounding. Scattering is the biased
+  exponential-transform decision `scatter_event`; `may_scatter` (`state.valid`) and
+  `scatter_site` (the provider's sample) decide where and off what a photon scatters. The
+  sphere scatters on every step that accrues depth, the leaving step included, and always
+  kicks with its uniform plasma. A child's stream is `child_rng(rng, event, layout)`.
+- `bias` returns 1 unless `b0 (n + 1)²` exceeds 1, a NaN product included. Constants carry
+  no leading underscore. `fluid_tetrad` (imaging, e₍₃₎ along k) and `emission_tetrad`
+  (Monte Carlo, e₍₁₎ along b) are different physics and stay apart.
 
 ## 4. Infrastructure tier
 
-No physics is written here. This tier owns arrays, files, threads, devices,
-queues and caches, and implements the physics protocols over its containers.
+No physics is written here. This tier owns arrays, files, threads, devices, queues and
+caches, and implements the physics protocols over its containers.
 
 ### 4.1 Data
 
 ```julia
-struct FluidBlocks{A5,A2,L} <: PlasmaProvider     # the sampling struct; isbits after Adapt
-    data::A5          # (8, ni, nj, nk, nmb) Float32, feature-fastest on host AND device
-    x_left::A2; dx::A2; lo::A2; hi::A2            # (3, nmb)
+struct FluidBlocks{A5,A2,L} <: GridProvider    # one struct for host and device
+    data::A5        # (8, ni, nj, nk, nmb) Float32, feature fastest, PRIM_NAMES order
+    x_left::A2; dx::A2; lo::A2; hi::A2          # (3, nmb) Float64
     ni::Int; nj::Int; nk::Int; nmb::Int
-    locate::L         # LeafTable | LevelHash | BlockScan
+    locate::L       # LeafTable | LevelHash | BlockScan
 end
-primitives(b::FluidBlocks, x) -> PlasmaPrimitives      # the one trilinear body (clamped, block-interior)
-Adapt.@adapt_structure FluidBlocks                      # LevelHash adapts to BlockScan (device has no Dict)
-
-struct AthenaKSnapshot             # host metadata + blocks
-    blocks::FluidBlocks; levels; logical_locations; names; time
-end
-struct UniformGrid{A4} <: PlasmaProvider;  data::A4; n; xo; inv_dx; end
-struct FrameWindow{P} <: PlasmaProvider;   a::P; b::P; t_a; inv_dt; t_obs; end    # device-able two-frame blend
-struct SeriesProvider <: PlasmaProvider;   series::SnapshotSeries; end             # host, any bracket
-blend(sa, sb, w)                                        # the one time blend
+struct AthenaKSnapshot <: GridProvider; blocks; levels; logical_locations; names; time; end
+AthenaKSnapshot(filename; gamma = nothing)
+AthenaKSnapshot(data, lo, hi, x_left, dx, levels, logical_locations; names, time)
+struct UniformGrid{A4} <: GridProvider; data::A4; n; xo; inv_dx; box_half; end
+resample(p::GridProvider, box_half, n) -> UniformGrid
+struct FrameWindow{P} <: GridProvider; a::P; b::P; t_a; inv_dt; t_obs; end
+SnapshotSeries(paths, times; maxslots = 2, t_obs = times[end])
+window(series, ia[, box_half, n]; t_obs); advance(win, series, ia; t_obs)
+struct SeriesProvider <: GridProvider; series::SnapshotSeries; end
+blend(sa::PlasmaPrimitives, sb::PlasmaPrimitives, w)          # the one time blend
 ```
 
-- The host array layout becomes feature-fastest `(8, ni, nj, nk, nmb)`, the
-  device layout of today. The CPU sampler reads the same eight floats per
-  corner, so its results are bitwise unchanged, and `permutedims` at upload
-  disappears.
-- `LeafTable`/`LevelHash`/`BlockScan` are built eagerly in the snapshot
-  constructor (P17); `LeafCache` and its lock disappear.
-- `FluidBlocks` and `UniformGrid` share `lerp8`; each computes its own
-  fractional index (`(x - x_left)/dx` versus `(x - xo) * inv_dx`), so both
-  stay bitwise what they are today.
-- `SnapshotSeries` keeps the LRU loader; `window(series, ia)` returns a
-  `FrameWindow`; `advance(window, series)` promotes the upper frame.
-- `read_athenak_bin`, `athenak_bin_snapshot`, the `press` layout, and the Z4c
-  resample into `ADMGrid` move here unchanged.
-- `tables.jl` holds the threaded builders (`build_weight_table`,
-  `build_zone_emission_table`, `zone_counts`, `build_int_jnu_table`,
-  `build_hotcross_table`, `load_hotcross`); the lookups they feed are physics.
+- The snapshot constructors build the locate strategy eagerly (`build_locate`): a
+  `LeafTable` (dense finest-block grid), a `LevelHash` for meshes beyond 8,000,000
+  finest-block cells or not aligned to the finest grid, or a `BlockScan`. A `LevelHash`
+  is host only: `Adapt.adapt` turns it into the `BlockScan` every device runs.
+- `primitives(blocks, x)` is the clamped trilinear sample in the owning block, in
+  `Float64`. `FluidBlocks` (index `(x − x_left)/dx`) and `UniformGrid` (index
+  `(x − xo) inv_dx`, vacuum outside the node box) share `lerp8`.
+- `FrameWindow{P}` samples both frames and blends the interpolated results at the
+  emission time `t_obs + X⁰`; `P` is `FluidBlocks` or `UniformGrid`, the frames share the
+  mesh, and the window is `isbits` after `Adapt` when `P` is. `window` builds one from a
+  series; `advance` keeps the upper frame as the new lower one. `SeriesProvider` brackets
+  any emission time through the series on the host, loading under the series lock.
+- `.bin` dumps: `read_athenak_bin`, `sample_var`, `resample_z4c_adm(s, half, n;
+  alpha_min)` onto an `ADMGrid`, `z4c_grid_spacetime`, `athenak_bin_snapshot(binfile;
+  gamma)`. `write_npy(path, a)` writes `.npy` version 1.0.
+- `tables.jl` holds the threaded builders `load_hotcross`, `build_hotcross_table`,
+  `build_weight_table`, `build_zone_emission_table`, `zone_counts`, `build_int_jnu_table`
+  and `zone_int_jnu_tables`. Each threaded loop writes disjoint columns or merges exact
+  partial sums, so every table is independent of the thread count.
 
 ### 4.2 Execution
 
 ```julia
+KernelAbstractions.@kernel function _foreach!(prog, @Const(items), n, outs...)   # the one kernel
+    i = @index(Global)
+    @inbounds i <= n && prog(items[i], i, outs...)
+end
+
 abstract type Executor end
-struct ThreadedExecutor <: Executor; chunk::Int; end                  # native threads, host arrays
-struct PoolExecutor     <: Executor; pool::DevicePool; end            # KA backends: HostDevice or CUDADevice
-ThreadedExecutor(; chunk = 4096)
-PoolExecutor(devices; lanes = 2, chunk = 65536)                       # ordinals, CUDADevice/HostDevice handles, or a DevicePool
+ThreadedExecutor(; chunk = 4096)                       # Julia threads, host arrays
+PoolExecutor(devices; lanes = 2, chunk = 65536); PoolExecutor(pool::DevicePool)
+foreach_item!(exec, prog, items; outs::Tuple = (), order = nothing) -> outs
+foreach_item!(exec, (prog64 => rescue, prog32 => bulk); outs) -> outs   # one queue, several programs
+describe(exec) -> (kind, devices, lanes, chunk, threads)
 
-# the CPU/GPU switch (backend.jl, policy in §5.4)
-resolve(backend) -> Executor          # :auto | :cpu | :gpu | :host_pool | Executor | device list | DevicePool
-backend!(backend); backend() -> Executor                              # session default, printable
-describe(exec) -> NamedTuple          # kind, devices, lanes, chunk, threads; stored in every result
-
-# the one per-item contract
-foreach_item!(exec, prog, items; outs::Tuple = (), order = nothing)
-    # prog(item::Int, outs_view...) -> nothing  or  prog(item) -> value stored at outs[k][item]
-
-abstract type RaySource end
-ray(src, item) -> (RayState, ok::Bool)
-struct HostRays{V}; rays::V; end
-struct CameraRays{S,F,G}; st::S; frame::F; gen::G; end        # G ∈ PixelGrid | BlockGrid | CoordList
+abstract type RaySource end; ray(src, item) -> (y::SVector{8}, ok::Bool)
+HostRays(rays); CameraRays(st, frame, gen)     # gen: PixelGrid(fov, npix) | BlockGrid(bs) | CoordList(α, β)
+resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
 ```
 
-- `kernel.jl` holds the only `@kernel`:
-  `@kernel function _foreach!(prog, @Const(items), n, outs...)`. A program is
-  an `isbits`-after-`Adapt` functor; the kernel specialises on its type, so
-  the generated code is that of today's hand-written kernels. Workgroup size
-  is a program property (`workgroupsize(::ImagingProgram{IQUV}) = 64`).
-- `ThreadedExecutor` runs the same functor in a chunked `Threads.@threads`
-  loop. This is the only `Threads.@threads` over items in the package.
-- `pool.jl` is today's `DevicePool`, lanes, jobs, `enqueue!`, pinned staging,
-  with `march!`/`MarchPart` folded into `foreach_item!`. `rays_on_device!`
-  disappears: the ray source is part of the program and is adapted once per
-  device by `residency.jl`.
-- `residency.jl`: `resident(exec, obj)` returns the per-device adapted twin
-  of any host object (blocks, grids, ADM data, tables), cached per pool by
-  identity with a weak reference; `device_program(lane, prog)` adapts the
-  program's fields. `upload_amr`, `upload_grid`, `upload_adm`,
-  `upload_amr_scan`, `upload_window` and their `resident_*` wrappers collapse
-  into this one function.
-- `accumulators.jl`: `ExactBins` (count, Σw limbs, ΣwE limbs) with atomic
-  `record!`, used by both executors (Atomix on host arrays, KA atomics in the
-  kernel), so a Monte Carlo spectrum is bitwise independent of executor,
-  thread count, device count and chunking by construction. `ChildBuffer`
-  (SoA with an atomic slot counter, overflow → rerun at exact size) serves
-  both executors; `ScatterWorkspace`'s depth-first stack is retired in favour
-  of the layered loop everywhere.
-- `schedule.jl`: `cost_order`, `rescue_pixels`, `mixed_partition`,
-  `march_sort_order`, `queue_items`, computed in `prepare` and stored in the
-  plan (no module-level `Ref` caches).
-- `worklist.jl`: `stream_blocks!(exec, prog, work, block, visit)` over a
-  channel; the pool executor streams children without level barriers as
-  `AMRStokes` does today, the threaded executor runs the same loop with
-  thread workers. One implementation.
-- `devices.jl`: `HostDevice(id)`, `CUDADevice(ordinal)`; `backend(dev)`,
-  `activate!(dev)`, `stage_alloc`, `stage_free`, `free!`, `select_devices`.
-  The CUDA methods live in the extension; integer ordinals remain accepted
-  as `CUDADevice`.
-- `backend.jl`: `resolve` turns a symbol, a device list, a pool or an
-  executor into an `Executor`; `backend!` and `backend` hold the session
-  default; `BLP_BACKEND` seeds it at first use. `:auto` chooses the pool when
-  the CUDA extension is loaded, `CUDA.functional()` holds and
-  `select_devices()` is non-empty, else threads, and logs the choice and its
-  reason once per session. An explicit `:gpu` that cannot be honoured throws.
+- **Programs.** A program is an `isbits`-after-`Adapt` functor called as
+  `prog(item, i, outs...)`; it writes the outputs of `item` at `outs[k][i]` and returns
+  `nothing`, or writes through atomics when it has no outputs. `i` is the item under
+  threads and the position in the chunk on a device; after `foreach_item!`,
+  `outs[k][item]` holds the outputs of `item`, bitwise the same whatever the executor,
+  chunk size, device count, lane scheduling or `order`.
+- **Threads.** `ThreadedExecutor` cuts the items into chunks of `chunk` and hands them to
+  threads dynamically (`Threads.@threads :dynamic`); each item calls the host program with
+  the host arrays. This is the only `Threads.@threads` over items.
+- **Pool.** A `DevicePool` runs `lanes` persistent worker tasks per device pulling chunks
+  from one shared queue. A chunk stages its item indices, launches the program's device
+  twin once (after `prepare_launch!(dev, prog)`, which raises the CUDA stack to
+  `stack_bytes(prog)`, at `workgroupsize(prog)`), synchronizes and copies the outputs back
+  through host staging into `outs[k][item]`. Executors with the same devices, `lanes` and
+  `chunk` share one pool of the process registry, closed at exit; a `DevicePool` built
+  directly is the caller's to `close`.
+- **Residency.** `DeviceAdaptor(pool, dev, readonly)` is the `Adapt` adaptor of a device
+  twin: each `Array` leaf becomes its device copy, cached per pool and device by the
+  identity of the host array and held weakly (a cached host array must not be mutated
+  afterwards). A program is adapted once per device and call with `readonly = true`, its
+  arrays behind `readonly(dev, a)` (`constify` on a `HostDevice`, the read-only data cache
+  on a `CUDADevice`). A type whose twin is not its arrays copied defines
+  `Adapt.adapt_structure(::DeviceAdaptor, x)`: the accumulators register zeroed twins; the
+  worklist swaps the blocks of a `BlockGrid` per chunk.
+- **Ray sources** are program fields: `CameraRays` calls `camera_ray` inside the program,
+  so device rays equal host rays. **Scheduling** (`cost_order(curve, fov, npix; tile)`,
+  `rescue_pixels(curve, fov, npix; rescue_px)`, `mixed_partition(items, rescue)`,
+  `march_sort_order`, `curve_inclination`) is pure and evaluated by `prepare`.
+- **Worklist.** `stream_blocks!(exec, prog, work, block, visit; outtype)` runs chunks of at
+  most `max(1, chunk ÷ block²)` blocks; `visit(blk, vals)` returns the block's children,
+  queued at once, with no level barrier. The visited set and every block's values do not
+  depend on the executor or the completion order.
+- **Accumulators.** `ExactBins(bands; nu_min = 1e8, nu_max = 1e16, n_ebins = 200)` over
+  `PolarBands(n)` or `InclinationBands(incl_deg, half_width_deg)` holds per row and
+  frequency bin the count and the limbs of `Σw` and `ΣwE`; `record!(bins, E, w, dir)`
+  takes the escape direction and adds through atomics on either executor; `Spectrum(bins)`
+  rounds each cell once and answers `band`, `nu_centers`, `nuLnu`, `nuLnu_total`,
+  `nuLnu_solid`, `total_power`, `total_weight`, `mean_energy`. `ExactScalars(n)` has
+  `add!`, `scalar`, `addends`. `ChildBuffer(T, capacity, layout)` stores children with
+  their genealogy streams through `spawn!(buf, child, rng, event)`; a child beyond the
+  capacity is counted (`overflow`) and the layer is rerun at a capacity of at least the
+  count, which spawns identical children. `gather!(acc)` adds the device twins after
+  `foreach_item!`; `Spectrum`, `scalar` and `children` throw while twins are pending. The
+  accumulators are not `Sink`s: a Monte Carlo sink forwards `record!(sink, sph)` to
+  `record!(bins, sph.E, sph.w, escape_direction(ctl, sph))` and `spawn!` to the buffer.
+- **Devices.** `HostDevice(id)` (the KernelAbstractions CPU backend as a logical device)
+  and `CUDADevice(ordinal)`, an integer meaning the latter. The protocol is `backend(dev)`,
+  `activate!`, `functional`, `stage_alloc`/`stage_free`, `free!`, `prepare_launch!`,
+  `readonly`, `upload` and `select_devices`; the fallbacks serve `HostDevice` and throw
+  `BackendUnavailable` for other devices. The extension supplies the CUDA methods,
+  page-locked staging freed explicitly and the NVML idle probe included.
+- **Session state.** The backend session record and the pool registry are the package's
+  only session state; both sit behind locks.
 
 ## 5. Pipeline tier
 
 ### 5.1 Plans
 
 ```julia
-Base.@kwdef struct CameraConfig; inclination_deg = 60.0; distance = 1000.0; fov = 40.0; resolution = 64; end
-Base.@kwdef struct PlasmaConfig; …as today…; end            # electron model, populations, cuts
-Base.@kwdef struct RunConfig
-    m_bh_cgs; mass_scale_cgs; frequency_hz
-    camera::CameraConfig; plasma::PlasmaConfig
-    max_steps = 2500; C = 80.0; escape_factor = 1.1
-end
-# removed: bh_a (the spacetime is a value), tracer (a product), polarized (a mode)
+CameraConfig(; inclination_deg = 60.0, distance = 1000.0, fov = 40.0, resolution = 64)
+PlasmaConfig(; mu = 0.5, ne_ni = 1.0, use_p = true, rat_low = 1.0, rat_high = 10.0,
+             gamma = 13/9, gamma_i = 5/3, gamma_e = 4/3, thermal_frac = 1.0, power_frac = 0.0,
+             kappa_frac = 0.0, power_p = 3.5, gamma_min = 25.0, gamma_max = 1e7, kappa = 4.0,
+             w = 0.5, sigma_cut = 1.0, theta_e_min = -1.0)          # a negative cut is off
+RunConfig(; m_bh_cgs = 6.2e9 * 1.989e33, mass_scale_cgs = 1e24, frequency_hz = 230e9,
+          camera = CameraConfig(), plasma = PlasmaConfig(), max_steps = 2500, C = 80.0,
+          escape_factor = 1.1)
 
-struct Lanes{Tg,Tt,A}; end                        # geodesic lane, transfer lane, accumulator
-Lanes() = Lanes{Float64,Float64,Float64}()
-struct MixedLanes; rescue_px::Int; end            # fp32 bulk, fp64 within rescue_px of the critical curve
+struct Lanes{Tg,Tt,A} end; Lanes() = Lanes{Float64,Float64,Float64}()   # Tt = A = Float64
+MixedLanes(rescue_px = 2)       # Float32 bulk, Float64 within rescue_px of the critical curve
+geodesic_type(lanes)            # Tg; Float32 for MixedLanes
 
+transfer_params(cfg; mass_scale = cfg.mass_scale_cgs, rat_high = cfg.plasma.rat_high)
 prepare(cfg::RunConfig; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16) -> Plan
-prepare(model::UniformSphere; …) -> Plan          # Monte Carlo sphere needs no RunConfig
 
-struct Plan{S,Sg,P,M,T,L}
-    spacetime::S; geodesic_spacetime::Sg          # transfer lane; geodesic lane
-    provider::P; mode::M
-    params::T                                     # TransferParams or NTuple of them
-    camera::PlaneParallelCamera; frame::CameraFrame
-    budget::MarchBudget; horizon::Float64; escape::Float64; R_em::Float64
+struct Plan{S,Sg,P,M,T,Bg,H,L}
+    config::RunConfig
+    spacetime::S; geodesic_spacetime::Sg       # Float64 transfer lane; geodesic lane
+    provider::P; mode::M; params::T            # matter or nothing; StokesI() | IQUV(); TransferParams
+    camera::PlaneParallelCamera; frame::CameraFrame{Float64}; pixels::PixelGrid{Vector{Float64}}
+    budget::MarchBudget{Float64}; geodesic_budget::Bg
+    horizon::H; escape::Float64; R_em::Float64; theta_o::Float64
+    curve::Tuple{Vector{Float64},Vector{Float64}}
     lanes::L; queue::Vector{Int}; rescue::Vector{Int}
 end
 ```
 
-Everything a driver derives today (camera, frame, horizon, escape,
-emission-confinement radius, units, prepared nonthermal constants, cost order,
-rescue set, lane conversions) is computed here once. `R_em` comes from the
-provider (`domain_radius(provider)`), replacing the three ad-hoc formulas.
-
-Compatibility: for one minor release `RunConfig(bh_a = …, tracer = …,
-polarized = …)` is accepted with a deprecation warning and mapped to
-`spacetime = KerrSchildCartesian(bh_a)` and a mode, and the old entry points
-(§7) exist as deprecated one-line wrappers so the paper's figure scripts keep
-running during the migration.
+The spacetime, the matter, the transfer mode and the lanes are values passed to `prepare`,
+never configuration fields. `prepare` derives everything once: the camera, its frame and
+pixel centres; the transfer parameters (units, electron model, the cuts
+`sigma ≤ sigma_cut` and `theta_e ≥ theta_e_min` through `legacy_bound`, a population per
+nonzero fraction); `escape = escape_factor × distance`; `R_em = domain_radius(matter)`,
+`Inf` with `matter = nothing`; the march budget on both lanes; the horizon proxy (`NaN`
+when the spacetime has none); `theta_o`; on Kerr, the critical curve at
+`curve_inclination` and the cost-ordered queue (identity order elsewhere); the rescue set
+of `MixedLanes`. It throws `ArgumentError` for a spacetime that is not `Float64`, a
+geodesic lane the spacetime does not have, transfer or accumulator lanes other than
+`Float64`, and `MixedLanes` off Kerr. A plan is immutable and backend-free.
 
 ### 5.2 Programs
 
 ```julia
-struct ImagingProgram{M,S,C,P,T,F,A,R}  <: Function
-    mode::M; st::S; control::C; provider::P; params::T; frame::F; rays::R
-end
-(p::ImagingProgram)(item) = (y0, ok) = ray(p.rays, item); ok ? march(p.mode, y0, p) : nan_output(p)
-Adapt.@adapt_structure ImagingProgram
-```
-
-`TraceProgram` (stores trajectories and steps into row views),
-`ShadowProgram`, `AnalyticProgram` (per pixel: `pixel_prep`, then
-`band_landing` and `intensity` per band), `MCPrimary` and `MCLayer` (generate
-or read a child, `track!`, sinks) are built the same way. A program is the
-unit the executors run; it is the only place a mode, a spacetime, a provider,
-a parameter set and a ray source meet.
-
-### 5.3 Products
-
-| Entry point | Returns | Determinism |
-|---|---|---|
-| `render(plan; backend)` | `Image` (I, Q, U, V planes, metadata) | bitwise per item |
-| `render(plan, coords; backend)` | `4 × n` Stokes matrix for image-plane coordinates | bitwise per item |
-| `render_amr(plan; block, max_level, refine, executor)` | `Image` mosaic, level map, ray count | bitwise per item; mosaic independent of completion order |
-| `render_analytic(plan; bands, source, backend)` and `photon_ring_layers(plan, disk; …)` | per-band images and landing maps | bitwise per item |
-| `trace(plan; backend, store = true)` | `Trajectories` (source→camera states and steps) | bitwise per item |
-| `shadow(plan; backend)` | ray fates, step counts, null error | bitwise per item |
-| `sensitivity(plan, param; backend)` and `variants(plan, mass_scales; backend)` | image and derivative; K images | bitwise per item |
-| `mc_spectrum(plan, Ns; scattering, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | bitwise reduction (exact bins, genealogy streams) |
-
-`render` for the CPU is the fused march under `ThreadedExecutor`, so the
-CPU and device products are the same program; the two-phase path is
-`render(plan; path = trace(plan))`, which marches a `StoredPath`. Stokes I is
-bitwise identical between the two paths (same RK4 and RHS); IQUV agrees to the
-round-off between the transport RHS and the tracer RHS, which is today's
-CPU-versus-device agreement. Slow light is a `FrameWindow` or `SeriesProvider` as `matter`.
-A binary or numerical spacetime is a `spacetime` argument. Mixed precision is
-`lanes = MixedLanes()`. A GRMHD Monte Carlo spectrum on the device, which the
-current code cannot do, follows from `backend = :gpu` plus the resident
-`FluidBlocks`.
-
-The body of `render` is the budget of P12:
-
-```julia
-function render(plan::Plan; backend = :auto)
-    exec = resolve(backend)
-    prog = ImagingProgram(plan.mode, plan.spacetime, SpacetimeMarch(plan.geodesic_spacetime, plan.budget),
-                          plan.provider, plan.params, plan.frame, CameraRays(plan.geodesic_spacetime, plan.frame, PixelGrid(plan.camera)))
-    out = Vector{output_type(plan)}(undef, npixels(plan.camera))
-    foreach_item!(exec, prog, plan.queue; outs = (out,))
-    return Image(plan, out, describe(exec))
-end
-```
-
-with the mixed-lane variant adding a second program over `plan.rescue`
-through `mixed_partition`.
-
-### 5.4 Choosing CPU or GPU
-
-Where a product runs is one keyword, `backend`, with a session default and
-an environment override. A plan never records a backend: the same plan
-renders on the CPU and on the GPUs, and device uploads are cached by the
-pool, so switching back and forth costs one upload per device.
-
-| Precedence | Form | Example |
-|---|---|---|
-| 1 | keyword on the product call | `render(plan; backend = :gpu)` |
-| 2 | session default | `BlackLightPlus.backend!(:gpu)`; `backend!([0, 1])`; `backend!(PoolExecutor([0, 1]; chunk = 2^15))` |
-| 3 | environment, read once at first use | `BLP_BACKEND=gpu`, `BLP_BACKEND=gpu:0,1`, `BLP_BACKEND=cpu`, `BLP_BACKEND=host_pool:2` |
-| 4 | `:auto` | the pool over `select_devices()` when CUDA is loaded and functional, else threads |
-
-Accepted values everywhere: `:auto`, `:cpu`, `:gpu`, `:host_pool` (the
-KernelAbstractions CPU backend through the pool, for tests), an `Executor`,
-a list of device ordinals or handles, or a `DevicePool`.
-
-Rules.
-
-- `:auto` never downgrades silently. The first resolution in a session logs
-  the choice and the reason: `CUDA not loaded`, `no functional device`,
-  `no idle device`, or the device list used.
-- An explicit `:cpu` or `:gpu` is strict. `:gpu` without the CUDA extension
-  loaded, or without a functional device, throws `BackendUnavailable` naming
-  the remedy (`using CUDA`, `CUDA_VISIBLE_DEVICES`, or `backend!(:cpu)`).
-- `BlackLightPlus.backend()` returns the resolved session default and prints
-  it: kind, devices, lanes per device, chunk, Julia threads.
-- Every result carries `result.run`: the executor description, the lanes, the
-  package version and the wall time, so a saved image states where and how it
-  was made.
-- Device knobs (`lanes`, `chunk`, workgroup overrides) exist only on
-  `PoolExecutor`; `ThreadedExecutor` has `chunk`. No other function in the
-  public API names a device.
-- Precision lanes (`Lanes`, `MixedLanes`) are a plan property, independent of
-  the backend; mixed lanes run on either.
-
-The switch is `Execution/backend.jl` (about 80 lines); the extension
-supplies the `CUDA.functional()` probe and the NVML side of `select_devices`.
-
-### 5.5 Analysis
-
-`refinement.jl` (the relative-gradient, Laplacian and absolute-gradient block
-indicators as pure functions of a block array), `lensing_bands.jl` (apparent
-horizon, band edges, band grids; host bisection and polygon tests) and
-`interferometry.jl` (unchanged). `write_npy` is `Data`.
-
-## 6. Repetition removed
-
-| Today | Sites | Tomorrow |
-|---|---|---|
-| Driver prologue: camera from cfg, `1 + sqrt(1 - a*a)`, `1.1 * distance`, `R_em`, `gp` | 13 / 18 / 14 / 4 formulas | `prepare` |
-| `_scc_config`, `_prepared_scc`, `_gimg_params`, `_gpol_params`, `_march_params`, `GRMHDModel` constructor | 6 | `TransferParams` constructors in `prepare` |
-| `SimCoeffConfig` → `coefficient_params` → `gp` | 3 representations | `TransferParams` |
-| `KerrMarch`, `SpacetimeMarch` | 2 | `SpacetimeMarch{S,T}` |
-| `ADMGridSpacetime`, `DevADMParams` | 2 | `ADMGrid{T,A}` |
-| Trilinear: `sample_primitives`, `_sample_stencil`, `_gimg_sample`, `_gamr_lerp` | 4 | `lerp8` + two index maps |
-| Corner reads `_corner`, `_gimg_corner`, `_gamr_corner` | 3 | `corner(blocks, i, j, k, mb)` |
-| Locate: `_find_meshblock_scan`/`_gamr_locate_scan`, `_leaf_locate`/`_gamr_locate_fast`, `_hash_locate` | 5 | `locate(::BlockScan)`, `locate(::LeafTable)`, `locate(::LevelHash)` |
-| Time blend: `sample_primitives_t`, `_gimg_sample_t`, `_gamr_sample_t` | 3 | `blend` in `FrameWindow` |
-| Vacuum: `Sources._vacuum`, `MonteCarlo._vacuum`, zero `SVector{8}` | 3 | `vacuum(T)` |
-| Plasma decode sequence in `eight_coefficients`, `unpolarized_coefficients`, `plasma_at` | 3 | `decode` |
-| Imaging kernels {I, IQUV} × {uniform, AMR leaf, AMR scan} × {fast, slow} + kvariant + stiffness + shadow + tracer + analytic + camray + MC primary/layer + probes | 21 | 1 generic kernel; the axes are program fields |
-| `render*`, `march_rays*`, `trace*`, `mc_spectrum*` entry points | 29 | 9 (§7) |
-| Uploads: `upload_grid`, `upload_amr`, `upload_amr_scan`, `upload_adm`, `upload_window`, `upload_amr_window`, `resident_grid`, `resident_amr`, `_resident_scan`, `_gsp_per_device` | 10 | `resident` |
-| Opacity rates `_nu_alpha`, `_nu_alpha_scatt`, `_grmhd_nu_alpha`, `_grmhd_nu_alpha_scatt`, `_mc_nu_alpha_dev`, `_mc_nu_alpha_scatt_dev` | 6 | `absorption_rate`, `scattering_rate` |
-| Trackers (sphere, sphere-scatter, GRMHD, GRMHD-scatter, device thin, device scatter) | 6 | `track!` with a control and a sink |
-| Generators `sample_zone_photon`, `sample_sphere_photon`, `_mc_gen_sphere_photon` | 3 | `generate` + `UniformSphere` |
-| Spectra: `Spectrum`, `ExactSpectrum`, device bins, per-thread merge | 4 | `ExactBins` (accumulator) + `Spectrum` (product) |
-| Child queues: `ScatterWorkspace` stack, device SoA buffer + rerun | 2 | `ChildBuffer`, layered loop on both executors |
-| MC drivers `mc_spectrum`, `mc_spectrum_scatter`, `mc_spectrum_grmhd`, `mc_spectrum_gpu` ×2 | 5 | `mc_spectrum(plan, Ns; …)` |
-| Stokes planes reshape `_stokes_planes` + 4 inline copies | 5 | `Image(plan, out)` |
-| `Threads.@threads` item loops | 23 | `ThreadedExecutor` + 4 table builders |
-| AMR streaming: `render_amr` level loop, `AMRStokes`, `stream_blocks!` ×2 | 3 | `worklist.jl` |
-| Camera vertical: `_camera_up`, `cu1..cu4`, `_gpol_params` | 3 | `CameraFrame.up` |
-| `isdefined … include` guards, include-order notes | 12 | 0 |
-
-Not merged, because they are different physics: `fluid_tetrad` (imaging,
-e₍₃₎ along k) and `emission_tetrad` (Monte Carlo, e₍₁₎ along b); the
-unpolarized and polarized marches; the adaptive `trace_geodesic` and the
-fixed-control march.
-
-## 7. Entry-point map
-
-| Today | Tomorrow |
-|---|---|
-| `render(cfg, snap; polarized, spacetime)` | `render(prepare(cfg; spacetime, matter = snap, mode))` |
-| `render_with_powerlaw` | `prepare(cfg)` with `PlasmaConfig(power_frac = …)`; deleted |
-| `render_gpu_fused`, `render_gpu_polarized` | `matter = UniformGrid(snap, box_half, n)`, `backend = :gpu` |
-| `render_gpu_amr`, `render_gpu_amr_polarized` | `matter = snap` (native blocks), `backend = :gpu` |
-| `render_gpu_spacetime` | `spacetime = SuperposedKerrSchild(…)` or `ADMGrid`; matter as above |
-| `*_slow` (4) | `matter = FrameWindow(series, ia)` or `SeriesProvider(series)` |
-| `render_gpu_fused_grad` | `sensitivity(plan, :mass_scale)` |
-| `render_gpu_fused_kvariant` | `variants(plan, mass_scales)` |
-| `march_rays_gpu_amr`, `march_rays_gpu_spacetime` | `render(plan, coords)` |
-| `render_amr(cfg, path; stokes = AMRStokes(…))` | `render_amr(plan; backend)` |
-| `render_analytic`, `render_analytic_gpu` | `render_analytic(plan; backend)` |
-| `photon_ring_layers` | unchanged name, takes a plan |
-| `trace_rays`, `trace_rays_sampled`, `trace_rays_gpu` | `trace(plan; backend, adaptive = false)` |
-| `trace_shadow_gpu` | `shadow(plan; backend)` |
-| `mc_spectrum`, `mc_spectrum_scatter`, `mc_spectrum_gpu` | `mc_spectrum(prepare(UniformSphere(…)), Ns; scattering, executor)` |
-| `mc_spectrum_grmhd` | `mc_spectrum(prepare(cfg; spacetime, matter = snap), Ns; scattering, bands, …)` |
-| `GRMHDModel`, `SphereModel`, `ScatteringSphere` | a `Plan`; `UniformSphere` provider; a constructor preset |
-| `polunpol_consistency`, `stiffness_telemetry`, `amr_sample_probe`, `amr_locate_probe` | scripts in `bench/` and `test/` over the public API |
-| `devices = …` keyword, `select_devices`, `DevicePool`, `HostDevice`, `default_pool` | `backend = …` on every product (§5.4); `select_devices`, `DevicePool`, `HostDevice` unchanged in `Execution`; `default_pool()` becomes `backend()` |
-
-## 8. File map
-
-Every current file and where its contents go. "split" means the file's
-physics goes to the first destination and its machinery to the second.
-
-| Current | Destination |
-|---|---|
-| `constants.jl` | `Numerics/constants.jl` |
-| `inputs/parameters.jl` | `Plans/config.jl` |
-| `geodesics/metrics.jl` | `Spacetime/kerr_schild.jl`, `user_metric.jl`, `metric_ops.jl` |
-| `geodesics/camera.jl` | `Spacetime/camera.jl` |
-| `geodesics/integrator.jl` | `Spacetime/geodesic.jl`, `termination.jl`, `adaptive.jl`; `trace_rays*` → `Products/trace.jl` |
-| `geodesics/spacetimes.jl` | `Spacetime/superposed.jl`, `termination.jl`, `adaptive.jl` |
-| `geodesics/numerical_spacetime.jl` | `Spacetime/adm_grid.jl`; stencil → `Numerics/stencils.jl` |
-| `geodesics/kerr_orbits.jl` | `Spacetime/kerr_orbits.jl` |
-| `geodesics/analytic_kerr.jl` | `Spacetime/analytic_kerr.jl` (seam removed) |
-| `geodesics/lensing_bands.jl` | split: `critical_curve` → `Spacetime/analytic_kerr.jl`; bands, grids, polygons → `Analysis/lensing_bands.jl` |
-| `geodesics/gpu_tracer.jl` | `Products/trace.jl` (`TraceProgram`) |
-| `simulation/primitives.jl` | `Matter/decode.jl` |
-| `simulation/athenak_reader.jl` | `Data/athenak_hdf5.jl`, `Data/fluid_blocks.jl`; `units` → `Numerics/units.jl` |
-| `simulation/athenak_z4c.jl` | `Data/athenak_bin.jl` |
-| `simulation/time_series.jl` | `Data/series.jl` |
-| `radiation/tetrads.jl` | `Transfer/tetrads.jl` |
-| `radiation/coefficients.jl` | `Transfer/params.jl`, `synchrotron.jl`; Bessel and 2F1 → `Numerics/special.jl`; decode and cuts → `Matter/` |
-| `radiation/transfer.jl` | `Transfer/segments.jl` |
-| `radiation/integrator.jl` | `Transfer/coefficients.jl`; `polarized_march`/`unpolarized_march` → `StoredPath` use in `Products/image.jl` |
-| `radiation/reverse_march.jl` | `Transfer/controls.jl`, `march.jl` |
-| `radiation/equatorial_source.jl` | `Matter/sources/gdisk.jl` |
-| `montecarlo/rng.jl` | `Numerics/philox.jl` |
-| `montecarlo/exact_sum.jl` | `Numerics/exactsum.jl`; `ExactSpectrum` → `Execution/accumulators.jl` |
-| `montecarlo/mc_common.jl` | `Numerics/stencils.jl` (lookup), `MonteCarlo/track.jl` (scatter event) |
-| `montecarlo/emissivity.jl` | `MonteCarlo/emissivity.jl` |
-| `montecarlo/superphoton.jl` | `MonteCarlo/superphoton.jl` |
-| `montecarlo/hotcross.jl` | `MonteCarlo/hotcross.jl`; file load and table build → `Data/tables.jl` |
-| `montecarlo/scatter.jl` | `MonteCarlo/scatter.jl` |
-| `montecarlo/emission_tables.jl` | `Matter/zones.jl` (`EmissionZone`), `MonteCarlo/tables.jl` (records, lookups), `Data/tables.jl` (builders) |
-| `montecarlo/generate.jl` | `MonteCarlo/generate.jl` |
-| `montecarlo/spectrum.jl` | `Execution/accumulators.jl` (binning into `ExactBins`), `Products/montecarlo.jl` (`Spectrum` product and `nuLnu*`) |
-| `montecarlo/track.jl` | `MonteCarlo/opacity.jl`, `track.jl`; workspace → `Execution/accumulators.jl` |
-| `montecarlo/sphere_model.jl` | `Matter/zones.jl` (`UniformSphere`), `Products/montecarlo.jl` (`analytic_nuLnu`) |
-| `montecarlo/grmhd_model.jl` | `Products/montecarlo.jl` (`emission_zones`); `plasma_at` → `Matter/decode.jl` |
-| `montecarlo/mc_cpu.jl` | `Products/montecarlo.jl` (drivers), `MonteCarlo/track.jl` (GRMHD step rule) |
-| `montecarlo/mc_gpu.jl` | `Products/montecarlo.jl` (`MCPrimary`, `MCLayer`), `Execution/accumulators.jl` |
-| `sources/sources.jl` | `Matter/protocol.jl`, `sources/shared.jl` |
-| `sources/polish_doughnut.jl`, `page_thorne.jl`, `hotspot.jl` | `Matter/sources/` |
-| `outputs/outputs.jl` | `Data/npy.jl` |
-| `outputs/interferometry.jl` | `Analysis/interferometry.jl` |
-| `render.jl` | `Plans/prepare.jl`, `Products/image.jl`, `Products/analytic.jl`; `polunpol_consistency` → `bench/` |
-| `amr.jl` | `Analysis/refinement.jl`, `Execution/worklist.jl`, `Products/amr.jl` |
-| `gpu_metric.jl` | `Spacetime/termination.jl` (already the same rule) |
-| `gpu_camera.jl` | `Execution/ray_sources.jl` |
-| `gpu_pool.jl` | `Execution/devices.jl`, `pool.jl`, `residency.jl`, `executor.jl`; CUDA bits → `ext/` |
-| `gpu_image.jl` | `Data/uniform_grid.jl`, `Data/series.jl` (window), `Execution/schedule.jl`, `Products/image.jl`, `sensitivity.jl` |
-| `gpu_pol.jl` | `Products/image.jl`; stiffness telemetry → `bench/` |
-| `gpu_amr.jl` | `Data/fluid_blocks.jl`, `Data/series.jl`, `Execution/worklist.jl`, `Products/image.jl`, `amr.jl`; probes → `test/` |
-| `gpu_spacetime.jl` | `Spacetime/adm_grid.jl`, `Data/fluid_blocks.jl` (`BlockScan`), `Products/image.jl`, `trace.jl` |
-| `gpu_analytic.jl` | `Products/analytic.jl` (`AnalyticProgram`); stack-limit hook → `ext/` |
-| `gpu_image_ad.jl` | `Products/sensitivity.jl` |
-
-## 9. Public API and internal interfaces
-
-Top-level exports (54 names):
-
-```
-Configuration   CameraConfig PlasmaConfig RunConfig Lanes MixedLanes prepare
-Spacetimes      KerrSchildCartesian Minkowski UserMetric SuperposedKerrSchild ADMGrid
-                adm_grid_from_metric z4c_grid_spacetime
-Matter          AthenaKSnapshot UniformGrid SnapshotSeries FrameWindow SeriesProvider
-                PolishDoughnut PageThorneDisk EquatorialHotspot EquatorialDisk UniformSphere
-Modes           StokesI IQUV
-Execution       ThreadedExecutor PoolExecutor DevicePool HostDevice CUDADevice select_devices backend backend!
-Products        render render_amr render_analytic photon_ring_layers trace shadow sensitivity variants mc_spectrum
-Results         Image Trajectories Spectrum ScatterResult GRMHDSpectrumResult
-Analysis / I-O  write_npy visamp visamp_minima radon_cut tukey_window lensing_band critical_curve
-```
-
-Each submodule exports its interface (the method tables of §3 and §4). Tests
-import those explicitly (`using BlackLightPlus.Transfer: stokes_segment`).
-`Constants` becomes `Numerics` and stays unexported. `STANDARDS.md` §5
-"the public API is exactly what `BlackLightPlus.jl` exports" stays true and
-now means 54 names. The `DESIGN_PRINCIPLES.md` §5 gate of 50 is met if
-`radon_cut`, `tukey_window`, `SeriesProvider` and `CUDADevice` (ordinals
-suffice) are judged internal; they are listed here for review.
-
-## 10. Tests
-
-```
-test/
-├── runtests.jl              includes every file below unconditionally
-├── decks.jl                 shared synthetic decks (today's device_decks.jl + tiny_snap)
-├── structure.jl             the mechanical gates of DESIGN_PRINCIPLES §5: layering, private reach,
-│                            kernel count, arity and file budgets, export count, duplicate greps
-├── physics/                 spacetime, geodesics, analytic Kerr, coefficients, segments, marches,
-│                            sources, MC generation/scatter/hotcross/rng/exactsum; AD through each
-├── infra/                   readers and layouts, locate strategies, series/window, executors
-│                            (threaded vs HostDevice pool: bitwise per item), pool scheduling, accumulators,
-│                            backend switch (precedence, `BLP_BACKEND` grammar, strict errors, the one-time log)
-└── pipeline/                products on the decks: one plan on `:cpu` and `:host_pool` bitwise, AMR mosaic independence,
-                             slow light fast-light limit, mixed lanes, MC CPU-vs-device equality,
-                             RAPTOR/AART/gpumonty cross-code references
-```
-
-Resource skips (device, data file, reference table) are inside the test
-files and are reported. The device tests run on `HostDevice`s in CI; CUDA
-runs are the documented pre-release procedure, unchanged.
-
-## 11. Migration
-
-Incremental, module by module, suite green at every commit. Each phase ends
-with its gate from `DESIGN_PRINCIPLES.md` §5 met and the regression decks
-checked. "Bitwise" below means identical bits on the decks against the tree
-before the phase; "tolerance" means the documented physics tolerance against
-the CPU reference with a one-time re-baseline of pinned outputs.
-
-| Phase | Work | Acceptance |
-|---|---|---|
-| 0 | Freeze decks and hash their outputs: Kerr native-AMR I and IQUV at 64², binary IQUV, ADM shadow, analytic disk, AMR mosaic, slow-light window, MC sphere / scatter / GRMHD stride, trajectories. | hashes recorded in `test/decks.jl` |
-| 1 | `Numerics`: move constants, units, exact sum (+ atomic add), RNG, stencils, Bessel/2F1; add ray-state accessors and replace the 17 sites. | bitwise |
-| 2 | `Spacetime`: rename, `ADMGrid{T,A}` absorbs `DevADMParams`, `MarchBudget` + `march_control` absorbs `KerrMarch`, `CameraFrame.up`, `Landing` record, seam removed. | bitwise |
-| 3 | `Matter`: records, `decode`, `PlasmaCuts` with `±Inf`, providers protocol, analytic sources on the metric pair, `UniformSphere`. | bitwise |
-| 4 | `Transfer`: `TransferParams` replaces `SimCoeffConfig`/`coefficient_params`/`gp`; marches and coefficient functions read sub-records. | bitwise |
-| 5 | `Data`: `FluidBlocks` feature-fastest layout, eager locate, `UniformGrid`, `FrameWindow`, `blend`; delete the device sampler copies. | bitwise (native blocks, uniform grid each keep their index map) |
-| 6 | `Execution`: `Executor` protocol, generic kernel, ray sources in programs, `resident`, `ExactBins` atomic on both executors, `ChildBuffer`, `worklist`, schedule caches into the plan, `backend.jl` with `BLP_BACKEND`; CUDA glue to `ext/`, `CUDA` to `[weakdeps]`. | bitwise per item against phase-5 outputs on `HostDevice`; MC bitwise by exact sums |
-| 7 | `Plans` + `Products`: `prepare`, `Plan`, programs, the nine entry points with the `backend` keyword, `result.run` metadata, deprecated wrappers for the 29 old names, figure scripts switched to the new API. | bitwise against the phase-6 `HostDevice` outputs; the fused CPU default agrees with today's stored-path CPU images bitwise for Stokes I and to the current CPU/device round-off for IQUV, both checked on the decks |
-| 8 | `MonteCarlo` + `Products/montecarlo.jl`: one tracker, one generator, layered scatter on both executors, GRMHD MC on the pool. | spectra bitwise (exact sums, genealogy streams); child sets identical |
-| 9 | `Analysis`, docs: `method.md` absorbs provenance prose, `STANDARDS.md` §1/§5 amended, `gpu.md` rewritten, API pages regenerated, `CHANGELOG`; `structure.jl` switched on; export list cut to §9. | all gates of §5 met |
-| 10 | Remove the deprecated wrappers and the `RunConfig` shim; tag `v0.2.0`. | — |
-
-The kernel audit (`bench/kernel_audit.jl --check`) runs at every phase
-boundary; registers, stack and spill must not exceed the baseline.
-
-## 12. Risks and reversals
-
-- **Program functors must be `isbits` after `Adapt`.** Providers that carry
-  `Dict`s or `String`s are split into a sampling struct and host metadata
-  (`FluidBlocks` / `AthenaKSnapshot`). `LevelHash` adapts to `BlockScan` on
-  the device, which is today's scan path; documented.
-- **Compile time.** One source kernel specialised per program type produces
-  the same number of specialisations as today's hand-written kernels; no
-  change expected. If the generic kernel costs registers (the audit will
-  say), the fallback is one kernel per transfer mode, still three kernels.
-- **Threaded executor and atomics.** Exact integer atomics on host arrays
-  are cheap at the Monte Carlo record rate; if contention shows at high
-  thread counts, per-thread `ExactBins` merged by integer addition is a
-  drop-in with identical bits.
-- **Deprecation shims.** They keep the paper's figure scripts running
-  through phase 7 and are removed in phase 10. If decision §6.5 is reversed
-  (keep `RunConfig` fields), `prepare` reads `bh_a`/`tracer`/`polarized` and
-  the shim is permanent.
-- **If decision §6.1 is reversed** (GPU code stays outside the package), the
-  `Execution` module and the generic kernel still apply; only `pool.jl` and
-  `devices.jl` would be an `include`d file again, and the gates on include
-  guards and precompilation are dropped.
-- **If decision §6.3 is reversed** (stored path stays the CPU default),
-  `render` calls `trace` then marches a `StoredPath`; nothing else moves.
-- **Silent CPU fallback.** `:auto` on a session without `using CUDA` runs on
-  threads. The once-per-session log and `result.run` make it visible;
-  `backend!(:gpu)` or `BLP_BACKEND=gpu` turns it into an error.
-- **Extension loading.** Julia activates the CUDA extension only after the
-  user's own `using CUDA`; the package cannot load it on their behalf, so
-  `:gpu` before that throws with the remedy.
-- **World age.** Pool workers call programs through `invokelatest` as today.
-- **Naming.** `Numerics` rather than `Core` (clash with `Base.Core`); the
-  other module names are open.
-
-## 13. Dissolving the `gpu_*.jl` files
-
-The eleven device files (`gpu_metric`, `gpu_camera`, `gpu_analytic`,
-`gpu_image_ad`, `gpu_spacetime`, `gpu_pol`, `gpu_pool`, `gpu_image`,
-`gpu_amr`, `geodesics/gpu_tracer`, `montecarlo/mc_gpu`; 3,694 lines) contain
-almost no device-specific code. Three measurements fix what they are:
-
-- **20 call sites** in all of them touch CUDA directly (`device!`, pinned
-  `alloc`/`free`, `limit!`, `ndevices`, `memory_info`, NVML, `unsafe_free!`,
-  `CuArray`): 10 in `gpu_pool.jl`, 8 in the two `gpu_amr.jl` validation
-  probes, 2 in `gpu_analytic.jl` (stack limit). Everything else is
-  KernelAbstractions, which already runs on the CPU backend.
-- **The eleven march kernels are one kernel.** Each body is
-  `out[i] = reverse_*_march(y0s[i], y -> <sampler>(…, y), …, <control>, nmax)`;
-  they differ only in which sampler closure and which control they pass. The
-  AD kernel is already an alias (`_fused_kernel_ad! = _fused_kernel!`).
-- **The physics they call is CPU code.** `metric_and_inverse`, `rk4_step_fixed`,
-  `geodesic_transport_rhs`, `plasma_decode`, the synchrotron fits, the tetrads,
-  the segment operators and both marches are imported from the package; the
-  files add copies only of the samplers and of the ADM parameter struct.
-
-### 13.1 Line dissection
-
-Approximate lines per category, read off the current files.
-
-| File | CUDA-only | KA-generic executor | Copy of CPU physics or sampler | Driver and kernel enumeration | Container and upload plumbing | Diagnostics | Scheduling geometry |
-|---|---|---|---|---|---|---|---|
-| `gpu_pool.jl` (481) | 60 | 360 | | | 60 | | |
-| `gpu_image.jl` (689) | | 50 | 45 | 235 | 210 | | 150 |
-| `gpu_amr.jl` (696) | | 70 | 90 | 260 | 170 | 60 | 10 |
-| `gpu_pol.jl` (345) | | | | 215 | | 130 | |
-| `gpu_spacetime.jl` (331) | | | 70 | 200 | 60 | | |
-| `mc_gpu.jl` (641) | | 30 | 230 | 330 | 50 | | |
-| `gpu_tracer.jl` (149) | | | | 140 | | | |
-| `gpu_analytic.jl` (130) | 10 | | | 115 | | | |
-| `gpu_camera.jl` (118) | | 95 | | 15 | | | |
-| `gpu_image_ad.jl` (92) | | | | 85 | | | |
-| `gpu_metric.jl` (22) | | | 22 | | | | |
-| **Total (≈)** | **70** | **605** | **460** | **1,595** | **550** | **190** | **160** |
-
-### 13.2 Where each category goes
-
-| Category | Lines today | Destination | Lines after |
-|---|---|---|---|
-| CUDA-only | 70 | `ext/BlackLightPlusCUDAExt.jl` | ≈ 80 |
-| KA-generic executor | 605 | `Execution/pool.jl`, `executor.jl`, `kernel.jl`, `ray_sources.jl`, `worklist.jl` | ≈ 500 (`march!`/`march_chunk!`/`rays_on_device!`/`AMRStokes` fold into `foreach_item!` and `stream_blocks!`) |
-| Copies of CPU physics and samplers | 460 | deleted; providers sample through the one body after `Adapt`; `ADMGrid{T,A}` replaces `DevADMParams`; `march_control` replaces `_gimg_stop` | 0 |
-| Driver and kernel enumeration | 1,595 | `Products/programs.jl` (the program functors, ≈ 120) and the product bodies, which the CPU shares | ≈ 120 attributable to devices; the rest is the single CPU/GPU product layer |
-| Container and upload plumbing | 550 | `Data/uniform_grid.jl`, `Data/series.jl` (`FrameWindow`, `advance`), `Execution/residency.jl` | ≈ 150; the uniform and AMR slow-light windows become one generic `FrameWindow{P}` |
-| Diagnostics | 190 | `bench/stiffness.jl`, `test/infra/amr_probe.jl` as scripts over `foreach_item!` | moved, not kept in `src/` |
-| Scheduling geometry | 160 | `Execution/schedule.jl`, run once in `prepare` | ≈ 150 |
-
-Result: no file named `gpu_*`; about 1,000 lines of backend-neutral execution
-infrastructure that the CPU path also uses; about 80 lines that need CUDA.
-The user-visible effect is that
-
-```julia
-using BlackLightPlus, CUDA
-include(joinpath(root, "src", "gpu_image.jl")); include(…"gpu_pol.jl"); include(…"gpu_amr.jl")
-S = render_gpu_amr_polarized_slow(cfg, win; devices = [0, 1])
-```
-
-becomes
-
-```julia
-using BlackLightPlus, CUDA
-plan = prepare(cfg; spacetime = KerrSchildCartesian(a), matter = window(series, ia), mode = IQUV())
-S    = render(plan; backend = [0, 1])
-```
-
-and the same two lines with `backend = :cpu` run on the CPU. With no keyword,
-`BlackLightPlus.backend!` or `BLP_BACKEND` decides, and `:auto` takes the GPUs
-whenever CUDA is loaded and a device is idle (§5.4).
-
-### 13.3 Mechanics
-
-```julia
-# Execution/kernel.jl — the only @kernel in the package
-@kernel function _foreach!(prog, @Const(items), n, outs...)
-    i = @index(Global)
-    @inbounds i <= n && prog(items[i], i, outs...)
-end
-
-# Products/programs.jl — what the eleven march kernels become
 struct ImagingProgram{M,S,C,P,T,F,R} <: Function
     mode::M; st::S; control::C; provider::P; params::T; frame::F; rays::R
 end
 Adapt.@adapt_structure ImagingProgram
-@inline function (p::ImagingProgram)(item, i, out)
-    y0, ok = ray(p.rays, item)
-    @inbounds out[i] = ok ? march(p.mode, y0, p) : invalid(eltype(out))
+
+function (p::ImagingProgram)(item, i, out)
+    y0, ok = camera_state(p.rays, item)        # @noinline; the Float64 camera ray
+    @inbounds out[i] = ok ? march(p.mode, lane_state(p.control, y0), p) : invalid(eltype(out))
     return nothing
 end
+workgroupsize(::ImagingProgram{IQUV}) = 64
 ```
 
-- A program is built once per product call on the host and adapted once per
-  device by `resident`; the kernel is launched per chunk with the chunk's
-  item indices. The kernel specialises on `typeof(prog)`, so each combination
-  of mode, spacetime, provider, parameter type and lane compiles to the code
-  the hand-written kernel compiles to today, and the kernel audit enumerates
-  program types instead of kernel names.
-- The ray source is a program field: `CameraRays` computes the ray from the
-  frame in-kernel (today's `_camray_kernel!` body), `HostRays` reads an
-  adapted array. The separate ray kernel and `rays_on_device!` go.
-- Workgroup size is a trait of the program (`workgroupsize(::ImagingProgram{IQUV}) = 64`),
-  replacing `_GPOL_WG` and the `wg` keywords.
-- The Monte Carlo primary and layer kernels are programs with no per-item
-  output; they write through `Sink`s (atomic exact bins, child buffer) exactly
-  as the kernels do today. Because the threaded executor runs the same
-  program with the same atomic sinks, the CPU Monte Carlo drivers in
-  `mc_cpu.jl` (the generate/track/record loops, ≈ 300 lines) disappear too.
-- Slow light is not a kernel or a driver: `FrameWindow{P}` is a provider that
-  blends two providers of type `P` at the emission time. One struct serves
-  the uniform grid and the native AMR blocks, host and device.
+- `imaging_program(plan; mode, params, gen)` sets `st = plan.spacetime`,
+  `control = SpacetimeMarch(plan.geodesic_spacetime, plan.geodesic_budget)` (the `Float64`
+  pair for the rescue lane) and `rays = CameraRays(plan.spacetime, plan.frame, gen)`:
+  camera rays are made on the `Float64` spacetime and narrowed to the control's lane. A
+  ray without a positive-energy null root gets `invalid(T)`, NaN in every component.
+- The ray is computed in the non-inlined `camera_state`, and no program call operator
+  carries `@inline`, so a program body is compiled as a function of its own and the
+  threaded executor and the host-device pool run the same floating-point contractions.
+- `TraceProgram(st, budget, rays, resume)` marches one window of at most
+  `TRACE_WINDOW = 20` steps into per-item `TraceStep{T}(y, h)` outputs and a
+  `TraceState{T}(y, r_prev, done, live, ok)` from which the next window resumes exactly;
+  `TRACE_WINDOW + 2` output arrays keep the call below the argument count at which Julia
+  boxes arguments. `ShadowProgram(st, budget, escape, rays)` records fate, step count,
+  largest null error and final radius and state. `AnalyticProgram(gen, theta_o, a, ro,
+  disk, bands)` lands every band of one screen point and needs a 32 KiB device stack.
+- `StoredPathProgram` (a march along a stored trajectory) and `AdaptiveTraceProgram`
+  (`trace_geodesic` with every step saved) hold host vectors and run on threads only.
+  Every other program is `isbits` after `Adapt` and allocates nothing.
 
-### 13.4 Risks specific to the dissolution
+### 5.3 Products
 
-- **Read-only load hints.** `@Const` applies to top-level kernel arguments
-  only; the fluid arrays nested in a program need the same hint, applied when
-  the device program is built (wrap the provider's arrays in
-  `KernelAbstractions.Const`). The audit's PTX check (`ld.global.nc` on the
-  corner reads) is the acceptance test; if the hint cannot be carried through
-  a struct field, the provider arrays are hoisted to top-level kernel
-  arguments by the executor, which keeps one kernel per provider arity (two).
-- **Register pressure.** Program fields live in the kernel parameter space,
-  as today's scalar arguments do; no change is expected, and the audit gate
-  decides. The fallback is one kernel per transfer mode (three kernels).
-- **Trajectory output.** The tracer program writes a `(width, nmax)` log per
-  chunk on the device and per-ray vectors on the host; this is one program
-  with two trajectory sinks, the only place the two executors differ.
-- **Launch count.** Unchanged: one launch per chunk, as today.
+| Entry point | Returns | Constraints |
+|---|---|---|
+| `render(plan; backend)` | `Image` | needs matter |
+| `render(plan; path::Trajectories, backend)` | `Image` | threads only |
+| `render(plan, coords; backend)` | `4 × n` `Matrix{Float64}`, rows I, Q, U, V | no `MixedLanes` |
+| `render_amr(plan; block = 16, max_level = 2, refine, backend)` | `(image, levels, nrays)` | no `MixedLanes`; `resolution % block == 0` |
+| `render_analytic(plan, disk; bands = (0, 1, 2), ro, backend)` | `(I, Ib, rs, ts, phis, redshift_sign, bands, plan, run)` | Kerr plan with the disk's spin |
+| `photon_ring_layers(plan, disk; bands, dx, box, npts, ro, fudge, backend)` | `(I, Ib, masks, grid, N, box, dx, bands, plan, run)` | Kerr plan with the disk's spin |
+| `trace(plan; backend, adaptive = false)` | `Trajectories` | no `MixedLanes`; `adaptive` on threads only |
+| `shadow(plan; backend)` | `(fate, steps, null_error, radius, final, plan, run)` | no `MixedLanes` |
+| `sensitivity(plan, param; backend)` | `(image, derivative, flux, dflux, param)` | `param` is `:mass_scale` or `:rat_high` |
+| `variants(plan, mass_scales; backend)` | `(images, mass_scales, plan, run)` | grid providers |
+| `mc_spectrum(plan, Ns; scattering, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | — |
 
-If every risk materialises the floor is three kernels and two provider
-arities, which is six specialisation families against twenty-one kernel
-definitions today; the files, the include order and the enumerated drivers
-go in every case.
+- Determinism: every imaging product is bitwise per item, whatever the executor, device
+  count, chunking or queue order; `render_amr`'s visited blocks, mosaic, level map and ray
+  count are independent of the completion order; `mc_spectrum` is a bitwise reduction.
+- Every product resolves `backend` with `resolve` (`nothing`: the session default) and
+  records `run = (executor = describe(exec), lanes, version, seconds)` in its result, or in
+  its `image` for `render_amr` and `sensitivity`; `render(plan, coords)` returns the bare
+  matrix.
+- A camera ray without a positive-energy null root is a NaN pixel in a render and an
+  error in `trace` and `shadow`. `render(plan; path)` and `trace(…; adaptive = true)` throw
+  `ArgumentError` unless the backend resolves to a `ThreadedExecutor`. The analytic
+  products throw unless the plan's spacetime is a `KerrSchildCartesian` whose spin equals
+  the disk's.
+- `render_amr` paints each block into a mosaic at `resolution × 2^max_level` and builds its
+  level map from per-level visited masks, without lock or atomic: blocks of one level own
+  distinct cells, and a child is queued only after its parent's visit returns.
+- `render` allocates one `output_type(plan)` per pixel and runs `march_frame!`:
+  `imaging_program(plan)` over `plan.queue`, or under `MixedLanes` the parts
+  `(rescue => q.rescue, bulk => q.bulk)` of `q = mixed_partition(plan.queue, plan.rescue)`
+  in one queue. `sensitivity` and `variants` run it in `StokesI` mode with a `Dual`
+  parameter set or a mass-scale tuple.
+
+`mc_spectrum(plan, Ns; scattering, backend, bands, …)` is the Monte Carlo product. Its
+programs write through the accumulators of `Execution`: escaped photons into `ExactBins`
+(`PolarBands` for the sphere, `InclinationBands` for viewing inclinations), scattered
+children into a `ChildBuffer` that feeds the next layer. `gather!` follows every
+`foreach_item!` and `Spectrum(bins)` rounds once per cell, so the spectrum is identical on
+every executor, thread count, device count and chunking.
+
+### 5.4 Choosing CPU or GPU
+
+Where a product runs is one keyword, `backend`, with a session default and an environment
+override. A plan never records a backend: the same plan renders on the CPU and on the
+GPUs, and device uploads are cached by the pool.
+
+| Precedence | Form | Example |
+|---|---|---|
+| 1 | keyword on the product call | `render(plan; backend = :gpu)` |
+| 2 | session default | `backend!(:gpu)`; `backend!([0, 1])`; `backend!(PoolExecutor([0, 1]; chunk = 2^15))`; `backend!(nothing)` clears it |
+| 3 | `BLP_BACKEND`, read once at first use | `auto`, `cpu`, `gpu`, `gpu:0,1`, `host_pool`, `host_pool:2` |
+| 4 | `:auto` | the pool over `select_devices()` when CUDA is loaded, functional and a device is idle, else threads |
+
+`resolve` accepts `nothing`, `:auto`, `:cpu` (`ThreadedExecutor()`), `:gpu`, `:host_pool`
+(a pool over `HostDevice(1)`), an `Executor`, a `DevicePool`, a device or an ordinal, a
+list of devices or ordinals, and a string in the `BLP_BACKEND` grammar.
+
+- `:auto` never downgrades silently: its first resolution in a session logs the choice
+  and the reason (`CUDA not loaded`, `no functional device`, `no idle device`, or the
+  devices used).
+- An explicit choice is strict. `:gpu` without the CUDA extension, a functional device or
+  a visible device throws `BackendUnavailable` naming the remedy (`using CUDA`,
+  `CUDA_VISIBLE_DEVICES`, or `backend!(:cpu)`); its device selection is kept for the
+  session. `backend!` resolves at once, so an unusable choice throws when it is set. A
+  malformed `BLP_BACKEND` is an `ArgumentError` and is read again at the next use.
+- `backend()` returns the resolved session default; an executor prints its kind, devices,
+  lanes per device, chunk and Julia threads. `Execution.reset_backend!()`, a test hook,
+  forgets the session default, the environment reading, the cached `:auto` and `:gpu`
+  choices and the log; registered pools are kept.
+- Device knobs (`lanes`, `chunk`) exist only on `PoolExecutor` and `DevicePool`;
+  `ThreadedExecutor` has `chunk`. Precision lanes are a plan property, independent of the
+  backend. Julia activates the extension only after the user's own `using CUDA`.
+
+### 5.5 Analysis
+
+`refinement.jl`: `RelativeGradient(cut = 0.15; frac = 0.03)`,
+`RelativeLaplacian(cut = 1.0; frac = 0.03)`, `AbsoluteGradient(cut; count = 5)`,
+`AnyOf(indicators...)`, `refinement_indicator(; …)` and `needs_refinement(indicator, I)`;
+any callable `f(I) -> Bool` serves as an indicator. `lensing_bands.jl`: `polygon_area`,
+`in_polygon`, `apparent_horizon`, `lensing_band`, `band_grid` on the Bardeen screen.
+`interferometry.jl`: `tukey_window`, `radon_cut`, `visamp`, `visamp_minima`. Host code.
+
+## 6. Continuity with the reference implementation
+
+`BlackLightPlus`, the package in `src/`, is the reference implementation. The oracle suite
+`BLP/test/oracle/` loads both packages, evaluates the reference device files into a
+scratch module to run them on host devices, and compares BLP with the reference function
+by function and product by product on the decks of `BLP/test/decks.jl`.
+
+- **Bitwise.** Every `Numerics` function; every `Spacetime` method on Kerr, binaries, an
+  ADM grid, a user metric and flat space (camera rays and exact-Kerr landings with their
+  partials included); the `Data` samplers and readers, `decode` and `Analysis`; the
+  analytic sources' scalars and validity; the transfer fits, tetrads and segment
+  operators; the Monte Carlo emissivities, hot cross section, generation, Compton kick and
+  sphere tracker with its children and streams. Stokes I images on every path: uniform
+  grid, native blocks, coordinate lists, the superposed binary, slow light on both
+  providers, mixed lanes, the mass-scale ladder, the `:mass_scale` sensitivity image, the
+  exact-Kerr maps, photon-ring layers, AMR mosaics with their level maps and ray counts,
+  and shadow fates and step counts.
+- **Round-off natively, bitwise without FMA.** IQUV images, traces, the shadows' null
+  errors and final states, the `:rat_high` sensitivity image, the transfer functions on
+  `Dual` states and the Monte Carlo torus zones and marches agree to about 1e-12 to 1e-9
+  relative. On FMA hardware LLVM fuses `muladd` pairs of the StaticArrays products into
+  FMA instructions according to the inlining context, which differs between the two
+  packages. The `transfer`, `products` and `montecarlo` scripts rerun themselves under
+  `julia -C generic`, a CPU target without FMA (`BLP_ORACLE_NOFMA=1`), where each of these
+  comparisons must be bitwise.
+- **Round-off.** The analytic sources' four-vectors and hot-spot scalars, for the same
+  cause: recompiled with the metric pair passed in, the reference body deviates alike.
+- **The two-phase path.** BLP's CPU two-phase IQUV render transports the camera frame
+  along the stored states, the fused march with the geodesic; the two differ at about
+  2e-11 of the image maximum even without FMA. BLP's renders against the reference's
+  two-phase CPU render, and the sensitivity derivatives, must agree within 1e-7 of the
+  image maximum; their deviations are reported.
+- **Exact sums.** Monte Carlo spectra are exact integer-limb sums: identical under 1, 3 and
+  8 threads, several chunkings and pools of 1, 2, 3 and 5 host devices.
+
+Run the suite from the repository root:
+
+```
+julia --project=BLP/test/oracle -e 'using Pkg; Pkg.instantiate()'
+julia -t 8 --project=BLP/test/oracle BLP/test/oracle/runtests.jl
+```
+
+Its environment develops both packages (`BLP/` and the repository root). The comparisons
+with the gpumonty hot-cross table read `hotcross.dat` from the path in `BLP_REF_GPUMONTY`,
+else from a `Mahakala` checkout beside the repository, and skip when it is absent.
+
+## 7. Public API
+
+Every name of `names(BLP)`. The keyword `backend` of a product defaults to `nothing`.
+
+| Name | Signature | Result |
+|---|---|---|
+| `CameraConfig` | `CameraConfig(; inclination_deg, distance, fov, resolution)` | camera record (§5.1) |
+| `PlasmaConfig` | `PlasmaConfig(; mu, ne_ni, use_p, rat_low, rat_high, …, sigma_cut, theta_e_min)` | electron and emission record (§5.1) |
+| `RunConfig` | `RunConfig(; m_bh_cgs, mass_scale_cgs, frequency_hz, camera, plasma, max_steps, C, escape_factor)` | run record (§5.1) |
+| `Lanes` | `Lanes{Tg,Tt,A}()`, `Lanes()` | precision lanes, `Tt = A = Float64` |
+| `MixedLanes` | `MixedLanes(rescue_px = 2)` | mixed lanes on Kerr |
+| `prepare` | `prepare(cfg; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16)` | `Plan` |
+| `KerrSchildCartesian` | `KerrSchildCartesian(a)` | `KerrSchildCartesian{T}` |
+| `Minkowski` | `Minkowski()` | `Minkowski{Float64}` |
+| `UserMetric` | `UserMetric(g)` | `UserMetric{F,Float64}` |
+| `SuperposedKerrSchild` | `SuperposedKerrSchild(masses, spins, centers)` | `SuperposedKerrSchild{N,Float64}` |
+| `ADMGrid` | `ADMGrid(xs, ys, zs, data; alpha_min = 0.1, offgrid_eta = true)`, `ADMGrid(st; alpha_min)` | `ADMGrid{Float64,Array{Float64,4}}` |
+| `adm_grid_from_metric` | `adm_grid_from_metric(metric_fn, xs, ys, zs; alpha_min = 0.1, offgrid_eta = true, excise = nothing)` | `ADMGrid` |
+| `z4c_grid_spacetime` | `z4c_grid_spacetime(binfile, half, n; alpha_min = 0.15)` | `(ADMGrid, AthenaKBin)` |
+| `AthenaKSnapshot` | `AthenaKSnapshot(filename; gamma = nothing)`, `AthenaKSnapshot(data, lo, hi, x_left, dx, levels, logical_locations; names, time)` | grid provider |
+| `UniformGrid` | `UniformGrid(data, box_half)`, `UniformGrid(p::GridProvider, box_half, n)` | grid provider |
+| `SnapshotSeries` | `SnapshotSeries(paths, times; maxslots = 2, t_obs = times[end])` | series of snapshots |
+| `FrameWindow` | `FrameWindow(a, b, t_a, t_b; t_obs)` | grid provider |
+| `SeriesProvider` | `SeriesProvider(series)` | host grid provider |
+| `PolishDoughnut` | `PolishDoughnut(a; l0, lambda, r_center, n_e_center, theta_e_center, …)` | analytic provider |
+| `PageThorneDisk` | `PageThorneDisk(a; mdot, r_out, n_e_max, theta_e_max, beta, scale_height, prograde)` | analytic provider |
+| `EquatorialHotspot` | `EquatorialHotspot(a; r_orbit, t0, phi0, R_spot, n_e0, theta_e0, B0, …)` | analytic provider |
+| `EquatorialDisk` | `EquatorialDisk(a; sub_kep, betar, betaphi, gamma_p, mu_p, sigma_p, redshift_power, rin)` | g-disk of the exact-Kerr products |
+| `UniformSphere` | `UniformSphere(; n_e = 1e13, theta_e = 100.0, B = 1.0, R = 1.0)` | analytic provider |
+| `StokesI`, `IQUV` | `StokesI()`, `IQUV()` | transfer modes |
+| `ThreadedExecutor` | `ThreadedExecutor(; chunk = 4096)` | `Executor` |
+| `PoolExecutor` | `PoolExecutor(devices; lanes = 2, chunk = 65536)`, `PoolExecutor(pool)` | `Executor` |
+| `DevicePool` | `DevicePool(devices; lanes = 2, chunk = 65536)` | pool, closed with `close` |
+| `HostDevice` | `HostDevice(id)` | device |
+| `CUDADevice` | `CUDADevice(ordinal)` | device |
+| `select_devices` | `select_devices(; candidates, util_threshold = 15, min_free_gb = 8, fallback = false)` | `Vector{CUDADevice}` |
+| `backend` | `backend()`; `backend(dev)` | the session `Executor`; the device's KernelAbstractions backend |
+| `backend!` | `backend!(b)` | the new session `Executor`, or `nothing` |
+| `render` | `render(plan; backend, path = nothing)`; `render(plan, coords; backend)` | `Image`; `Matrix{Float64}` |
+| `render_amr` | `render_amr(plan; block = 16, max_level = 2, refine = refinement_indicator(), backend)` | `NamedTuple` |
+| `render_analytic` | `render_analytic(plan, disk; bands = (0, 1, 2), ro = plan.camera.d, backend)` | `NamedTuple` |
+| `photon_ring_layers` | `photon_ring_layers(plan, disk; bands = (0, 1, 2), dx = 0.02, box = 12.0, npts = 100, ro, fudge = 1.0, backend)` | `NamedTuple` |
+| `trace` | `trace(plan; backend, adaptive = false)` | `Trajectories` |
+| `shadow` | `shadow(plan; backend)` | `NamedTuple` |
+| `sensitivity` | `sensitivity(plan, param::Symbol; backend)` | `NamedTuple` |
+| `variants` | `variants(plan, mass_scales; backend)` | `NamedTuple` |
+| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` |
+| `Image` | fields `I`, `Q`, `U`, `V` (`Matrix{Float64}`, `[iβ, iα]`), `plan`, `run` | result type |
+| `Trajectories` | fields `states`, `dls` (source → camera, `Float64`), `plan`, `run` | result type |
+| `Spectrum` | `Spectrum(bins::ExactBins)` | rounded spectrum (§4.2) |
+| `ScatterResult` | — | result of a scattering `mc_spectrum` run |
+| `GRMHDSpectrumResult` | — | result of a GRMHD `mc_spectrum` run |
+| `write_npy` | `write_npy(path, a::AbstractMatrix{Float64})` | `path` |
+| `visamp` | `visamp(img; angles = (0.0, 90.0), fov_muas, pad = 16, maxbaseline = Inf, window = :tukey)` | `Vector` of `(angle, baselines, amplitude)` |
+| `visamp_minima` | `visamp_minima(baselines, amplitude; skip = 1, bl_min = 0.0)` | `Vector{Float64}` |
+| `radon_cut` | `radon_cut(img, angle_deg; fov_muas)` | `(projection, s_axis)` |
+| `tukey_window` | `tukey_window(n, α = 0.5)` | `Vector{Float64}` |
+| `lensing_band` | `lensing_band(a, θo, n; npts = 100, box = 25.0)` | `(inner, outer)` |
+| `critical_curve` | `critical_curve(a, θo; n = 100)` | `(α, β)` vectors |
+
+## 8. File map
+
+Paths relative to `BLP/src/` (the extension: `BLP/ext/`). The role is the file's header
+comment or module docstring.
+
+| File | Role | Main definitions |
+|---|---|---|
+| `BLP.jl` | The package: the ten modules in dependency order | the 54 exports (§9) |
+| `physics/Numerics/Numerics.jl` | Number-type-generic building blocks shared by every tier | includes, exports |
+| `physics/Numerics/constants.jl` | CGS physical constants | `CL`, `ME`, `HPL`, `SIGMA_THOMSON`, … |
+| `physics/Numerics/units.jl` | Code-unit to cgs conversions of a GRMHD model | `Units` |
+| `physics/Numerics/raystate.jl` | The eight-component ray state `[x^μ; p_μ]` | `RayState`, `position`, `momentum`, `raystate` |
+| `physics/Numerics/stencils.jl` | Trilinear blend, Catmull-Rom stencil, log-linear lookup | `lerp8`, `corner_weights`, `cr_axis`, `loglinear_at` |
+| `physics/Numerics/exactsum.jl` | Order-independent exact summation in integer limbs | `xsum_add!`, `xsum_atomic_add!`, `xsum_round` |
+| `physics/Numerics/philox.jl` | Counter-based random numbers and the Monte Carlo samplers | `MCRng`, `MCStreamLayout`, `child_rng` |
+| `physics/Numerics/special.jl` | Special functions of the synchrotron fits | `bessel_k2`, `hypergeometric_2f1` |
+| `physics/Spacetime/Spacetime.jl` | Spacetimes and null geodesics | includes, exports |
+| `physics/Spacetime/protocol.jl` | The spacetime protocol; every method but `metric` defaulted | `Spacetime`, `metric`, `lane`, `horizon_radius` |
+| `physics/Spacetime/kerr_schild.jl` | Kerr in Cartesian Kerr-Schild coordinates, and flat space | `KerrSchildCartesian`, `Minkowski`, `ks_radius` |
+| `physics/Spacetime/user_metric.jl` | A spacetime from a user closure | `UserMetric` |
+| `physics/Spacetime/superposed.jl` | Superposed Kerr-Schild holes, Woodbury inverse | `SuperposedKerrSchild` |
+| `physics/Spacetime/adm_grid.jl` | A frozen-slice numerical spacetime on a Cartesian grid | `ADMGrid`, `sample_adm`, `adm_grid_from_metric` |
+| `physics/Spacetime/metric_ops.jl` | Metric derivatives by forward-mode AD | `inverse_metric_gradient`, `christoffel` |
+| `physics/Spacetime/geodesic.jl` | Hamiltonian null geodesics in covariant-momentum form | `geodesic_rhs`, `rk4_step`, `null_covariant` |
+| `physics/Spacetime/termination.jl` | The fixed-control march: step size and the one termination rule | `MarchBudget`, `MarchStep`, `march_control` |
+| `physics/Spacetime/adaptive.jl` | Adaptive geodesic solves with event termination (host) | `trace_geodesic` |
+| `physics/Spacetime/camera.jl` | Plane-parallel camera | `PlaneParallelCamera`, `CameraFrame`, `camera_ray` |
+| `physics/Spacetime/kerr_orbits.jl` | Exact-Kerr orbital primitives | `kerr_horizon`, `isco_radius`, `keplerian_omega` |
+| `physics/Spacetime/analytic_kerr.jl` | Exact-Kerr equatorial-emission ray tracing | `pixel_prep`, `band_landing`, `Landing`, `critical_curve` |
+| `physics/Matter/Matter.jl` | Plasma as the transfer coefficients see it | includes, exports |
+| `physics/Matter/records.jl` | The primitive and state records | `PlasmaPrimitives`, `PlasmaState`, `vacuum` |
+| `physics/Matter/electrons.jl` | Electron model and plasma cuts | `ElectronModel`, `Bound`, `PlasmaCuts`, `omitted` |
+| `physics/Matter/decode.jl` | Code-unit primitives to the cgs plasma state | `primitive_four_vectors`, `decode` |
+| `physics/Matter/protocol.jl` | The plasma provider protocol | `PlasmaProvider`, `GridProvider`, `sample` |
+| `physics/Matter/sources/shared.jl` | Kinematics shared by the analytic sources | module-private helpers |
+| `physics/Matter/sources/polish_doughnut.jl` | Constant-angular-momentum equilibrium torus | `PolishDoughnut`, `torus_potential` |
+| `physics/Matter/sources/page_thorne.jl` | Page & Thorne thin-disk flux | `PageThorneDisk`, `page_thorne_flux` |
+| `physics/Matter/sources/hotspot.jl` | Orbiting Gaussian hot spot | `EquatorialHotspot`, `hotspot_center` |
+| `physics/Matter/sources/gdisk.jl` | The equatorial g-disk | `EquatorialDisk`, `intensity`, `gfactor_disk` |
+| `physics/Matter/zones.jl` | Monte Carlo emission zones and the uniform sphere | `EmissionZone`, `UniformSphere`, `emission_zone` |
+| `physics/Transfer/Transfer.jl` | Radiative transfer along a ray | includes, exports |
+| `physics/Transfer/params.jl` | Transfer modes and the parameter set of the marches | `StokesI`, `IQUV`, `PowerLaw`, `Kappa`, `TransferParams` |
+| `physics/Transfer/synchrotron.jl` | Synchrotron coefficients of three populations | `thermal_synchrotron`, `kappa_synchrotron`, … |
+| `physics/Transfer/tetrads.jl` | Orthonormal frames of the polarized transfer | `fluid_tetrad`, `fluid_tetrad_checked`, `qu_rotation` |
+| `physics/Transfer/coefficients.jl` | Invariant transfer coefficients of one decoded sample | `coefficients` |
+| `physics/Transfer/segments.jl` | Segment operators of constant-coefficient transfer | `segment`, `couple`, `stokes_admissible` |
+| `physics/Transfer/controls.jl` | March controls: how a march advances and when it stops | `SpacetimeMarch`, `StoredPath`, `geodesic_step` |
+| `physics/Transfer/march.jl` | The reverse (camera → source) transfer marches | `march` |
+| `physics/MonteCarlo/MonteCarlo.jl` | Monte Carlo Comptonization | includes, exports |
+| `physics/MonteCarlo/superphoton.jl` | The Monte Carlo packet | `Superphoton` |
+| `physics/MonteCarlo/emissivity.jl` | Emission-frame physics of superphoton generation | `j_nu`, `alpha_nu`, `emission_tetrad` |
+| `physics/MonteCarlo/hotcross.jl` | The thermally averaged Compton cross section | `HotcrossTable`, `alpha_inv_scatt` |
+| `physics/MonteCarlo/tables.jl` | Generation table records and lookups | `WeightTable`, `ZoneEmissionTable`, `IntJnuTable` |
+| `physics/MonteCarlo/generate.jl` | Superphoton generation from an emission zone | `GenerationTables`, `generate` |
+| `physics/MonteCarlo/scatter.jl` | The Compton kick | `scatter_superphoton` |
+| `physics/MonteCarlo/opacity.jl` | Opacity rates, the scattering bias, the opacity record | `rate_frame`, `Bias`, `Opacities` |
+| `physics/MonteCarlo/sinks.jl` | The sink protocol | `Sink`, `record!`, `spawn!`, `tally!` |
+| `physics/MonteCarlo/track.jl` | The one superphoton tracker and its two march controls | `FlatMarch`, `CurvedMarch`, `track!` |
+| `infra/Data/Data.jl` | Containers and files | includes, exports |
+| `infra/Data/fluid_blocks.jl` | AthenaK meshblocks as a grid provider | `FluidBlocks`, `LeafTable`, `LevelHash`, `BlockScan` |
+| `infra/Data/athenak_hdf5.jl` | AthenaK `.athdf` snapshots | `AthenaKSnapshot`, `same_mesh`, `share_mesh` |
+| `infra/Data/athenak_bin.jl` | AthenaK `.bin` dumps: reader, Z4c to ADM, GRMHD adapter | `read_athenak_bin`, `resample_z4c_adm` |
+| `infra/Data/uniform_grid.jl` | The fluid resampled onto a uniform node grid | `UniformGrid`, `resample` |
+| `infra/Data/series.jl` | Slow light: series, two-frame windows, series provider | `SnapshotSeries`, `FrameWindow`, `SeriesProvider` |
+| `infra/Data/npy.jl` | NumPy `.npy` writer | `write_npy` |
+| `infra/Data/tables.jl` | Host builders of the Monte Carlo tables | `load_hotcross`, `build_weight_table`, … |
+| `infra/Execution/Execution.jl` | Where programs run | includes, exports |
+| `infra/Execution/devices.jl` | Device handles and the device protocol | `HostDevice`, `CUDADevice`, `BackendUnavailable` |
+| `infra/Execution/pool.jl` | The device pool: lanes, shared queue, registry | `DevicePool` |
+| `infra/Execution/residency.jl` | A host object as a device sees it | `DeviceAdaptor`, `resident`, `device_program` |
+| `infra/Execution/kernel.jl` | The only kernel of the package | `_foreach!`, `workgroupsize` |
+| `infra/Execution/executor.jl` | Executors: run a program over items, gather outputs | `ThreadedExecutor`, `PoolExecutor`, `foreach_item!` |
+| `infra/Execution/backend.jl` | The CPU/GPU switch | `resolve`, `backend!`, `backend` |
+| `infra/Execution/ray_sources.jl` | The initial state of an item's ray, made in the program | `CameraRays`, `PixelGrid`, `BlockGrid`, `CoordList` |
+| `infra/Execution/schedule.jl` | Scheduling geometry of full-frame renders | `cost_order`, `rescue_pixels`, `mixed_partition` |
+| `infra/Execution/worklist.jl` | The image-block worklist of adaptive refinement | `ImageBlock`, `stream_blocks!` |
+| `infra/Execution/accumulators.jl` | Exact bins, exact scalars and the child buffer | `ExactBins`, `Spectrum`, `ChildBuffer`, `gather!` |
+| `pipeline/Plans/Plans.jl` | Run configuration, precision lanes and `prepare` | includes, exports |
+| `pipeline/Plans/config.jl` | Run configuration | `CameraConfig`, `PlasmaConfig`, `RunConfig` |
+| `pipeline/Plans/lanes.jl` | Precision lanes | `Lanes`, `MixedLanes`, `geodesic_type` |
+| `pipeline/Plans/plan.jl` | The plan | `Plan` |
+| `pipeline/Plans/prepare.jl` | Every derived quantity of a run, computed once | `transfer_params`, `prepare` |
+| `pipeline/Analysis/Analysis.jl` | Image-plane analysis | includes, exports |
+| `pipeline/Analysis/refinement.jl` | Block refinement indicators | `refinement_indicator`, `needs_refinement` |
+| `pipeline/Analysis/lensing_bands.jl` | Screen geometry of photon-ring imaging | `lensing_band`, `band_grid` |
+| `pipeline/Analysis/interferometry.jl` | Visibility amplitudes along baselines | `radon_cut`, `visamp` |
+| `pipeline/Products/Products.jl` | Programs built from a plan and the entry points | includes, exports |
+| `pipeline/Products/programs.jl` | The per-item programs the executors run | `ImagingProgram`, `TraceProgram`, `ShadowProgram` |
+| `pipeline/Products/image.jl` | Full-frame and coordinate renders, the run record | `Image`, `render` |
+| `pipeline/Products/trace.jl` | Trajectories, ray fates, the two-phase render | `Trajectories`, `trace`, `shadow` |
+| `pipeline/Products/sensitivity.jl` | Parameter derivatives and ladders of Stokes I | `sensitivity`, `variants` |
+| `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `render_analytic`, `photon_ring_layers` |
+| `pipeline/Products/amr.jl` | Adaptive image-plane refinement | `render_amr` |
+| `BLPCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice` | extension module |
+
+## 9. Exports and internal interfaces
+
+`BLP.jl` exports the 54 names of §7, in its groups: configuration, spacetimes, matter,
+transfer modes, execution, products, results, analysis and I/O. They are the public API,
+under semantic versioning; the gate allows at most 54 names and at most 10 in the
+`render`/`trace`/`shadow`/`mc_spectrum`/`sensitivity`/`variants`/`photon_ring_layers`
+family. Each submodule exports its internal interface: the method tables of §3 and §4,
+the programs of §5.2, and `Plan`, `transfer_params` and `geodesic_type` of `Plans`. Every
+name a submodule exports is defined and has a docstring. Tests import from the
+submodules (`using BLP.Transfer: segment`); no test or oracle script reaches a
+leading-underscore name.
+
+## 10. Tests
+
+| Path (`BLP/test/`) | Contents |
+|---|---|
+| `runtests.jl` | includes `structure.jl`, then every file under `physics/`, `infra/` and `pipeline/`, each into its own module |
+| `decks.jl` | module `Decks`: the synthetic uniform-grid and block decks, the reference configuration, `bits`, camera rays, sampled trajectories, host-device lists, `device_isbits`, the Monte Carlo sinks, programs and sphere runs |
+| `structure.jl` | the gates of §1 and §9 (`DESIGN_PRINCIPLES.md` §5) |
+| `physics/` | `numerics_*`, `spacetime_*`, `matter_*`, `transfer_*`, `montecarlo_*`: closed forms, conservation, AD through each layer, the hot-path contract |
+| `infra/` | `data_*` (readers on synthetic files, locates, grids, series, tables), `execution_*` (executors bitwise against one another, pool, residency, ray sources, schedule, worklist, accumulators, backend switch, CUDA extension) |
+| `pipeline/` | `analysis_*`, `plans_prepare`, `products_*` (render, ray orientation and Stokes convention, trace, AMR, analytic, sensitivity, programs, backend) |
+| `oracle/` | its own environment, developing BLP and BlackLightPlus: `runtests.jl`, `helpers.jl` and the comparison scripts (§6) |
+
+Run the main suite with `julia -t auto --project=BLP -e 'using Pkg; Pkg.test()'`. Device
+code runs on `HostDevice` pools. A test that needs a missing resource (the CUDA package,
+the gpumonty table) skips inside its file and reports the skip.

@@ -315,9 +315,53 @@ The pending acceptance runs are listed there.
 - `mc_spectrum_gpu(...; n_gen_override)` and `ScatterWorkspace(child_seed)`
   (`b15367f`).
 
+## [0.2.0] - 2026-10-16
+
+The package `BLP` (`BLP/`, module `BLP`). BlackLightPlus, the package in `src/`, is
+unchanged and remains the reference implementation the oracle suite compares against.
+Structure and contracts: `docs/ARCHITECTURE.md`; principles and gates:
+`docs/DESIGN_PRINCIPLES.md`.
+
+### Added
+
+- **Ten modules in three tiers.** Physics (`Numerics`, `Spacetime`, `Matter`,
+  `Transfer`, `MonteCarlo`), infrastructure (`Data`, `Execution`) and pipeline
+  (`Plans`, `Analysis`, `Products`), each importing only the modules before it. The
+  CUDA methods live in the extension `BLPCUDAExt`; `CUDA` is a weak dependency.
+- **Plans.** `prepare(cfg; spacetime, matter, mode, lanes)` derives every quantity of a
+  run once into a backend-free `Plan`. The spacetime (`KerrSchildCartesian`,
+  `SuperposedKerrSchild`, `ADMGrid`, `UserMetric`, `Minkowski`), the matter (AthenaK
+  snapshots, uniform grids, slow-light windows and series, analytic sources), the
+  transfer mode (`StokesI`, `IQUV`) and the precision lanes (`Lanes`, `MixedLanes`) are
+  values, not configuration fields.
+- **Products.** `render` (full frame, coordinate lists, along stored trajectories),
+  `render_amr`, `render_analytic`, `photon_ring_layers`, `trace`, `shadow`,
+  `sensitivity`, `variants` and `mc_spectrum`. Every result records its executor,
+  lanes, package version and wall time in `run`.
+- **One kernel.** Every device computation is a per-item program run through the single
+  `@kernel` by a `ThreadedExecutor`, or by a `PoolExecutor` over `HostDevice`s and
+  `CUDADevice`s, with bitwise identical per-item results. Monte Carlo spectra are exact
+  integer-limb sums, independent of the executor, thread count, device count and
+  chunking.
+- **The backend switch.** Every product takes `backend` (`:auto`, `:cpu`, `:gpu`,
+  `:host_pool`, an executor, a device list or a pool); `backend!` sets the session
+  default and `BLP_BACKEND` (`auto | cpu | gpu | gpu:0,1 | host_pool | host_pool:N`)
+  seeds it. `:auto` takes the GPUs when CUDA is loaded and a device is idle, else
+  threads, and logs its choice once per session; an explicit choice that cannot be
+  honoured throws `BackendUnavailable`.
+- **Structure gates.** `BLP/test/structure.jl` tests the layering, the single kernel,
+  private names, the export count and the submodule docstrings, file budgets and the
+  absence of history prose.
+- **Oracle suite.** `BLP/test/oracle/` compares BLP with BlackLightPlus. `Numerics`,
+  `Spacetime`, the `Data` samplers, `decode`, `Analysis` and Stokes I images on every
+  path are bitwise; IQUV images, traces and the Monte Carlo torus marches agree to
+  round-off natively, from floating-point contraction on FMA hardware, and bitwise
+  under `julia -C generic`; Monte Carlo spectra are exact sums.
+
 ## [0.1.0] - 2026-08-05
 
 Initial release.
 
 [Unreleased]: https://github.com/FoAKTEE/BlackLightPlus/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/FoAKTEE/BlackLightPlus/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/FoAKTEE/BlackLightPlus/releases/tag/v0.1.0
