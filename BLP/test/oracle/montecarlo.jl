@@ -427,12 +427,20 @@ limb_bytes(b) = vcat(reinterpret(UInt8, vec(b.count)), reinterpret(UInt8, vec(b.
         execs = (ThreadedExecutor(chunk = 1), ThreadedExecutor(chunk = 37), ThreadedExecutor(chunk = 4096),
                  (PoolExecutor(DK.devices(nd); chunk = 1999) for nd in DK.NDEV)...,
                  PoolExecutor(DK.devices(3); chunk = 128))
+        # a pool on another hardware (CUDA) agrees with the CPU reference at tolerance
+        near(a, b) = maximum(abs.(a .- b)) <= 1e-7 * max(maximum(abs.(b)), floatmin())
         for exec in execs
             b = DK.sphere_thin_bins(exec, sn, tabs, N, seed; n_ebins = 60)
-            @test b.count == xs.count && b.sumw == xs.sumw && b.sumwE == xs.sumwE
             s = Spectrum(b)
-            @test bits(nuLnu(s)[2]) == bits(OM.nuLnu(old)[2])
-            @test bits(nuLnu_total(s)[2]) == bits(OM.nuLnu_total(old)[2]) && nuLnu_total(s)[3] == OM.nuLnu_total(old)[3]
+            if DK.CROSS_HARDWARE && exec isa PoolExecutor
+                @test b.count == xs.count && near(s.sumw, old.sumw) && near(s.sumwE, old.sumwE)
+                @test near(nuLnu(s)[2], OM.nuLnu(old)[2]) && near(nuLnu_total(s)[2], OM.nuLnu_total(old)[2]) &&
+                      nuLnu_total(s)[3] == OM.nuLnu_total(old)[3]
+            else
+                @test b.count == xs.count && b.sumw == xs.sumw && b.sumwE == xs.sumwE
+                @test bits(nuLnu(s)[2]) == bits(OM.nuLnu(old)[2])
+                @test bits(nuLnu_total(s)[2]) == bits(OM.nuLnu_total(old)[2]) && nuLnu_total(s)[3] == OM.nuLnu_total(old)[3]
+            end
         end
         ref = limb_bytes(DK.sphere_thin_bins(ThreadedExecutor(chunk = 64), sn, tabs, N, seed; n_ebins = 60))
         for (nt, chunk) in ((1, 4096), (3, 97))

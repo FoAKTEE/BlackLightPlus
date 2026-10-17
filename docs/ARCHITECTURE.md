@@ -607,7 +607,11 @@ else from a `Mahakala` checkout beside the repository, and skip when it is absen
 device comparisons of the `products`, `spectra` and `montecarlo` scripts run on logical
 host devices; with `BLP_TEST_DEVICES=cuda` they run on the functional CUDA devices, the
 reference drivers and BLP on the same device list, so an old-against-new comparison on
-the GPU itself is the same script.
+the GPU itself is the same script. On the A100 the reference device drivers and BLP are
+bitwise equal on every path, the Monte Carlo spectra included. A pool on the GPU against
+threads on the CPU is held at tolerance, not bitwise (`Decks.CROSS_HARDWARE`): the two
+targets contract floating-point operations differently, and the images differ in their
+last bits (about 1e-13 of the maximum; the exact Monte Carlo sums by 1e-16).
 
 ## 7. Public API
 

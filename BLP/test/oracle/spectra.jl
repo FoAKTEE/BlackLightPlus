@@ -37,7 +37,11 @@ old_hosts(nd) = Decks.DEVICE_KIND == "cuda" ? [d.ordinal for d in Decks.devices(
 const EXECS = (ThreadedExecutor(chunk = 4096), ThreadedExecutor(chunk = 37),
                (PoolExecutor(Decks.devices(nd); chunk = c) for (nd, c) in zip(Decks.NDEV, (512, 997, 300, 4096)))...)
 exec_name(e::ThreadedExecutor) = "threads chunk $(e.chunk)"
-exec_name(e::PoolExecutor) = "$(length(e.pool.devices)) host devices chunk $(e.pool.chunk)"
+exec_name(e::PoolExecutor) = "$(length(e.pool.devices)) $(Decks.DEVICE_KIND) devices chunk $(e.pool.chunk)"
+
+# A pool against the reference CPU driver crosses hardware under BLP_TEST_DEVICES=cuda.
+crosses(e) = Decks.CROSS_HARDWARE && e isa PoolExecutor
+crosses(b::Symbol) = Decks.CROSS_HARDWARE && b == :gpu
 
 # ---------------------------------------------------------------- comparisons
 
@@ -74,12 +78,12 @@ function agree_scalars(label, new::Tuple, old::Tuple; contracted = false)
 end
 
 "The old `ScatterResult` against the new: orders, total, counts and the weight ledger."
-agree_scatter(label, n, o) =
-    all(agree("$label order $k", n.orders[k], o.orders[k]) for k in eachindex(o.orders)) &&
-    length(n.orders) == length(o.orders) && agree("$label total", n.total, o.total) &&
+agree_scatter(label, n, o; contracted = false) =
+    all(agree("$label order $k", n.orders[k], o.orders[k]; contracted) for k in eachindex(o.orders)) &&
+    length(n.orders) == length(o.orders) && agree("$label total", n.total, o.total; contracted) &&
     (n.max_scatt, n.n_primary, n.n_children) == (o.max_scatt, o.n_primary, o.n_children) &&
     agree_scalars("$label ledger", (n.w_primary, n.w_children, n.w_first_order, n.scatter_loss),
-                  (o.w_primary, o.w_children, o.w_first_order, o.scatter_loss))
+                  (o.w_primary, o.w_children, o.w_first_order, o.scatter_loss); contracted)
 
 "The old `GRMHDSpectrumResult` against the new (`contracted`)."
 function agree_grmhd(label, n, o)
@@ -115,12 +119,12 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
             old = OM.mc_spectrum(so, Ns; nthreads = 3, seed = seed, n_ebins = 60, tabulated_gen = tab)
             for exec in EXECS
                 new = mc_spectrum(p, Ns; seed = seed, n_ebins = 60, tabulated = tab, backend = exec)
-                @test agree("thin sphere tabulated=$tab $(exec_name(exec))", new, old)
+                @test agree("thin sphere tabulated=$tab $(exec_name(exec))", new, old; contracted = crosses(exec))
             end
             for nd in Decks.NDEV
                 dev = OLD.mc_spectrum_gpu(so, Ns; devices = old_hosts(nd), chunk = 1999, seed = seed,
                                           n_ebins = 60, tabulated_gen = tab)
-                @test agree("thin sphere tabulated=$tab mc_spectrum_gpu $nd host devices",
+                @test agree("thin sphere tabulated=$tab mc_spectrum_gpu $nd $(Decks.DEVICE_KIND) devices",
                             mc_spectrum(p, Ns; seed = seed, n_ebins = 60, tabulated = tab,
                                         backend = PoolExecutor(Decks.devices(nd); chunk = 1999)), dev)
             end
@@ -144,14 +148,14 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
         @test old.n_children > 2_000
         for exec in EXECS
             @test agree_scatter("scattering sphere $(exec_name(exec))",
-                                mc_spectrum(p, Ns; kw..., backend = exec), old)
+                                mc_spectrum(p, Ns; kw..., backend = exec), old; contracted = crosses(exec))
         end
         @test agree_scatter("scattering sphere capacity 1",
                             mc_spectrum(p, Ns; kw..., capacity = 1, backend = :cpu), old)
         for nd in Decks.NDEV
             dev = OLD.mc_spectrum_gpu(so, to, Ns; devices = old_hosts(nd), chunk = 1500, seed = seed,
                                       min_capacity = 64)
-            @test agree_scatter("scattering sphere mc_spectrum_gpu $nd host devices",
+            @test agree_scatter("scattering sphere mc_spectrum_gpu $nd $(Decks.DEVICE_KIND) devices",
                                 mc_spectrum(p, Ns; kw..., backend = PoolExecutor(Decks.devices(nd); chunk = 1500)),
                                 dev)
         end
@@ -160,7 +164,8 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
         @test agree_scatter("scattering sphere max_scatt 2, tabulated",
                             mc_spectrum(p, Ns; kw..., seed = 3, max_scatt = 2, spec_nu_max = 1.0e16,
                                         n_ebins = 70, bands = BLP.Execution.PolarBands(3),
-                                        tabulated = true, backend = Decks.POOL_BACKEND), old2)
+                                        tabulated = true, backend = Decks.POOL_BACKEND), old2;
+                            contracted = crosses(Decks.POOL_BACKEND))
     end
 
     # ------------------------------------------------------------ torus

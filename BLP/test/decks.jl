@@ -13,7 +13,7 @@ over the exact accumulators, the primary and layer programs, and the sphere runs
 module Decks
 
 using StaticArrays
-using BLP.Execution: HostDevice, CUDADevice, select_devices
+using BLP.Execution: HostDevice, CUDADevice, select_devices, cuda_loaded
 using BLP.Data: UniformGrid, AthenaKSnapshot
 using BLP.Spacetime: CameraFrame, pixel_centres, npixels, pixel_coords, camera_ray,
                      MarchBudget, march_control, rk4_step
@@ -167,6 +167,18 @@ default) runs them on logical host devices, `cuda` on the functional CUDA device
 const DEVICE_KIND = get(ENV, "BLP_TEST_DEVICES", "host")
 
 """
+Whether the pool comparisons cross hardware: under `BLP_TEST_DEVICES=cuda` a pool runs on
+the GPU and threads on the CPU, whose floating-point contractions differ, so a pool agrees
+with threads at tolerance, not bitwise. Comparisons on one device stay bitwise.
+"""
+const CROSS_HARDWARE = DEVICE_KIND == "cuda"
+
+const CUDA_ID = Base.PkgId(Base.UUID("052768ef-5323-5732-b1bb-66c8b64840ba"), "CUDA")
+# CUDA is loaded here, at module load, so that the extension's methods exist before any
+# comparison runs; a load inside `devices` would be invisible to the frame that called it.
+DEVICE_KIND == "cuda" && !cuda_loaded() && Base.locate_package(CUDA_ID) !== nothing && Base.require(CUDA_ID)
+
+"""
     devices(nd) -> Vector
 
 The devices of an `nd`-device comparison: `hosts(nd)`, or under `BLP_TEST_DEVICES=cuda`
@@ -175,7 +187,7 @@ the first `nd` functional CUDA devices (all of them when fewer are visible).
 function devices(nd)
     DEVICE_KIND == "host" && return hosts(nd)
     DEVICE_KIND == "cuda" || error("BLP_TEST_DEVICES must be host or cuda; got $DEVICE_KIND")
-    devs = select_devices(; fallback = true)
+    devs = Base.invokelatest(select_devices; fallback = true)
     isempty(devs) && error("BLP_TEST_DEVICES=cuda: no functional CUDA device")
     return devs[1:min(nd, length(devs))]
 end

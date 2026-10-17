@@ -121,6 +121,10 @@ function agree(label, new, old; contracted = false)
     return d <= MARCH_RTOL
 end
 
+# A pool against threads: bitwise on host devices, at tolerance across hardware.
+pool_equals(label, new, old) =
+    Decks.CROSS_HARDWARE ? agree(label, new, old; contracted = true) : bits(new) == bits(old)
+
 # Trajectories: equal lengths and states within MARCH_RTOL of each state's scale.
 function agree_paths(label, (s1, d1), (s2, d2))
     NOFMA && return bits(s1) == bits(s2) && bits(d1) == bits(d2)
@@ -181,9 +185,11 @@ end
     @testset "one program on every executor: $name, $(nameof(typeof(mode)))" for
             (name, matter) in (("uniform grid", GRID), ("blocks", SNAP)), mode in (StokesI(), IQUV())
         p = plan(matter; mode)
-        ref = bits(planes(render(p; backend = :cpu)))
-        @test bits(planes(render(p; backend = Decks.POOL_BACKEND))) == ref
-        @test all(bits(planes(render(p; backend = POOLS[nd]))) == ref for nd in Decks.NDEV)
+        refp = planes(render(p; backend = :cpu))
+        @test pool_equals("$name $(nameof(typeof(mode))) pool vs threads",
+                          planes(render(p; backend = Decks.POOL_BACKEND)), refp)
+        @test all(pool_equals("$name $(nameof(typeof(mode))) $nd devices vs threads",
+                              planes(render(p; backend = POOLS[nd])), refp) for nd in Decks.NDEV)
         @test count(!iszero, render(p; backend = :cpu).I) > RES^2 ÷ 4
     end
 
@@ -270,7 +276,7 @@ end
             @test !isempty(p.rescue)
             img = render(p; backend = Decks.POOL_BACKEND).I
             @test agree("mixed I", img, old())
-            @test bits(render(p; backend = :cpu).I) == bits(img)
+            @test pool_equals("mixed I pool vs threads", img, render(p; backend = :cpu).I)
         end
         p = plan(SNAP; lanes = MixedLanes())
         @test agree("mixed IQUV", planes(render(p; backend = Decks.POOL_BACKEND)),
@@ -284,7 +290,8 @@ end
         rays = BlackLightPlus.camera_rays(sto, BlackLightPlus.PlaneParallelCamera(60.0, 1000.0, 24.0, RES))
         t = trace(p; backend = :cpu)
         tp = trace(p; backend = POOLS[3])
-        @test bits(t.states) == bits(tp.states) && bits(t.dls) == bits(tp.dls)
+        @test Decks.CROSS_HARDWARE ? agree_paths("trace pool vs threads", (tp.states, tp.dls), (t.states, t.dls)) :
+                                     (bits(t.states) == bits(tp.states) && bits(t.dls) == bits(tp.dls))
         @test agree_paths("trace vs sampled tracer", (t.states, t.dls),
                           BlackLightPlus.trace_rays_sampled(sto, rays; C = 80.0, escape = 1.1 * 1000.0,
                                                             nmax = 2500, R_em = p.R_em))
@@ -304,7 +311,8 @@ end
         for (stn, sto, d, fov) in ((kn, ko, 1000.0, 24.0), (gn, go, 15.0, 16.0))
             p = prepare(new_cfg(res = 10, d = d, fov = fov); spacetime = stn, matter = nothing)
             sh = shadow(p; backend = Decks.POOL_BACKEND)
-            @test bits(sh.null_error) == bits(shadow(p; backend = :cpu).null_error)
+            @test pool_equals("shadow $(nameof(typeof(stn))) pool vs threads", sh.null_error,
+                              shadow(p; backend = :cpu).null_error)
             rays = BlackLightPlus.camera_rays(sto, BlackLightPlus.PlaneParallelCamera(60.0, d, fov, 10))
             st, ns, mn, rf, yf = OLD.trace_shadow_gpu(sto, rays; C = 80.0, escape = 1.1 * d,
                                                       nmax = 2500, devices = old_hosts(2))
@@ -341,17 +349,20 @@ end
         ra = render_analytic(p, disk; backend = :cpu)
         oa = BlackLightPlus.render_analytic(oc; source = odisk)
         og = OLD.render_analytic_gpu(oc; devices = old_hosts(2), source = odisk)
-        @test all(agree("analytic $f vs CPU", getfield(ra, f), getfield(oa, f)) for f in fields)
-        @test all(agree("analytic $f vs device", getfield(ra, f), getfield(og, f)) for f in fields)
-        @test ra.bands == oa.bands
         rp = render_analytic(p, disk; backend = POOLS[3])
-        @test all(bits(getfield(rp, f)) == bits(getfield(ra, f)) for f in fields)
+        @test all(agree("analytic $f vs CPU", getfield(ra, f), getfield(oa, f)) for f in fields)
+        # the reference device kernel against the BLP run on the same hardware
+        rd = Decks.CROSS_HARDWARE ? rp : ra
+        @test all(agree("analytic $f vs device", getfield(rd, f), getfield(og, f)) for f in fields)
+        @test ra.bands == oa.bands
+        @test all(pool_equals("analytic $f pool vs threads", getfield(rp, f), getfield(ra, f)) for f in fields)
         @test count(>(0), ra.Ib[2]) > 0
         pl = photon_ring_layers(p, disk; dx = 0.2, backend = :cpu)
         opl = BlackLightPlus.photon_ring_layers(oc; disk = odisk, dx = 0.2)
         @test pl.N == opl.N && pl.grid == opl.grid && pl.masks == opl.masks
         @test agree("photon ring layers", (pl.I, pl.Ib), (opl.I, opl.Ib))
-        @test bits(photon_ring_layers(p, disk; dx = 0.2, backend = POOLS[2]).Ib) == bits(pl.Ib)
+        @test pool_equals("photon ring layers pool vs threads",
+                          photon_ring_layers(p, disk; dx = 0.2, backend = POOLS[2]).Ib, pl.Ib)
     end
 
     @testset "adaptive refinement: $(nameof(typeof(mode)))" for mode in (StokesI(), IQUV())
@@ -368,13 +379,17 @@ end
                                         stokes = two_phase_stokes(cfg16, OSNAP, pol))
         @test new.levels == cpu.levels && new.nrays == cpu.nrays
         @test report("render_amr $(nameof(typeof(mode))) vs two-phase CPU", planes(new.image), oplanes(cpu))
-        @test bits(planes(render_amr(p; block = 4, max_level = 2, backend = :cpu).image)) ==
-              bits(planes(new.image))
+        @test pool_equals("render_amr $(nameof(typeof(mode))) pool vs threads", planes(new.image),
+                          planes(render_amr(p; block = 4, max_level = 2, backend = :cpu).image))
     end
 
     @testset "backend switch through the products" begin
         p = plan(GRID; mode = StokesI(), cfg = new_cfg(res = 4))
-        @test_throws BackendUnavailable render(p; backend = :gpu)
+        if Decks.CROSS_HARDWARE
+            @test render(p; backend = :gpu).run.executor.kind == :pool
+        else
+            @test_throws BackendUnavailable render(p; backend = :gpu)
+        end
         reset_backend!()
         withenv("BLP_BACKEND" => "host_pool:2") do
             r = render(p)
