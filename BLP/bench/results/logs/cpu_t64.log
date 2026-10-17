@@ -1,0 +1,8 @@
+# bench.jl backend=cpu commit=e34fbf1 threads=64 job=none tune=false legs=img,analytic,mc_thin,mc_scatter,mc_scatter0 load1=3.71 out=BLP/bench/results/raw/cpu_t64.jsonl
+BENCH leg=img res=192 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=36864 wall_s=0.5308 first_s=3.432 rate=6.945e+04 unit=rays/s load1=3.7/8.9 other_cores=4.4 same_as_saved=true
+BENCH leg=img res=384 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=147456 wall_s=1.698 first_s=1.955 rate=8.684e+04 unit=rays/s load1=8.9/13.7 other_cores=4.4 same_as_saved=true
+BENCH leg=img res=768 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=589824 wall_s=6.724 first_s=6.88 rate=8.772e+04 unit=rays/s load1=13.7/27.5 other_cores=4.2 same_as_saved=true
+BENCH leg=analytic res=1024 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=1048576 wall_s=0.3475 first_s=0.7898 rate=3.018e+06 unit=rays/s load1=27.5/26.1 other_cores=3.4 same_as_saved=true
+BENCH leg=mc_thin res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=4.102 first_s=6.284 rate=2.444e+06 unit=photons/s load1=26.1/38.0 other_cores=3.4 same_as_saved=true
+BENCH leg=mc_scatter res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=11839088 wall_s=4.779 first_s=7.15 rate=2.477e+06 unit=photons/s load1=38.0/36.9 other_cores=3.4 same_as_saved=true
+BENCH leg=mc_scatter0 res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=4.501 first_s=5.129 rate=2.227e+06 unit=photons/s load1=36.9/39.6 other_cores=4.1 same_as_saved=true

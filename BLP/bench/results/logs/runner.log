@@ -1,0 +1,41 @@
+2026-10-17 14:14:03 tune1 attempt 1 job 2975 submitted
+2026-10-17 14:16:33 tune1 job 2975 running
+2026-10-17 14:19:03 tune1 job 2975 PREEMPTED
+2026-10-17 14:19:03 tune1 attempt 2 job 2978 submitted
+2026-10-17 14:19:33 tune1 job 2978 running
+2026-10-17 14:26:03 tune1 job 2978 COMPLETED
+2026-10-17 14:26:03 tune1 done: BLP/bench/results/logs/tune1_2978.log
+2026-10-17 14:26:03 bench1 attempt 1 job 2980 submitted
+2026-10-17 14:26:34 bench1 job 2980 running
+2026-10-17 14:28:04 bench1 job 2980 COMPLETED
+2026-10-17 14:28:04 bench1 done: BLP/bench/results/logs/bench1_2980.log
+2026-10-17 14:28:04 tune2 attempt 1 job 2981 submitted
+2026-10-17 14:28:34 tune2 job 2981 running
+2026-10-17 14:31:04 tune2 job 2981 PREEMPTED
+2026-10-17 14:31:04 tune2 attempt 2 job 2983 submitted
+2026-10-17 14:31:34 tune2 job 2983 running
+2026-10-17 14:32:04 tune2 job 2983 PREEMPTED
+2026-10-17 14:32:04 tune2 attempt 3 job 2985 submitted
+2026-10-17 14:40:50 tune1_img-amr-analytic-mc_thin-mc_scatter attempt 1 job 2986 submitted
+2026-10-17 14:41:20 tune1_img-amr-analytic-mc_thin-mc_scatter job 2986 running
+2026-10-17 14:43:20 tune1_img-amr-analytic-mc_thin-mc_scatter job 2986 COMPLETED
+2026-10-17 14:43:20 tune1_img-amr-analytic-mc_thin-mc_scatter done: BLP/bench/results/logs/tune1_img-amr-analytic-mc_thin-mc_scatter_2986.log
+2026-10-17 14:43:20 all done: tune:1:img,amr,analytic,mc_thin,mc_scatter
+2026-10-17 15:00:04 tune2 job 2985 running
+2026-10-17 15:04:05 tune2 job 2985 COMPLETED
+2026-10-17 15:04:05 tune2 done: BLP/bench/results/logs/tune2_2985.log
+2026-10-17 15:04:05 bench2 attempt 1 job 2987 submitted
+2026-10-17 15:04:35 bench2 job 2987 running
+2026-10-17 15:06:05 bench2 job 2987 COMPLETED
+2026-10-17 15:06:05 bench2 done: BLP/bench/results/logs/bench2_2987.log
+2026-10-17 15:06:05 all done: tune:1 bench:1 tune:2 bench:2
+2026-10-17 15:06:17 tune2_img-amr-mc_thin-mc_scatter attempt 1 job 2988 submitted
+2026-10-17 15:06:47 tune2_img-amr-mc_thin-mc_scatter job 2988 running
+2026-10-17 15:08:48 tune2_img-amr-mc_thin-mc_scatter job 2988 COMPLETED
+2026-10-17 15:08:48 tune2_img-amr-mc_thin-mc_scatter done: BLP/bench/results/logs/tune2_img-amr-mc_thin-mc_scatter_2988.log
+2026-10-17 15:08:48 all done: tune:2:img,amr,mc_thin,mc_scatter
+2026-10-17 15:10:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 attempt 1 job 2989 submitted
+2026-10-17 15:11:01 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 job 2989 running
+2026-10-17 15:12:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 job 2989 COMPLETED
+2026-10-17 15:12:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 done: BLP/bench/results/logs/bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0_2989.log
+2026-10-17 15:12:31 all done: bench:1:img,pol,amr,analytic,mc_thin,mc_scatter,mc_scatter0

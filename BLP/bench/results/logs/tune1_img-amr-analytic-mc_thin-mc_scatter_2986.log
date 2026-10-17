@@ -1,0 +1,61 @@
+host anta job 2986 phase tune ndev 1 legs img,amr,analytic,mc_thin,mc_scatter commit e34fbf1 CUDA_VISIBLE_DEVICES=0 2026-10-17 14:40:51
+0, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+# bench.jl backend=gpu commit=e34fbf1 threads=4 devices=[0] job=2986 tune=true legs=img,amr,analytic,mc_thin,mc_scatter load1=36.88 out=BLP/bench/results/raw/gpu.jsonl
+TUNE kind=tune_ext leg=img res=768 ndev=1 lanes=1 chunk=262144 first_s=13.3 warm_s=0.5009 rate=1.178e+06
+TUNE kind=tune_ext leg=img res=768 ndev=1 lanes=1 chunk=524288 first_s=0.6135 warm_s=0.4912 rate=1.201e+06
+TUNE kind=tune_ext leg=img res=768 ndev=1 lanes=1 chunk=1048576 first_s=0.5139 warm_s=0.4794 rate=1.23e+06
+TUNE kind=tune_ext leg=img res=768 ndev=1 lanes=2 chunk=262144 first_s=0.5433 warm_s=0.4977 rate=1.185e+06
+TUNE kind=tune_ext leg=img res=768 ndev=1 lanes=2 chunk=524288 first_s=0.5304 warm_s=0.4955 rate=1.19e+06
+TUNE kind=tune_ext leg=img res=768 ndev=1 lanes=2 chunk=1048576 first_s=0.5297 warm_s=0.4855 rate=1.215e+06
+TUNE kind=tune_ext leg=amr res=384 ndev=1 lanes=1 chunk=262144 first_s=8.241 warm_s=2.809 rate=2.242e+05
+TUNE kind=tune_ext leg=amr res=384 ndev=1 lanes=1 chunk=524288 first_s=2.804 warm_s=2.67 rate=2.359e+05
+TUNE kind=tune_ext leg=amr res=384 ndev=1 lanes=1 chunk=1048576 first_s=2.749 warm_s=2.67 rate=2.359e+05
+TUNE kind=tune_ext leg=amr res=384 ndev=1 lanes=2 chunk=262144 first_s=2.782 warm_s=2.786 rate=2.26e+05
+TUNE kind=tune_ext leg=amr res=384 ndev=1 lanes=2 chunk=524288 first_s=2.719 warm_s=2.753 rate=2.288e+05
+TUNE kind=tune_ext leg=amr res=384 ndev=1 lanes=2 chunk=1048576 first_s=2.739 warm_s=2.664 rate=2.364e+05
+TUNE kind=tune_ext leg=analytic res=1024 ndev=1 lanes=1 chunk=262144 first_s=5.447 warm_s=0.2723 rate=3.851e+06
+TUNE kind=tune_ext leg=analytic res=1024 ndev=1 lanes=1 chunk=524288 first_s=0.1616 warm_s=0.2186 rate=4.797e+06
+TUNE kind=tune_ext leg=analytic res=1024 ndev=1 lanes=1 chunk=1048576 first_s=0.2012 warm_s=0.1911 rate=5.487e+06
+TUNE kind=tune_ext leg=analytic res=1024 ndev=1 lanes=2 chunk=262144 first_s=0.1857 warm_s=0.1342 rate=7.813e+06
+TUNE kind=tune_ext leg=analytic res=1024 ndev=1 lanes=2 chunk=524288 first_s=0.185 warm_s=0.1419 rate=7.388e+06
+TUNE kind=tune_ext leg=analytic res=1024 ndev=1 lanes=2 chunk=1048576 first_s=0.2113 warm_s=0.1983 rate=5.287e+06
+TUNE kind=tune_ext leg=mc_thin res=0 ndev=1 lanes=1 chunk=262144 first_s=4.713 warm_s=0.3988 rate=2.514e+07
+TUNE kind=tune_ext leg=mc_thin res=0 ndev=1 lanes=1 chunk=524288 first_s=0.3955 warm_s=0.4027 rate=2.49e+07
+TUNE kind=tune_ext leg=mc_thin res=0 ndev=1 lanes=1 chunk=1048576 first_s=0.3663 warm_s=0.4123 rate=2.432e+07
+TUNE kind=tune_ext leg=mc_thin res=0 ndev=1 lanes=2 chunk=262144 first_s=0.3939 warm_s=0.3922 rate=2.556e+07
+TUNE kind=tune_ext leg=mc_thin res=0 ndev=1 lanes=2 chunk=524288 first_s=0.4097 warm_s=0.384 rate=2.611e+07
+TUNE kind=tune_ext leg=mc_thin res=0 ndev=1 lanes=2 chunk=1048576 first_s=0.3629 warm_s=0.3715 rate=2.698e+07
+TUNE kind=tune_ext leg=mc_scatter res=0 ndev=1 lanes=1 chunk=262144 first_s=9.017 warm_s=1.473 rate=8.04e+06
+TUNE kind=tune_ext leg=mc_scatter res=0 ndev=1 lanes=1 chunk=524288 first_s=1.57 warm_s=1.536 rate=7.71e+06
+TUNE kind=tune_ext leg=mc_scatter res=0 ndev=1 lanes=1 chunk=1048576 first_s=1.565 warm_s=1.469 rate=8.058e+06
+TUNE kind=tune_ext leg=mc_scatter res=0 ndev=1 lanes=2 chunk=262144 first_s=1.556 warm_s=1.914 rate=6.185e+06
+TUNE kind=tune_ext leg=mc_scatter res=0 ndev=1 lanes=2 chunk=524288 first_s=1.498 warm_s=1.678 rate=7.054e+06
+TUNE kind=tune_ext leg=mc_scatter res=0 ndev=1 lanes=2 chunk=1048576 first_s=1.474 warm_s=1.68 rate=7.047e+06
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+exit 0

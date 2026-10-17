@@ -1,0 +1,5 @@
+# bench.jl backend=cpu commit=078dddb threads=1 job=none tune=false legs=img,analytic load1=55.16 out=BLP/bench/results/raw/cpu_t1.jsonl
+BENCH leg=img res=192 backend=cpu threads=1 ndev=0 lanes=0 chunk=64 items=36864 wall_s=19.53 first_s=22.28 rate=1888 unit=rays/s load1=54.5/54.5 other_cores=53.1 same_as_saved=true
+BENCH leg=img res=384 backend=cpu threads=1 ndev=0 lanes=0 chunk=64 items=147456 wall_s=74.16 first_s=75.86 rate=1988 unit=rays/s load1=54.5/54.2 other_cores=41.3 same_as_saved=true
+BENCH leg=img res=768 backend=cpu threads=1 ndev=0 lanes=0 chunk=64 items=589824 wall_s=276.9 first_s=303.8 rate=2130 unit=rays/s load1=54.2/10.5 other_cores=13.5 same_as_saved=true
+BENCH leg=analytic res=1024 backend=cpu threads=1 ndev=0 lanes=0 chunk=64 items=1048576 wall_s=8.198 first_s=9.502 rate=1.279e+05 unit=rays/s load1=10.5/7.5 other_cores=3.6 same_as_saved=true

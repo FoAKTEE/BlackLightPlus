@@ -1,0 +1,22 @@
+2026-10-17 14:27:44 16-thread run finished; starting 8 threads (img) load=36.68
+2026-10-17 14:31:38 8 threads done; starting 16 threads chunk 4096 (img) load=13.51
+2026-10-17 14:34:02 poll for 64 threads: load1=16.69 my_multithread_runs=0 my_1thread_runs=1 users>1core: emost:122% haiyangw:119% 
+2026-10-17 14:39:02 poll for 64 threads: load1=3.69 my_multithread_runs=0 my_1thread_runs=1 users>1core: emost:160% haiyangw:118% 
+2026-10-17 14:39:02 starting 64 threads load=3.69
+2026-10-17 14:40:59 64 threads done load=39.65
+2026-10-17 14:40:59 poll for 128 threads: load1=39.65 my_multithread_runs=0 my_1thread_runs=1 users>1core: emost:174% haiyangw:232% 
+2026-10-17 14:45:59 poll for 128 threads: load1=4.34 my_multithread_runs=0 my_1thread_runs=0 users>1core: emost:214% 
+2026-10-17 14:46:00 starting 128 threads load=4.34
+2026-10-17 14:47:49 128 threads done load=94.99; starting 128 threads chunk 4096 (img)
+2026-10-17 14:48:55 chain done load=78.57
+2026-10-17 14:49:10 poll for 16 threads (quiet rerun): load1=57.57 my_runs=0 users>1core: emost:221% 
+2026-10-17 14:54:10 poll for 16 threads (quiet rerun): load1=3.67 my_runs=0 users>1core: emost:194% 
+2026-10-17 14:54:10 starting 16 threads quiet rerun load=3.67
+2026-10-17 15:04:07 16 threads quiet rerun done load=21.18
+2026-10-17 15:04:07 poll for 8 threads (quiet rerun): load1=21.18 my_runs=0 users>1core: emost:117% haiyangw:155% 
+2026-10-17 15:09:07 poll for 8 threads (quiet rerun): load1=3.28 my_runs=0 users>1core: emost:117% 
+2026-10-17 15:09:07 starting 8 threads quiet rerun load=3.28
+2026-10-17 15:13:07 8 threads quiet rerun done load=9.65
+2026-10-17 15:13:24 poll for 1 thread (quiet rerun): load1=8.09 my_runs=0 users>1core: emost:117% 
+2026-10-17 15:13:24 starting 1 thread quiet rerun load=8.09
+2026-10-17 15:38:41 1 thread quiet rerun done load=4.11

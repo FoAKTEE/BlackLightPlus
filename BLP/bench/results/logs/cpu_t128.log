@@ -1,0 +1,7 @@
+# bench.jl backend=cpu commit=e34fbf1 threads=128 job=none tune=false legs=img,pol,amr load1=10.0 out=BLP/bench/results/raw/cpu_t128.jsonl
+BENCH leg=img res=192 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=36864 wall_s=0.3706 first_s=3.544 rate=9.948e+04 unit=rays/s load1=9.1/9.1 other_cores=2.9 same_as_saved=true
+BENCH leg=img res=384 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=147456 wall_s=1.357 first_s=1.495 rate=1.087e+05 unit=rays/s load1=8.9/11.7 other_cores=2.6 same_as_saved=true
+BENCH leg=img res=768 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=589824 wall_s=4.257 first_s=4.497 rate=1.385e+05 unit=rays/s load1=11.7/21.2 other_cores=2.4 same_as_saved=true
+BENCH leg=pol res=256 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=65536 wall_s=1.361 first_s=4.312 rate=4.816e+04 unit=rays/s load1=21.2/34.8 other_cores=2.4 same_as_saved=true
+BENCH leg=pol res=384 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=147456 wall_s=3.186 first_s=3.235 rate=4.629e+04 unit=rays/s load1=34.8/54.9 other_cores=2.6 same_as_saved=true
+BENCH leg=amr res=384 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=629760 wall_s=11.21 first_s=12.83 rate=5.62e+04 unit=rays/s load1=54.9/95.0 other_cores=2.3 same_as_saved=true

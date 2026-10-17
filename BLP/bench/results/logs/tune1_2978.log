@@ -1,0 +1,116 @@
+host anta job 2978 phase tune ndev 1 legs all commit 078dddb CUDA_VISIBLE_DEVICES=0 2026-10-17 14:19:04
+0, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+# bench.jl backend=gpu commit=078dddb threads=4 devices=[0] job=2978 tune=true legs=img,pol,amr,analytic,mc_thin,mc_scatter,mc_scatter0 load1=51.23 out=BLP/bench/results/raw/gpu.jsonl
+TUNE leg=pol res=384 ndev=1 lanes=3 chunk=131072 first_s=16.8 warm_s=0.6806 rate=2.167e+05
+TUNE leg=pol res=384 ndev=1 lanes=4 chunk=16384 first_s=1.151 warm_s=1.096 rate=1.346e+05
+TUNE leg=pol res=384 ndev=1 lanes=4 chunk=32768 first_s=0.864 warm_s=0.8865 rate=1.663e+05
+TUNE leg=pol res=384 ndev=1 lanes=4 chunk=65536 first_s=0.6664 warm_s=0.7243 rate=2.036e+05
+TUNE leg=pol res=384 ndev=1 lanes=4 chunk=131072 first_s=0.6288 warm_s=0.6438 rate=2.29e+05
+TUNE leg=amr res=384 ndev=1 lanes=1 chunk=16384 first_s=10.68 warm_s=6.98 rate=9.022e+04
+TUNE leg=amr res=384 ndev=1 lanes=1 chunk=32768 first_s=4.796 warm_s=4.719 rate=1.335e+05
+TUNE leg=amr res=384 ndev=1 lanes=1 chunk=65536 first_s=3.859 warm_s=3.802 rate=1.656e+05
+TUNE leg=amr res=384 ndev=1 lanes=1 chunk=131072 first_s=3.188 warm_s=3.188 rate=1.975e+05
+TUNE leg=amr res=384 ndev=1 lanes=2 chunk=16384 first_s=6.881 warm_s=6.765 rate=9.309e+04
+TUNE leg=amr res=384 ndev=1 lanes=2 chunk=32768 first_s=4.682 warm_s=4.571 rate=1.378e+05
+TUNE leg=amr res=384 ndev=1 lanes=2 chunk=65536 first_s=3.56 warm_s=3.63 rate=1.735e+05
+TUNE leg=amr res=384 ndev=1 lanes=2 chunk=131072 first_s=3.151 warm_s=3.074 rate=2.049e+05
+TUNE leg=amr res=384 ndev=1 lanes=3 chunk=16384 first_s=6.492 warm_s=6.331 rate=9.947e+04
+TUNE leg=amr res=384 ndev=1 lanes=3 chunk=32768 first_s=4.581 warm_s=4.344 rate=1.45e+05
+TUNE leg=amr res=384 ndev=1 lanes=3 chunk=65536 first_s=3.549 warm_s=3.629 rate=1.735e+05
+TUNE leg=amr res=384 ndev=1 lanes=3 chunk=131072 first_s=3.086 warm_s=2.965 rate=2.124e+05
+TUNE leg=amr res=384 ndev=1 lanes=4 chunk=16384 first_s=6.068 warm_s=6.415 rate=9.816e+04
+TUNE leg=amr res=384 ndev=1 lanes=4 chunk=32768 first_s=4.053 warm_s=4.219 rate=1.493e+05
+TUNE leg=amr res=384 ndev=1 lanes=4 chunk=65536 first_s=3.395 warm_s=3.256 rate=1.934e+05
+TUNE leg=amr res=384 ndev=1 lanes=4 chunk=131072 first_s=3.042 warm_s=3.005 rate=2.096e+05
+TUNE leg=analytic res=1024 ndev=1 lanes=1 chunk=16384 first_s=5.705 warm_s=0.4233 rate=2.477e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=1 chunk=32768 first_s=0.2303 warm_s=0.2472 rate=4.242e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=1 chunk=65536 first_s=0.1954 warm_s=0.2478 rate=4.232e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=1 chunk=131072 first_s=0.1696 warm_s=0.2283 rate=4.592e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=2 chunk=16384 first_s=0.2459 warm_s=0.2281 rate=4.597e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=2 chunk=32768 first_s=0.1884 warm_s=0.1772 rate=5.917e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=2 chunk=65536 first_s=0.1623 warm_s=0.1598 rate=6.562e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=2 chunk=131072 first_s=0.1396 warm_s=0.1133 rate=9.256e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=3 chunk=16384 first_s=0.2117 warm_s=0.232 rate=4.52e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=3 chunk=32768 first_s=0.1728 warm_s=0.1449 rate=7.239e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=3 chunk=65536 first_s=0.1717 warm_s=0.1254 rate=8.36e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=3 chunk=131072 first_s=0.1498 warm_s=0.2002 rate=5.238e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=4 chunk=16384 first_s=0.1894 warm_s=0.1513 rate=6.933e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=4 chunk=32768 first_s=0.1766 warm_s=0.1172 rate=8.949e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=4 chunk=65536 first_s=0.152 warm_s=0.1151 rate=9.108e+06
+TUNE leg=analytic res=1024 ndev=1 lanes=4 chunk=131072 first_s=0.1546 warm_s=0.1018 rate=1.03e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=1 chunk=16384 first_s=5.967 warm_s=1.42 rate=7.058e+06
+TUNE leg=mc_thin res=0 ndev=1 lanes=1 chunk=32768 first_s=0.7196 warm_s=0.7536 rate=1.33e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=1 chunk=65536 first_s=0.71 warm_s=0.6169 rate=1.625e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=1 chunk=131072 first_s=0.4704 warm_s=0.4833 rate=2.074e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=2 chunk=16384 first_s=1.543 warm_s=1.614 rate=6.211e+06
+TUNE leg=mc_thin res=0 ndev=1 lanes=2 chunk=32768 first_s=0.7776 warm_s=0.7797 rate=1.286e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=2 chunk=65536 first_s=0.7042 warm_s=0.6212 rate=1.614e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=2 chunk=131072 first_s=0.4905 warm_s=0.489 rate=2.05e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=3 chunk=16384 first_s=1.53 warm_s=1.483 rate=6.762e+06
+TUNE leg=mc_thin res=0 ndev=1 lanes=3 chunk=32768 first_s=0.8426 warm_s=0.8955 rate=1.119e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=3 chunk=65536 first_s=0.7448 warm_s=0.6657 rate=1.506e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=3 chunk=131072 first_s=0.5065 warm_s=0.5363 rate=1.869e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=4 chunk=16384 first_s=1.437 warm_s=1.599 rate=6.269e+06
+TUNE leg=mc_thin res=0 ndev=1 lanes=4 chunk=32768 first_s=0.9323 warm_s=0.9237 rate=1.085e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=4 chunk=65536 first_s=0.6908 warm_s=0.7314 rate=1.371e+07
+TUNE leg=mc_thin res=0 ndev=1 lanes=4 chunk=131072 first_s=0.513 warm_s=0.4976 rate=2.015e+07
+TUNE leg=mc_scatter res=0 ndev=1 lanes=1 chunk=16384 first_s=11.95 warm_s=2.606 rate=4.543e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=1 chunk=32768 first_s=2.36 warm_s=2.424 rate=4.885e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=1 chunk=65536 first_s=1.979 warm_s=2.413 rate=4.905e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=1 chunk=131072 first_s=1.928 warm_s=1.742 rate=6.797e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=2 chunk=16384 first_s=2.662 warm_s=3.186 rate=3.716e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=2 chunk=32768 first_s=2.242 warm_s=2.439 rate=4.854e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=2 chunk=65536 first_s=1.883 warm_s=2.301 rate=5.146e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=2 chunk=131072 first_s=1.57 warm_s=1.833 rate=6.459e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=3 chunk=16384 first_s=2.819 warm_s=2.816 rate=4.204e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=3 chunk=32768 first_s=2.268 warm_s=2.388 rate=4.957e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=3 chunk=65536 first_s=1.837 warm_s=2.317 rate=5.109e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=3 chunk=131072 first_s=1.618 warm_s=1.783 rate=6.639e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=4 chunk=16384 first_s=3.029 warm_s=2.926 rate=4.046e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=4 chunk=32768 first_s=2.468 warm_s=2.455 rate=4.822e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=4 chunk=65536 first_s=1.98 warm_s=2.018 rate=5.868e+06
+TUNE leg=mc_scatter res=0 ndev=1 lanes=4 chunk=131072 first_s=1.557 warm_s=1.877 rate=6.308e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=1 chunk=16384 first_s=1.454 warm_s=1.534 rate=6.533e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=1 chunk=32768 first_s=1.197 warm_s=1.289 rate=7.779e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=1 chunk=65536 first_s=0.9679 warm_s=1.016 rate=9.867e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=1 chunk=131072 first_s=0.716 warm_s=0.7883 rate=1.272e+07
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=2 chunk=16384 first_s=1.609 warm_s=1.559 rate=6.429e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=2 chunk=32768 first_s=1.356 warm_s=1.29 rate=7.769e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=2 chunk=65536 first_s=0.9357 warm_s=0.9897 rate=1.013e+07
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=2 chunk=131072 first_s=0.7658 warm_s=0.7953 rate=1.26e+07
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=3 chunk=16384 first_s=1.689 warm_s=1.632 rate=6.144e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=3 chunk=32768 first_s=1.289 warm_s=1.371 rate=7.31e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=3 chunk=65536 first_s=0.9011 warm_s=1.008 rate=9.946e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=3 chunk=131072 first_s=0.7266 warm_s=0.7941 rate=1.262e+07
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=4 chunk=16384 first_s=1.716 warm_s=1.791 rate=5.597e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=4 chunk=32768 first_s=1.243 warm_s=1.436 rate=6.979e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=4 chunk=65536 first_s=0.9247 warm_s=1.033 rate=9.707e+06
+TUNE leg=mc_scatter0 res=0 ndev=1 lanes=4 chunk=131072 first_s=0.7676 warm_s=0.7839 rate=1.279e+07
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+exit 0

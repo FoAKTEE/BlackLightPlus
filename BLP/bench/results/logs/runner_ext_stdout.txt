@@ -1,0 +1,5 @@
+2026-10-17 14:40:50 tune1_img-amr-analytic-mc_thin-mc_scatter attempt 1 job 2986 submitted
+2026-10-17 14:41:20 tune1_img-amr-analytic-mc_thin-mc_scatter job 2986 running
+2026-10-17 14:43:20 tune1_img-amr-analytic-mc_thin-mc_scatter job 2986 COMPLETED
+2026-10-17 14:43:20 tune1_img-amr-analytic-mc_thin-mc_scatter done: BLP/bench/results/logs/tune1_img-amr-analytic-mc_thin-mc_scatter_2986.log
+2026-10-17 14:43:20 all done: tune:1:img,amr,analytic,mc_thin,mc_scatter

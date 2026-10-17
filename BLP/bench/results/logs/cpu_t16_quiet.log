@@ -1,0 +1,11 @@
+# bench.jl backend=cpu commit=e34fbf1 threads=16 job=none tune=false legs=img,pol,amr,analytic,mc_thin,mc_scatter,mc_scatter0 load1=3.69 out=BLP/bench/results/raw/cpu_t16_quiet.jsonl
+BENCH leg=img res=192 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=36864 wall_s=1.417 first_s=4.331 rate=2.601e+04 unit=rays/s load1=3.8/6.3 other_cores=2.1 same_as_saved=true
+BENCH leg=img res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=147456 wall_s=5.405 first_s=5.65 rate=2.728e+04 unit=rays/s load1=6.3/10.3 other_cores=2.2 same_as_saved=true
+BENCH leg=img res=768 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=589824 wall_s=21.69 first_s=21.84 rate=2.719e+04 unit=rays/s load1=10.3/14.2 other_cores=2.3 same_as_saved=true
+BENCH leg=pol res=256 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=65536 wall_s=5.548 first_s=8.472 rate=1.181e+04 unit=rays/s load1=14.2/15.8 other_cores=2.3 same_as_saved=true
+BENCH leg=pol res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=147456 wall_s=12.65 first_s=12.25 rate=1.165e+04 unit=rays/s load1=15.8/16.2 other_cores=4.0 same_as_saved=true
+BENCH leg=amr res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=629760 wall_s=44.89 first_s=46.53 rate=1.403e+04 unit=rays/s load1=16.2/19.2 other_cores=2.6 same_as_saved=true
+BENCH leg=analytic res=1024 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=1048576 wall_s=0.8335 first_s=1.308 rate=1.258e+06 unit=rays/s load1=19.2/18.2 other_cores=4.2 same_as_saved=true
+BENCH leg=mc_thin res=0 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=14.96 first_s=17.41 rate=6.701e+05 unit=photons/s load1=18.2/17.6 other_cores=4.3 same_as_saved=true
+BENCH leg=mc_scatter res=0 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=11839088 wall_s=15.95 first_s=18.72 rate=7.423e+05 unit=photons/s load1=17.6/19.5 other_cores=5.0 same_as_saved=true
+BENCH leg=mc_scatter0 res=0 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=15.91 first_s=16.17 rate=6.301e+05 unit=photons/s load1=19.5/21.2 other_cores=5.2 same_as_saved=true

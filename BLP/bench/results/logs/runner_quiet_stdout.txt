@@ -1,0 +1,5 @@
+2026-10-17 15:10:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 attempt 1 job 2989 submitted
+2026-10-17 15:11:01 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 job 2989 running
+2026-10-17 15:12:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 job 2989 COMPLETED
+2026-10-17 15:12:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 done: BLP/bench/results/logs/bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0_2989.log
+2026-10-17 15:12:31 all done: bench:1:img,pol,amr,analytic,mc_thin,mc_scatter,mc_scatter0

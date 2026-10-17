@@ -1,0 +1,11 @@
+# bench.jl backend=cpu commit=078dddb threads=16 job=none tune=false legs=img,pol,amr,analytic,mc_thin,mc_scatter,mc_scatter0 load1=56.14 out=BLP/bench/results/raw/cpu_t16.jsonl
+BENCH leg=img res=192 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=36864 wall_s=1.493 first_s=4.004 rate=2.469e+04 unit=rays/s load1=54.5/53.8 other_cores=45.5 same_as_saved=true
+BENCH leg=img res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=147456 wall_s=6.08 first_s=6.271 rate=2.425e+04 unit=rays/s load1=53.2/54.4 other_cores=42.1 same_as_saved=true
+BENCH leg=img res=768 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=589824 wall_s=23.66 first_s=24.24 rate=2.492e+04 unit=rays/s load1=54.4/59.8 other_cores=37.4 same_as_saved=nothing
+BENCH leg=pol res=256 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=65536 wall_s=5.934 first_s=8.234 rate=1.104e+04 unit=rays/s load1=59.8/54.9 other_cores=31.4 same_as_saved=nothing
+BENCH leg=pol res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=147456 wall_s=12.56 first_s=13.09 rate=1.174e+04 unit=rays/s load1=54.9/48.0 other_cores=25.7 same_as_saved=nothing
+BENCH leg=amr res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=629760 wall_s=46.35 first_s=48.01 rate=1.359e+04 unit=rays/s load1=48.0/56.9 other_cores=31.1 same_as_saved=nothing
+BENCH leg=analytic res=1024 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=1048576 wall_s=0.9227 first_s=1.484 rate=1.136e+06 unit=rays/s load1=57.3/56.8 other_cores=41.2 same_as_saved=nothing
+BENCH leg=mc_thin res=0 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=18.61 first_s=21.18 rate=5.386e+05 unit=photons/s load1=56.8/57.4 other_cores=44.1 same_as_saved=nothing
+BENCH leg=mc_scatter res=0 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=11839088 wall_s=16.71 first_s=20.84 rate=7.085e+05 unit=photons/s load1=56.4/51.5 other_cores=34.4 same_as_saved=nothing
+BENCH leg=mc_scatter0 res=0 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=15.48 first_s=18.59 rate=6.475e+05 unit=photons/s load1=51.5/39.1 other_cores=15.5 same_as_saved=nothing
