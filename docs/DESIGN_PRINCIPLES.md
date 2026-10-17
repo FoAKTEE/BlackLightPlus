@@ -355,7 +355,7 @@ reference package `src/` at `e364c7d`, the package `BLP/`, and the gate
 | Kernels (`@kernel`) | 21 | 1 | exactly 1 |
 | Entry points in the `render`/`trace`/`shadow`/`mc_spectrum`/`sensitivity`/`variants`/`photon_ring_layers` family | 29 | 9 | ≤ 10 exported |
 | Top-level exported names | 183 | 54 | ≤ 54, each defined |
-| Files over 600 lines | 5 | 0 (largest 522) | none |
+| Files over 600 lines | 5 | 0 (largest 547) | none |
 | Camera constructed from the configuration | 13 sites | 1 (`prepare`) | ≤ 1 `PlaneParallelCamera(` in the pipeline |
 | Horizon radius inlined | 18 sites | 5, all in `kerr_schild.jl`, `kerr_orbits.jl`, `analytic_kerr.jl`; 0 in the pipeline | `1 + sqrt(1 - a` only in those three files |
 | Escape radius inlined | 14 sites | 1 (`prepare`) | no `1.1 * ` in the pipeline outside `config.jl` |

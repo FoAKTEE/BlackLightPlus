@@ -71,7 +71,7 @@ src/
     ├── Plans/         Plans.jl config.jl lanes.jl plan.jl prepare.jl
     ├── Analysis/      Analysis.jl refinement.jl lensing_bands.jl interferometry.jl
     └── Products/      Products.jl programs.jl image.jl trace.jl sensitivity.jl analytic.jl
-                       amr.jl
+                       amr.jl montecarlo.jl
 ext/
 └── BLPCUDAExt.jl
 ```
@@ -350,10 +350,11 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
 - **Accumulators.** `ExactBins(bands; nu_min = 1e8, nu_max = 1e16, n_ebins = 200)` over
   `PolarBands(n)` or `InclinationBands(incl_deg, half_width_deg)` holds per row and
   frequency bin the count and the limbs of `Σw` and `ΣwE`; `record!(bins, E, w, dir)`
-  takes the escape direction and adds through atomics on either executor; `Spectrum(bins)`
-  rounds each cell once and answers `band`, `nu_centers`, `nuLnu`, `nuLnu_total`,
-  `nuLnu_solid`, `total_power`, `total_weight`, `mean_energy`. `ExactScalars(n)` has
-  `add!`, `scalar`, `addends`. `ChildBuffer(T, capacity, layout)` stores children with
+  takes the escape direction and adds through atomics on either executor;
+  `Spectrum(bins; plan, run)` rounds each cell once and answers `band`, `nu_centers`,
+  `nuLnu`, `nuLnu_total`, `nuLnu_solid`, `total_power`, `total_weight`, `mean_energy`.
+  `InclinationBands` keeps its band centres and half-width. `ExactScalars(n)` has `add!`,
+  `scalar`, `addends` (one key or a tuple of keys). `ChildBuffer(T, capacity, layout)` stores children with
   their genealogy streams through `spawn!(buf, child, rng, event)`; a child beyond the
   capacity is counted (`overflow`) and the layer is rerun at a capacity of at least the
   count, which spawns identical children. `gather!(acc)` adds the device twins after
@@ -389,11 +390,12 @@ geodesic_type(lanes)            # Tg; Float32 for MixedLanes
 
 transfer_params(cfg; mass_scale = cfg.mass_scale_cgs, rat_high = cfg.plasma.rat_high)
 prepare(cfg::RunConfig; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16) -> Plan
+prepare(sphere::UniformSphere) -> Plan     # the Monte Carlo sphere on Minkowski(), params = nothing
 
 struct Plan{S,Sg,P,M,T,Bg,H,L}
     config::RunConfig
     spacetime::S; geodesic_spacetime::Sg       # Float64 transfer lane; geodesic lane
-    provider::P; mode::M; params::T            # matter or nothing; StokesI() | IQUV(); TransferParams
+    provider::P; mode::M; params::T            # matter or nothing; StokesI() | IQUV(); TransferParams or nothing
     camera::PlaneParallelCamera; frame::CameraFrame{Float64}; pixels::PixelGrid{Vector{Float64}}
     budget::MarchBudget{Float64}; geodesic_budget::Bg
     horizon::H; escape::Float64; R_em::Float64; theta_o::Float64
@@ -413,6 +415,9 @@ when the spacetime has none); `theta_o`; on Kerr, the critical curve at
 of `MixedLanes`. It throws `ArgumentError` for a spacetime that is not `Float64`, a
 geodesic lane the spacetime does not have, transfer or accumulator lanes other than
 `Float64`, and `MixedLanes` off Kerr. A plan is immutable and backend-free.
+`prepare(sphere)` is the plan of the Monte Carlo sphere: `Minkowski()`, the sphere as
+matter in centimetres, `RunConfig()` and no parameter set; `output_type` and
+`imaging_program` reject such a plan.
 
 ### 5.2 Programs
 
@@ -445,6 +450,13 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   boxes arguments. `ShadowProgram(st, budget, escape, rays)` records fate, step count,
   largest null error and final radius and state. `AnalyticProgram(gen, theta_o, a, ro,
   disk, bands)` lands every band of one screen point and needs a 32 KiB device stack.
+- The Monte Carlo programs `MCPrimary(source, transport, sink, seed)` and
+  `MCLayer(photons, rngs, transport, sink)` are called as `prog(item, i)` without outputs
+  and write through `MCSink(ctl, orders, children, ledger)`, a `Sink` over the exact
+  accumulators: `SphereSource(sphere, tables)` or `ZoneSource(zones, weights, dnmax,
+  offset, lint)` generates the primaries, `MCTransport(ctl, st, provider, opac, absorb,
+  scatter)` holds the fixed inputs of every march, and the ledger is striped
+  `LEDGER_STRIPES` ways so the atomics spread over distinct addresses.
 - `StoredPathProgram` (a march along a stored trajectory) and `AdaptiveTraceProgram`
   (`trace_geodesic` with every step saved) hold host vectors and run on threads only.
   Every other program is `isbits` after `Adapt` and allocates nothing.
@@ -463,7 +475,7 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
 | `shadow(plan; backend)` | `(fate, steps, null_error, radius, final, plan, run)` | no `MixedLanes` |
 | `sensitivity(plan, param; backend)` | `(image, derivative, flux, dflux, param)` | `param` is `:mass_scale` or `:rat_high` |
 | `variants(plan, mass_scales; backend)` | `(images, mass_scales, plan, run)` | grid providers |
-| `mc_spectrum(plan, Ns; scattering, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | — |
+| `mc_spectrum(plan, Ns; scattering = false, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | a sphere plan, or grid matter on a stationary spacetime (inclination bands only) |
 
 - Determinism: every imaging product is bitwise per item, whatever the executor, device
   count, chunking or queue order; `render_amr`'s visited blocks, mosaic, level map and ray
@@ -486,12 +498,24 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   in one queue. `sensitivity` and `variants` run it in `StokesI` mode with a `Dual`
   parameter set or a mass-scale tuple.
 
-`mc_spectrum(plan, Ns; scattering, backend, bands, …)` is the Monte Carlo product. Its
-programs write through the accumulators of `Execution`: escaped photons into `ExactBins`
-(`PolarBands` for the sphere, `InclinationBands` for viewing inclinations), scattered
-children into a `ChildBuffer` that feeds the next layer. `gather!` follows every
-`foreach_item!` and `Spectrum(bins)` rounds once per cell, so the spectrum is identical on
-every executor, thread count, device count and chunking.
+`mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max,
+spec_nu_min, spec_nu_max, n_esamp, n_ebins, tabulated, table, max_scatt, bias,
+absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` is the Monte
+Carlo product. The plan's matter selects the run. The sphere of `prepare(sphere)`
+marches straight lines (`FlatMarch`) and returns a `Spectrum`, or with `scattering =
+true` a `ScatterResult` of per-order spectra (`absorption` defaults to `false` there). A
+plasma grid on a stationary spacetime spreads the primaries over
+`emission_zones(plan; stride, r_emit_max, max_zones)` by their expected counts, marches
+geodesics (`CurvedMarch` with `C`, `escape`, `R_em`) and returns a `GRMHDSpectrumResult`
+of inclination bands. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
+sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
+`ExactScalars`, and scattered children into a `ChildBuffer` that the next layer tracks,
+up to `max_scatt` layers; a layer whose buffer overflows is rerun at the counted
+capacity. `gather!` follows every `foreach_item!` and `Spectrum(bins)` rounds once per
+cell, so the bins, the ledger and the children depend only on the plan, `Ns` and the
+keywords, whatever the executor, thread count, device count or chunking.
+`analytic_nuLnu(sphere, nu)` is the thin sphere's closed form and `incl_nuLnu(result)`
+the isotropic-equivalent spectra of the bands.
 
 ### 5.4 Choosing CPU or GPU
 
@@ -592,7 +616,7 @@ Every name of `names(BLP)`. The keyword `backend` of a product defaults to `noth
 | `RunConfig` | `RunConfig(; m_bh_cgs, mass_scale_cgs, frequency_hz, camera, plasma, max_steps, C, escape_factor)` | run record (§5.1) |
 | `Lanes` | `Lanes{Tg,Tt,A}()`, `Lanes()` | precision lanes, `Tt = A = Float64` |
 | `MixedLanes` | `MixedLanes(rescue_px = 2)` | mixed lanes on Kerr |
-| `prepare` | `prepare(cfg; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16)` | `Plan` |
+| `prepare` | `prepare(cfg; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16)`; `prepare(sphere::UniformSphere)` | `Plan` |
 | `KerrSchildCartesian` | `KerrSchildCartesian(a)` | `KerrSchildCartesian{T}` |
 | `Minkowski` | `Minkowski()` | `Minkowski{Float64}` |
 | `UserMetric` | `UserMetric(g)` | `UserMetric{F,Float64}` |
@@ -627,12 +651,12 @@ Every name of `names(BLP)`. The keyword `backend` of a product defaults to `noth
 | `shadow` | `shadow(plan; backend)` | `NamedTuple` |
 | `sensitivity` | `sensitivity(plan, param::Symbol; backend)` | `NamedTuple` |
 | `variants` | `variants(plan, mass_scales; backend)` | `NamedTuple` |
-| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` |
+| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max, n_esamp, n_ebins, tabulated, table, max_scatt, bias, absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` | `Spectrum` (thin sphere), `ScatterResult` (scattering sphere), `GRMHDSpectrumResult` (grid) |
 | `Image` | fields `I`, `Q`, `U`, `V` (`Matrix{Float64}`, `[iβ, iα]`), `plan`, `run` | result type |
 | `Trajectories` | fields `states`, `dls` (source → camera, `Float64`), `plan`, `run` | result type |
-| `Spectrum` | `Spectrum(bins::ExactBins)` | rounded spectrum (§4.2) |
-| `ScatterResult` | — | result of a scattering `mc_spectrum` run |
-| `GRMHDSpectrumResult` | — | result of a GRMHD `mc_spectrum` run |
+| `Spectrum` | `Spectrum(bins::ExactBins; plan, run)`; fields `nu_min`, `nu_max`, `lnu_min`, `dlnu`, `n_ebins`, `n_bands`, `count`, `sumw`, `sumwE`, `dOmega`, `total_row`, `plan`, `run` | rounded spectrum (§4.2) |
+| `ScatterResult` | fields `orders` (a `Spectrum` per scattering order), `total`, `max_scatt`, `n_primary`, `n_children`, `w_primary`, `w_children`, `w_first_order`, `scatter_loss`, `plan`, `run` | result type |
+| `GRMHDSpectrumResult` | fields `incl_deg`, `half_width_deg`, `dOmega`, `spectra` (one per band), `total`, `emitted_power`, `escaped_power`, `n_zones`, `n_gen`, `n_recorded`, `scattering`, `plan`, `run` | result type |
 | `write_npy` | `write_npy(path, a::AbstractMatrix{Float64})` | `path` |
 | `visamp` | `visamp(img; angles = (0.0, 90.0), fov_muas, pad = 16, maxbaseline = Inf, window = :tukey)` | `Vector` of `(angle, baselines, amplitude)` |
 | `visamp_minima` | `visamp_minima(baselines, amplitude; skip = 1, bl_min = 0.0)` | `Vector{Float64}` |
@@ -728,12 +752,13 @@ comment or module docstring.
 | `pipeline/Analysis/lensing_bands.jl` | Screen geometry of photon-ring imaging | `lensing_band`, `band_grid` |
 | `pipeline/Analysis/interferometry.jl` | Visibility amplitudes along baselines | `radon_cut`, `visamp` |
 | `pipeline/Products/Products.jl` | Programs built from a plan and the entry points | includes, exports |
-| `pipeline/Products/programs.jl` | The per-item programs the executors run | `ImagingProgram`, `TraceProgram`, `ShadowProgram` |
+| `pipeline/Products/programs.jl` | The per-item programs the executors run | `ImagingProgram`, `TraceProgram`, `ShadowProgram`, `MCPrimary`, `MCLayer` |
 | `pipeline/Products/image.jl` | Full-frame and coordinate renders, the run record | `Image`, `render` |
 | `pipeline/Products/trace.jl` | Trajectories, ray fates, the two-phase render | `Trajectories`, `trace`, `shadow` |
 | `pipeline/Products/sensitivity.jl` | Parameter derivatives and ladders of Stokes I | `sensitivity`, `variants` |
 | `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `render_analytic`, `photon_ring_layers` |
 | `pipeline/Products/amr.jl` | Adaptive image-plane refinement | `render_amr` |
+| `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, layered transport, exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
 | `BLPCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice` | extension module |
 
 ## 9. Exports and internal interfaces
@@ -757,7 +782,7 @@ leading-underscore name.
 | `structure.jl` | the gates of §1 and §9 (`DESIGN_PRINCIPLES.md` §5) |
 | `physics/` | `numerics_*`, `spacetime_*`, `matter_*`, `transfer_*`, `montecarlo_*`: closed forms, conservation, AD through each layer, the hot-path contract |
 | `infra/` | `data_*` (readers on synthetic files, locates, grids, series, tables), `execution_*` (executors bitwise against one another, pool, residency, ray sources, schedule, worklist, accumulators, backend switch, CUDA extension) |
-| `pipeline/` | `analysis_*`, `plans_prepare`, `products_*` (render, ray orientation and Stokes convention, trace, AMR, analytic, sensitivity, programs, backend) |
+| `pipeline/` | `analysis_*`, `plans_prepare`, `products_*` (render, ray orientation and Stokes convention, trace, AMR, analytic, sensitivity, Monte Carlo spectra, programs, backend) |
 | `oracle/` | its own environment, developing BLP and BlackLightPlus: `runtests.jl`, `helpers.jl` and the comparison scripts (§6) |
 
 Run the main suite with `julia -t auto --project=BLP -e 'using Pkg; Pkg.test()'`. Device

@@ -39,8 +39,13 @@ fates = shadow(bare).fate                            # 1 captured, 2 escaped, 0 
 ## Monte Carlo spectra
 
 ```julia
-spec = mc_spectrum(plan, 10^6; scattering = true)    # mc_spectrum(plan, Ns; scattering, backend, bands, …)
+ball = prepare(UniformSphere(n_e = 1e13, theta_e = 100.0, B = 1.0, R = 1.0))
+thin = mc_spectrum(ball, 10^6)                       # Spectrum
+comp = mc_spectrum(ball, 10^6; scattering = true)    # ScatterResult: one Spectrum per order
+spec = mc_spectrum(plan, 10^6; scattering = true)    # GRMHDSpectrumResult: inclination bands
 ```
+
+Spectra are exact sums: the same plan, `Ns` and seed give the same bins on every backend.
 
 ## CPU or GPU
 
