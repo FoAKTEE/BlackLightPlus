@@ -5,7 +5,8 @@
 using Test
 
 const ORACLE_SCRIPTS = ("numerics.jl", "spacetime.jl", "camera.jl", "analytic.jl", "matter.jl",
-                        "data.jl", "analysis.jl", "transfer.jl", "montecarlo.jl")
+                        "data.jl", "analysis.jl", "transfer.jl", "montecarlo.jl",
+                        "products.jl")
 
 @testset "BLP oracle" begin
     for f in ORACLE_SCRIPTS
