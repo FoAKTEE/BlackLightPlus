@@ -23,6 +23,7 @@ include("backend.jl")
 include("ray_sources.jl")
 include("schedule.jl")
 include("worklist.jl")
+include("accumulators.jl")
 
 # executors and the CPU/GPU switch
 export Executor, ThreadedExecutor, PoolExecutor, foreach_item!, describe,
@@ -38,6 +39,10 @@ export RaySource, ray, HostRays, CameraRays, PixelGrid, BlockGrid, CoordList, im
 # scheduling and the worklist
 export cost_order, rescue_pixels, mixed_partition, march_sort_order, queue_items,
        curve_inclination, ImageBlock, stream_blocks!
+# Monte Carlo accumulators
+export Bands, PolarBands, InclinationBands, ExactBins, record!, gather!, Spectrum, band,
+       nu_centers, nuLnu, nuLnu_total, nuLnu_solid, total_power, total_weight, mean_energy,
+       ExactScalars, add!, scalar, addends, ChildBuffer, spawn!, capacity, overflow, children
 
 function __init__()
     atexit(close_pools)
