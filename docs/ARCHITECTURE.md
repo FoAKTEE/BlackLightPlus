@@ -799,4 +799,6 @@ leading-underscore name.
 
 Run the main suite with `julia -t auto --project=BLP -e 'using Pkg; Pkg.test()'`. Device
 code runs on `HostDevice` pools. A test that needs a missing resource (the CUDA package,
-the gpumonty table) skips inside its file and reports the skip.
+the gpumonty table) skips inside its file and reports the skip. The measured results of
+the suite, the oracle, the paper's figures and the benchmarks, on the CPU and on the A100,
+are recorded in `docs/VERIFICATION.md`.

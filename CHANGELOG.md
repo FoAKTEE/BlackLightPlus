@@ -357,6 +357,9 @@ Structure and contracts: `docs/ARCHITECTURE.md`; principles and gates:
   path are bitwise; IQUV images, traces and the Monte Carlo torus marches agree to
   round-off natively, from floating-point contraction on FMA hardware, and bitwise
   under `julia -C generic`; Monte Carlo spectra are exact sums.
+- **Verification record.** `docs/VERIFICATION.md`: the suite and the oracle on the CPU
+  and on an A100, the paper's eight figures regenerated from BLP (`BLP/figures/`), and
+  the CPU-versus-GPU benchmarks (`BLP/bench/`).
 
 ## [0.1.0] - 2026-08-05
 

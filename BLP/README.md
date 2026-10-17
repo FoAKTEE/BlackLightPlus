@@ -87,3 +87,5 @@ driver when it compiles.
   products, the public API and the continuity standard.
 - [`docs/DESIGN_PRINCIPLES.md`](../docs/DESIGN_PRINCIPLES.md): the principles and their
   gates.
+- [`docs/VERIFICATION.md`](../docs/VERIFICATION.md): the measured results of the tests,
+  the oracle, the paper's figures and the benchmarks on the CPU and the A100.
