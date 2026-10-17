@@ -309,8 +309,8 @@ states "bitwise" or the tolerance.
 types, the plasma providers and sources, the transfer modes, the executors
 and device selection, the product entry points (`render`, `render_amr`,
 `render_analytic`, `photon_ring_layers`, `mc_spectrum`), the result types, and
-the analysis and writer functions. Target: about 40 names. Everything else is
-a submodule interface (P3). Semantic versioning applies to the public API.
+the analysis and writer functions: 54 names, the gate's ceiling. Everything else
+is a submodule interface (P3). Semantic versioning applies to the public API.
 *Why.* D14.
 *Check.* `structure.jl`, "public API": `names(BLP)` holds at most 54 names, each
 defined, at most 10 of them in the product family of P4; every name a submodule
@@ -332,7 +332,7 @@ hits only the execution module and provider constructors.
 skips, and reports the skip, only on a missing external resource (device,
 data file). Tests import public names or submodule exports, never `_` names.
 Each principle's *Check* above that is mechanical (P1, P3, P6, P9, P10, P12,
-P16, P17) is a test in `test/test_structure.jl`, so the structure cannot
+P16, P17) is a test in `BLP/test/structure.jl`, so the structure cannot
 regress silently.
 *Why.* D3, D14.
 *Check.* `BLP/test/runtests.jl` includes `structure.jl` and every file under

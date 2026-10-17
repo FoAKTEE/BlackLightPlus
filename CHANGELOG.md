@@ -340,9 +340,9 @@ Structure and contracts: `docs/ARCHITECTURE.md`; principles and gates:
   lanes, package version and wall time in `run`.
 - **One kernel.** Every device computation is a per-item program run through the single
   `@kernel` by a `ThreadedExecutor`, or by a `PoolExecutor` over `HostDevice`s and
-  `CUDADevice`s, with bitwise identical per-item results. Monte Carlo spectra are exact
-  integer-limb sums, independent of the executor, thread count, device count and
-  chunking.
+  `CUDADevice`s; threads and host-device pools give bitwise identical per-item results.
+  Monte Carlo spectra are exact integer-limb sums, independent of the executor, thread
+  count, device count and chunking.
 - **The backend switch.** Every product takes `backend` (`:auto`, `:cpu`, `:gpu`,
   `:host_pool`, an executor, a device list or a pool); `backend!` sets the session
   default and `BLP_BACKEND` (`auto | cpu | gpu | gpu:0,1 | host_pool | host_pool:N`)
