@@ -6,11 +6,11 @@ Run configuration, precision lanes and `prepare`, which turns a configuration, a
 module Plans
 
 using ..Numerics: Units
-using ..Spacetime: Spacetime, KerrSchildCartesian, PlaneParallelCamera, CameraFrame, MarchBudget,
-                   lane, horizon_radius, critical_curve
+using ..Spacetime: Spacetime, KerrSchildCartesian, Minkowski, PlaneParallelCamera, CameraFrame,
+                   MarchBudget, lane, horizon_radius, critical_curve
 import ..Spacetime: npixels
-using ..Matter: ElectronModel, PlasmaCuts, legacy_bound, domain_radius
-using ..Transfer: TransferMode, IQUV, PowerLaw, Kappa, TransferParams
+using ..Matter: ElectronModel, PlasmaCuts, UniformSphere, legacy_bound, domain_radius
+using ..Transfer: TransferMode, StokesI, IQUV, PowerLaw, Kappa, TransferParams
 import ..Transfer: output_type
 using ..Execution: PixelGrid, cost_order, rescue_pixels, curve_inclination
 
