@@ -71,6 +71,7 @@ end off: `lo < 0` becomes `-Inf`, `hi < 0` becomes `Inf`.
 """
 legacy_bound(::Type{T}, lo, hi) where {T} = Bound{T}(lo >= 0 ? T(lo) : T(-Inf), hi >= 0 ? T(hi) : T(Inf))
 
+"Whether `v` lies outside the bound `b`; false for NaN."
 @inline outside(b::Bound, v) = v < b.lo || v > b.hi
 
 """

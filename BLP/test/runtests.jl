@@ -7,6 +7,7 @@ using BLP
 include("decks.jl")
 
 @testset "BLP" begin
+    include("structure.jl")
     for dir in ("physics", "infra", "pipeline")
         isdir(joinpath(@__DIR__, dir)) || continue
         files = sort(filter(f -> endswith(f, ".jl"), readdir(joinpath(@__DIR__, dir); join = true)))
