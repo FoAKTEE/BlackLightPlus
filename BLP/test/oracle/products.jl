@@ -34,36 +34,9 @@ const bits = Decks.bits
 const NOFMA = get(ENV, "BLP_ORACLE_NOFMA", "") == "1"
 
 # ---------------------------------------------------------------- old device drivers
-const REBOUND = (:CUDA, :KernelAbstractions, :Adapt, :ForwardDiff)
-pkg(uuid, name) = Base.require(Base.PkgId(Base.UUID(uuid), name))
-
-# `using CUDA` etc. become `using .CUDA` against module bindings made by identity (the
-# oracle environment does not list these packages), and nested includes get the rewrite.
-rebind_path(e) = e isa Expr && e.head === :(:) ? Expr(:(:), rebind_path(e.args[1]), e.args[2:end]...) :
-                 e isa Expr && e.head === :. && !isempty(e.args) && e.args[1] in REBOUND ?
-                 Expr(:., :., e.args...) : e
-function rebind(ex)
-    ex isa Expr || return ex
-    ex.head in (:using, :import) && return Expr(ex.head, map(rebind_path, ex.args)...)
-    if ex.head === :call && (ex.args[1] === :include || ex.args[1] == :(Base.include))
-        args = ex.args[1] === :include ?
-               (Expr(:macrocall, Symbol("@__MODULE__"), LineNumberNode(0)), ex.args[2:end]...) :
-               ex.args[2:end]
-        return Expr(:call, GlobalRef(Base, :include), rebind, args...)
-    end
-    return Expr(ex.head, map(rebind, ex.args)...)
-end
-
-const OLD = Module(:OldDevice)
-Core.eval(OLD, :(const CUDA = $(pkg("052768ef-5323-5732-b1bb-66c8b64840ba", "CUDA"))))
-Core.eval(OLD, :(const KernelAbstractions = $KA))
-Core.eval(OLD, :(const Adapt = $(pkg("79e6a3ab-5dfb-504d-930d-738a2a938a0e", "Adapt"))))
-Core.eval(OLD, :(const ForwardDiff = $ForwardDiff))
-Core.eval(OLD, :(using StaticArrays, LinearAlgebra, BlackLightPlus))
-for f in ("gpu_image.jl", "gpu_pol.jl", "gpu_amr.jl", "gpu_spacetime.jl", "gpu_image_ad.jl",
-          "gpu_analytic.jl", joinpath("geodesics", "gpu_tracer.jl"))
-    Base.include(rebind, OLD, joinpath(OLD_SRC, f))
-end
+const OLD = old_device_module(:OldDevice, ("gpu_image.jl", "gpu_pol.jl", "gpu_amr.jl",
+                                           "gpu_spacetime.jl", "gpu_image_ad.jl", "gpu_analytic.jl",
+                                           joinpath("geodesics", "gpu_tracer.jl")))
 
 old_hosts(nd) = [OLD.HostDevice(k) for k in 1:nd]
 

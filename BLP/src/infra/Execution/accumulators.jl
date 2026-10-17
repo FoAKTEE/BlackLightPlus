@@ -64,15 +64,20 @@ escape direction `d`: band `k` is `[θ_k − Δ, θ_k + Δ]` clipped to `[0, π]
 `θ_k = incl_deg[k]` and `Δ = half_width_deg` (degrees), solid angle
 `2π (cos lo − cos hi)`. Bands may overlap; a photon is recorded in every band that
 contains it and in the all-sky row `N + 1`; a direction with `|d| ≤ 0` is not recorded.
+Fields: the definition `incl_deg`, `half_width_deg` and the clipped edges `lo`, `hi`
+(radians).
 """
 struct InclinationBands{N} <: Bands
+    incl_deg::NTuple{N,Float64}
+    half_width_deg::Float64
     lo::NTuple{N,Float64}
     hi::NTuple{N,Float64}
 end
 function InclinationBands(incl_deg, half_width_deg::Real)
     cen = Tuple(Float64.(incl_deg))
     hw = deg2rad(Float64(half_width_deg))
-    return InclinationBands(map(c -> clamp(deg2rad(c) - hw, 0.0, π), cen),
+    return InclinationBands(cen, Float64(half_width_deg),
+                            map(c -> clamp(deg2rad(c) - hw, 0.0, π), cen),
                             map(c -> clamp(deg2rad(c) + hw, 0.0, π), cen))
 end
 
@@ -231,11 +236,13 @@ The host spectrum of escaped superphotons, rounded once per cell from
 [`ExactBins`](@ref): `count`, `sumw` (`Σ w`) and `sumwE` (`Σ w E`, mₑc²) are
 `n_bands × n_ebins` matrices; frequency bin `i` is centred at
 `exp(lnu_min + (i − 1/2) dlnu)`; `dOmega[j]` is the solid angle of row `j`; `total_row`
-is 0 when the rows partition the sky, else the all-sky row. Accessors:
-[`nu_centers`](@ref), [`nuLnu`](@ref), [`nuLnu_total`](@ref), [`nuLnu_solid`](@ref),
-[`total_power`](@ref), [`total_weight`](@ref), [`mean_energy`](@ref), [`band`](@ref).
+is 0 when the rows partition the sky, else the all-sky row. `plan` and `run` are the
+plan and the run record of the product that made the spectrum (`nothing` for one made
+from bins directly). Accessors: [`nu_centers`](@ref), [`nuLnu`](@ref),
+[`nuLnu_total`](@ref), [`nuLnu_solid`](@ref), [`total_power`](@ref),
+[`total_weight`](@ref), [`mean_energy`](@ref), [`band`](@ref).
 """
-struct Spectrum
+struct Spectrum{P,R}
     nu_min::Float64
     nu_max::Float64
     lnu_min::Float64
@@ -247,32 +254,35 @@ struct Spectrum
     sumwE::Matrix{Float64}
     dOmega::Vector{Float64}
     total_row::Int
+    plan::P
+    run::R
 end
 
 """
-    Spectrum(bins::ExactBins) -> Spectrum
+    Spectrum(bins::ExactBins; plan = nothing, run = nothing) -> Spectrum
 
-The spectrum of `bins`, each cell's exact sums rounded once to nearest Float64. Throws
-if a cell holds more than `XSUM_MAX_ADDENDS` addends or device twins await
-[`gather!`](@ref).
+The spectrum of `bins`, each cell's exact sums rounded once to nearest Float64, with the
+provenance `plan` and `run`. Throws if a cell holds more than `XSUM_MAX_ADDENDS` addends
+or device twins await [`gather!`](@ref).
 """
-function Spectrum(b::ExactBins)
+function Spectrum(b::ExactBins; plan = nothing, run = nothing)
     pending(b) && error("Spectrum: device twins pending; call gather!(bins) first")
     maximum(b.count; init = 0) <= XSUM_MAX_ADDENDS ||
         error("Spectrum: a cell exceeds $(XSUM_MAX_ADDENDS) addends")
     return Spectrum(b.nu_min, b.nu_max, b.lnu_min, b.dlnu, b.n_ebins, nrows(b.bands),
                     Matrix{Int}(b.count), xsum_round_all(b.sumw), xsum_round_all(b.sumwE),
-                    solid_angles(b.bands), total_row(b.bands))
+                    solid_angles(b.bands), total_row(b.bands), plan, run)
 end
 
 """
     band(spec::Spectrum, j) -> Spectrum
 
-The one-row spectrum of row `j` of `spec`, with solid angle `spec.dOmega[j]`.
+The one-row spectrum of row `j` of `spec`, with solid angle `spec.dOmega[j]` and the
+provenance of `spec`.
 """
 band(s::Spectrum, j::Integer) =
     Spectrum(s.nu_min, s.nu_max, s.lnu_min, s.dlnu, s.n_ebins, 1, s.count[j:j, :],
-             s.sumw[j:j, :], s.sumwE[j:j, :], [s.dOmega[j]], 0)
+             s.sumw[j:j, :], s.sumwE[j:j, :], [s.dOmega[j]], 0, s.plan, s.run)
 
 # The all-sky part of a spectrum: every row, or the total row.
 sky(s::Spectrum) = s.total_row == 0 ? s : band(s, s.total_row)
@@ -401,9 +411,12 @@ end
 
 """
     scalar(s::ExactScalars, k) -> Float64
+    scalar(s::ExactScalars, ks::AbstractVector{<:Integer}) -> Float64
 
-Scalar `k` rounded once to nearest Float64. Throws when it holds more than
-`XSUM_MAX_ADDENDS` addends or device twins await [`gather!`](@ref).
+Scalar `k` rounded once to nearest Float64; with a list `ks`, the exact sum of the
+scalars `ks` (the stripes of one quantity, kept in several cells so that concurrent
+atomics hit different addresses), rounded once. Throws when the sum holds more than `XSUM_MAX_ADDENDS` addends or device
+twins await [`gather!`](@ref).
 """
 function scalar(s::ExactScalars, k::Integer)
     pending(s) && error("scalar: device twins pending; call gather!(scalars) first")
@@ -411,8 +424,16 @@ function scalar(s::ExactScalars, k::Integer)
     return xsum_round(view(s.acc, :, k))
 end
 
-"Number of addends of scalar `k`."
+function scalar(s::ExactScalars, ks::AbstractVector{<:Integer})
+    pending(s) && error("scalar: device twins pending; call gather!(scalars) first")
+    addends(s, ks) <= XSUM_MAX_ADDENDS ||
+        error("exact scalars $ks exceed $(XSUM_MAX_ADDENDS) addends")
+    return xsum_round(vec(sum(view(s.acc, :, ks); dims = 2)))
+end
+
+"Number of addends of scalar `k`, or of the scalars `ks` together."
 addends(s::ExactScalars, k::Integer) = Int(s.n[k])
+addends(s::ExactScalars, ks::AbstractVector{<:Integer}) = Int(sum(view(s.n, ks)))
 
 """
     ChildBuffer(T, capacity, layout::MCStreamLayout)

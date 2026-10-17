@@ -16,7 +16,8 @@ hand. Fields:
   plasma);
 - `mode`, the transfer mode (`StokesI()` or `IQUV()`);
 - `params::TransferParams`, units, electron model, cuts, nonthermal populations and
-  frequency;
+  frequency (`nothing` for the Monte Carlo sphere, whose plasma is cgs and whose
+  coordinates are centimetres);
 - `camera::PlaneParallelCamera`, `frame::CameraFrame{Float64}` and `pixels`, the
   `PixelGrid` of the camera's pixel centres;
 - `budget::MarchBudget{Float64}` (`C`, `escape`, `R_em`, `max_steps`) and
@@ -66,9 +67,14 @@ npixels(plan::Plan) = npixels(plan.camera)
     output_type(plan::Plan) -> Type
 
 Per-pixel value type of the plan's imaging march: `Float64` for `StokesI`,
-`SVector{4,Float64}` for `IQUV`.
+`SVector{4,Float64}` for `IQUV`. A plan without a parameter set (the Monte Carlo
+sphere's) has none: `ArgumentError`.
 """
-output_type(plan::Plan) = output_type(plan.mode, plan.params)
+function output_type(plan::Plan)
+    plan.params === nothing &&
+        throw(ArgumentError("imaging needs a parameter set: prepare the plan from a RunConfig"))
+    return output_type(plan.mode, plan.params)
+end
 
 function Base.show(io::IO, plan::Plan)
     c = plan.camera

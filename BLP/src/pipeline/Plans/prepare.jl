@@ -57,6 +57,24 @@ function prepare(cfg::RunConfig; spacetime, matter, mode::TransferMode = IQUV(),
     spacetime isa Spacetime{Float64} ||
         throw(ArgumentError("prepare: the spacetime must have Float64 scalars; got " *
                             "$(typeof(spacetime))"))
+    return plan_of(cfg, spacetime, matter, mode, lanes, Int(tile), transfer_params(cfg))
+end
+
+"""
+    prepare(sphere::UniformSphere) -> Plan
+
+The plan of the Monte Carlo sphere: the flat spacetime `Minkowski()` with `sphere` as its
+matter, in centimetres. The coordinates are cm and the parameter set is `nothing`: the
+sphere's plasma is given in cgs and reads no units, electron model or cuts, and the
+Monte Carlo opacities of a plan without a parameter set take one centimetre per
+coordinate length. The configuration is `RunConfig()`; its camera, march budget and
+queue are not read by the Monte Carlo, and a plan without a parameter set is not imaged.
+"""
+prepare(sphere::UniformSphere) =
+    plan_of(RunConfig(), Minkowski(), sphere, StokesI(), Lanes(), 16, nothing)
+
+# The plan of `cfg` on `spacetime` through `matter` with the parameter set `params`.
+function plan_of(cfg::RunConfig, spacetime, matter, mode, lanes, tile::Int, params)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
     escape = cfg.escape_factor * cfg.camera.distance
@@ -65,8 +83,8 @@ function prepare(cfg::RunConfig; spacetime, matter, mode::TransferMode = IQUV(),
     stg, bg = geodesic_lane(spacetime, budget, lanes)
     curve = scheduling_curve(spacetime, cam)
     queue = isempty(curve[1]) ? collect(1:npixels(cam)) :
-            cost_order(curve, cam.fov, cam.npix; tile = Int(tile))
-    return Plan(cfg, spacetime, stg, matter, mode, transfer_params(cfg), cam, CameraFrame(cam),
+            cost_order(curve, cam.fov, cam.npix; tile = tile)
+    return Plan(cfg, spacetime, stg, matter, mode, params, cam, CameraFrame(cam),
                 PixelGrid(cam.fov, cam.npix), budget, bg, horizon_of(spacetime), escape, R_em,
                 deg2rad(cfg.camera.inclination_deg), curve, lanes, queue,
                 rescue_set(spacetime, curve, cam, lanes))

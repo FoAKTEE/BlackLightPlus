@@ -71,6 +71,8 @@ function imaging_program(plan::Plan, st_g, budget_g; mode = plan.mode, params = 
                          gen = plan.pixels)
     plan.provider === nothing &&
         throw(ArgumentError("imaging needs matter: prepare the plan with `matter = …`"))
+    params === nothing &&
+        throw(ArgumentError("imaging needs a parameter set: prepare the plan from a RunConfig"))
     return ImagingProgram(mode, plan.spacetime, SpacetimeMarch(st_g, budget_g), plan.provider,
                           params, plan.frame, CameraRays(plan.spacetime, plan.frame, gen))
 end
@@ -279,6 +281,204 @@ function (p::AnalyticProgram)(item, i, Ib, rs, ts, phis, rsgn)
 end
 
 stack_bytes(::AnalyticProgram) = 32 * 1024
+
+# ---------------------------------------------------------------- Monte Carlo
+
+"Stripes of the Monte Carlo ledger: the program of item `g` adds to stripe `(g − 1) mod LEDGER_STRIPES`, so the atomics of one quantity spread over that many cells."
+const LEDGER_STRIPES = 64
+
+# The quantities of the Monte Carlo ledger, scalar `LEDGER_SLOTS s + k` of stripe `s`.
+const LEDGER_SLOTS = 6
+const SPAWNED = 1                  # weight spawned into children
+const SPAWNED_BY_PRIMARIES = 2     # weight spawned by primaries
+const SCATTER_LOSS = 3             # incident weight lost to scattering, Σ w (1 − e^{−dτ_s})
+const PRIMARY_WEIGHT = 4           # weight of the primaries (scattering runs)
+const ESCAPED = 5                  # Σ w E of the escaped photons; addends: their number
+const EMITTED = 6                  # Σ w E of the primaries at emission
+
+"""
+    mc_ledger() -> ExactScalars
+
+The exact scalars of a Monte Carlo run: `LEDGER_STRIPES` stripes of six quantities, the
+weight spawned into children, the weight spawned by primaries, the incident weight lost
+to scattering, the weight of the primaries (these four from `tally!`, so with
+scattering only), `Σ w E` of the escaped photons and `Σ w E` of the primaries at
+emission. Read a quantity with [`ledger_sum`](@ref) and [`ledger_count`](@ref).
+"""
+mc_ledger() = ExactScalars(LEDGER_SLOTS * LEDGER_STRIPES)
+
+# The scalars of quantity `k` in every stripe.
+ledger_scalars(k::Integer) = k:LEDGER_SLOTS:(LEDGER_SLOTS * LEDGER_STRIPES)
+
+"""
+    ledger_sum(ledger, k) -> Float64
+
+The exact total of quantity `k` of a [`mc_ledger`](@ref) over its stripes, rounded once.
+"""
+ledger_sum(l::ExactScalars, k::Integer) = scalar(l, ledger_scalars(k))
+
+"""
+    ledger_count(ledger, k) -> Int
+
+The number of additions to quantity `k` of a [`mc_ledger`](@ref) over its stripes.
+"""
+ledger_count(l::ExactScalars, k::Integer) = addends(l, ledger_scalars(k))
+
+"""
+    MCSink(ctl, orders, children, ledger[, stripe = 0])
+
+The sink of the Monte Carlo programs over the exact accumulators: an escaped photon of
+scattering order `n` is recorded into `orders[min(n, K) + 1]` (`orders` a tuple of
+`K + 1` `ExactBins`) with the direction `escape_direction(ctl, sph)` and its `w E` into
+the escaped power of `ledger` (a [`mc_ledger`](@ref)); a child goes to the `ChildBuffer`
+`children` (`nothing` without scattering); the scattering ledger of `tally!` goes to the
+first four quantities of `ledger`. Every addition goes to stripe `stripe`. `isbits` after
+`Adapt.adapt`; writes through atomics only.
+"""
+struct MCSink{C,O,K,L} <: Sink
+    ctl::C
+    orders::O
+    children::K
+    ledger::L
+    stripe::Int
+end
+MCSink(ctl, orders, children, ledger) = MCSink(ctl, orders, children, ledger, 0)
+Adapt.@adapt_structure MCSink
+
+# The sink of item `item`: its ledger stripe.
+@inline at_stripe(s::MCSink, item::Integer) =
+    MCSink(s.ctl, s.orders, s.children, s.ledger, (Int(item) - 1) % LEDGER_STRIPES)
+
+@inline add_ledger!(s::MCSink, k::Int, x) =
+    Execution.add!(s.ledger, s.stripe * LEDGER_SLOTS + k, Float64(x))
+
+@inline function record!(s::MCSink, sph::Superphoton)
+    k = min(Int(sph.nscatt), length(s.orders) - 1) + 1
+    Execution.record!(s.orders[k], sph.E, sph.w, escape_direction(s.ctl, sph))
+    add_ledger!(s, ESCAPED, sph.w * sph.E)
+    return nothing
+end
+
+@inline spawn!(s::MCSink, child, rng, event) = Execution.spawn!(s.children, child, rng, event)
+
+@inline function tally!(s::MCSink, sph, loss, spawned)
+    add_ledger!(s, SPAWNED, spawned)
+    if sph.nscatt == 0
+        add_ledger!(s, SPAWNED_BY_PRIMARIES, spawned)
+        add_ledger!(s, PRIMARY_WEIGHT, sph.w)
+    end
+    add_ledger!(s, SCATTER_LOSS, loss)
+    return nothing
+end
+
+"""
+    MCTransport(ctl, st, provider, opac, absorb, scatter)
+
+The fixed inputs of every march of a Monte Carlo run: the control `ctl` (`FlatMarch` or
+`CurvedMarch`), the spacetime `st`, the plasma `provider`, the `Opacities` `opac` and the
+compile-time switches `absorb` and `scatter` (`Val`s) of `track!`.
+"""
+struct MCTransport{C,S,P,O,A,B}
+    ctl::C
+    st::S
+    provider::P
+    opac::O
+    absorb::A
+    scatter::B
+end
+Adapt.@adapt_structure MCTransport
+
+@inline transport!(t::MCTransport, sph, rng, sink) =
+    track!(t.ctl, t.st, t.provider, t.opac, sph, rng, sink; absorb = t.absorb,
+           scatter = t.scatter)
+
+"""
+    SphereSource(sphere, tables)
+
+The primaries of the uniform sphere: every item is `generate(sphere, tables, rng)`, an
+emission point uniform in the ball and the photon of the sphere's zone there, drawn
+against the `GenerationTables` `tables`.
+"""
+struct SphereSource{S,T}
+    sphere::S
+    tables::T
+end
+Adapt.@adapt_structure SphereSource
+
+@inline emit(s::SphereSource, item, rng) = generate(s.sphere, s.tables, rng)
+
+"""
+    ZoneSource(zones, weights, dnmax, offset, lint)
+
+The primaries of a zone list: primary `g` belongs to the zone `z` with
+`offset[z] < g ≤ offset[z + 1]` and is generated from `zones[z]` with the shared weight
+table `weights` and the zone's envelope `dnmax[z]`; `lint` is `nothing` (exact
+generation) or the matrix whose column `z` is the zone's tabulated `log ∫ j_ν dΩ` on the
+weight nodes (tabulated generation).
+"""
+struct ZoneSource{Z,W,D,F,L}
+    zones::Z
+    weights::W
+    dnmax::D
+    offset::F
+    lint::L
+end
+Adapt.@adapt_structure ZoneSource
+
+@inline zone_int_jnu(::Nothing, w, z) = nothing
+@inline zone_int_jnu(lint::AbstractMatrix, w, z) = IntJnuTable(w.lnu_min, w.dlnu, view(lint, :, z))
+
+@inline function emit(s::ZoneSource, item, rng)
+    z = searchsortedfirst(s.offset, item) - 1
+    tables = GenerationTables(s.weights, @inbounds(s.dnmax[z]), zone_int_jnu(s.lint, s.weights, z))
+    return generate(@inbounds(s.zones[z]), tables, rng)
+end
+
+"""
+    MCPrimary(source, transport, sink, seed)
+
+One primary superphoton of a Monte Carlo run, called as `prog(item, i)` without outputs:
+item `g` draws the stream `primary_rng(seed, g)`, is emitted by `source`
+([`SphereSource`](@ref), [`ZoneSource`](@ref)), adds its `w E` to the emitted power of the
+ledger and is tracked by the [`MCTransport`](@ref) `transport` into the
+[`MCSink`](@ref) `sink` (ledger stripe of item `g`).
+"""
+struct MCPrimary{G,T,K} <: Function
+    source::G
+    transport::T
+    sink::K
+    seed::UInt32
+end
+Adapt.@adapt_structure MCPrimary
+
+function (p::MCPrimary)(item, i)
+    sink = at_stripe(p.sink, item)
+    sph, rng = emit(p.source, item, primary_rng(p.seed, item))
+    add_ledger!(sink, EMITTED, sph.w * sph.E)
+    transport!(p.transport, sph, rng, sink)
+    return nothing
+end
+
+"""
+    MCLayer(photons, rngs, transport, sink)
+
+One scattered child of a layer of the layered scattering loop, called as `prog(item, i)`
+without outputs: item `j` tracks `photons[j]` on its genealogy stream `rngs[j]` by the
+[`MCTransport`](@ref) `transport` into the [`MCSink`](@ref) `sink` (ledger stripe of
+item `j`).
+"""
+struct MCLayer{V,R,T,K} <: Function
+    photons::V
+    rngs::R
+    transport::T
+    sink::K
+end
+Adapt.@adapt_structure MCLayer
+
+function (p::MCLayer)(item, i)
+    @inbounds transport!(p.transport, p.photons[item], p.rngs[item], at_stripe(p.sink, item))
+    return nothing
+end
 
 # ---------------------------------------------------------------- host-only programs
 
