@@ -320,7 +320,8 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
   `nothing`, or writes through atomics when it has no outputs. `i` is the item under
   threads and the position in the chunk on a device; after `foreach_item!`,
   `outs[k][item]` holds the outputs of `item`, bitwise the same whatever the executor,
-  chunk size, device count, lane scheduling or `order`.
+  chunk size, device count, lane scheduling or `order` on one hardware (threads and host
+  pools, or any number of CUDA devices); CPU and GPU outputs differ in their last bits (§6).
 - **Threads.** `ThreadedExecutor` cuts the items into chunks of `chunk` and hands them to
   threads dynamically (`Threads.@threads :dynamic`); each item calls the host program with
   the host arrays. This is the only `Threads.@threads` over items.
@@ -477,9 +478,10 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
 | `variants(plan, mass_scales; backend)` | `(images, mass_scales, plan, run)` | grid providers |
 | `mc_spectrum(plan, Ns; scattering = false, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | a sphere plan, or grid matter on a stationary spacetime (inclination bands only) |
 
-- Determinism: every imaging product is bitwise per item, whatever the executor, device
-  count, chunking or queue order; `render_amr`'s visited blocks, mosaic, level map and ray
-  count are independent of the completion order; `mc_spectrum` is a bitwise reduction.
+- Determinism: on one hardware every imaging product is bitwise per item, whatever the
+  executor, device count, chunking or queue order; `render_amr`'s visited blocks, mosaic,
+  level map and ray count are independent of the completion order; `mc_spectrum` is a
+  bitwise reduction. Across hardware (CPU against GPU) the results agree to round-off (§6).
 - Every product resolves `backend` with `resolve` (`nothing`: the session default) and
   records `run = (executor = describe(exec), lanes, version, seconds)` in its result, or in
   its `image` for `render_amr` and `sensitivity`; `render(plan, coords)` returns the bare
@@ -512,8 +514,8 @@ sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
 `ExactScalars`, and scattered children into a `ChildBuffer` that the next layer tracks,
 up to `max_scatt` layers; a layer whose buffer overflows is rerun at the counted
 capacity. `gather!` follows every `foreach_item!` and `Spectrum(bins)` rounds once per
-cell, so the bins, the ledger and the children depend only on the plan, `Ns` and the
-keywords, whatever the executor, thread count, device count or chunking.
+cell, so on one hardware the bins, the ledger and the children depend only on the plan,
+`Ns` and the keywords, whatever the executor, thread count, device count or chunking.
 `analytic_nuLnu(sphere, nu)` is the thin sphere's closed form and `incl_nuLnu(result)`
 the isotropic-equivalent spectra of the bands.
 
@@ -610,8 +612,10 @@ reference drivers and BLP on the same device list, so an old-against-new compari
 the GPU itself is the same script. On the A100 the reference device drivers and BLP are
 bitwise equal on every path, the Monte Carlo spectra included. A pool on the GPU against
 threads on the CPU is held at tolerance, not bitwise (`Decks.CROSS_HARDWARE`): the two
-targets contract floating-point operations differently, and the images differ in their
-last bits (about 1e-13 of the maximum; the exact Monte Carlo sums by 1e-16).
+targets contract floating-point operations differently: the images differ by 1e-13 to
+3e-10 of their maximum on the oracle and production decks, and the exact Monte Carlo sums
+by 1e-16 (thin sphere) to 2e-12 (third scattering order) with equal photon counts.
+Timings of both targets are in `BLP/bench/`.
 
 ## 7. Public API
 
