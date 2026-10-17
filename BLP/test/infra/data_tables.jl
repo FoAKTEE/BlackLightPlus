@@ -13,8 +13,7 @@ using BLP.Data: load_hotcross, build_hotcross_table, build_weight_table,
                 build_zone_emission_table, zone_counts, build_int_jnu_table, zone_int_jnu_tables
 
 const DK = Main.Decks
-const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
-                         "/data/haiyangw/claude/Mahakala/ref-code/gpumonty/table/hotcross.dat")
+const HOTCROSS_DAT = DK.HOTCROSS_DAT
 
 @testset "Data: Monte Carlo tables" begin
     @testset "hot-cross table" begin

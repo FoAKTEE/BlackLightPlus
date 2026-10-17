@@ -26,6 +26,15 @@ const Adapt = Base.require(Base.PkgId(Base.UUID("79e6a3ab-5dfb-504d-930d-738a2a9
 const ForwardDiff = Base.require(Base.PkgId(Base.UUID("f6369f11-7733-5829-9624-2563aa707210"),
                                             "ForwardDiff"))
 
+"""
+Path of the gpumonty `hotcross.dat` reference table: `BLP_REF_GPUMONTY` when set, else the
+table of a `Mahakala` checkout beside this repository. Tests that need it skip when it is
+absent.
+"""
+const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
+                         normpath(joinpath(@__DIR__, "..", "..", "..", "Mahakala", "ref-code",
+                                           "gpumonty", "table", "hotcross.dat")))
+
 "Bit pattern of every number in `x`; equal patterns mean bitwise-identical output, NaN and -0.0 included. A `ForwardDiff.Dual` contributes its value and then its partials."
 bits(x::AbstractArray{<:Real}) = reinterpret(UInt64, Float64.(vec(x)))
 bits(x::ForwardDiff.Dual) = vcat(bits(ForwardDiff.value(x)), bits(collect(ForwardDiff.partials(x))))

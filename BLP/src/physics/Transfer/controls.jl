@@ -16,6 +16,8 @@ struct SpacetimeMarch{S,T}
     st::S
     budget::MarchBudget{T}
 end
+# The control reaches a device with its spacetime adapted (an ADM grid carries its data array).
+Adapt.adapt_structure(to, c::SpacetimeMarch) = SpacetimeMarch(Adapt.adapt(to, c.st), c.budget)
 
 """
     StoredPath{S,V,D}(st, ys, dls)

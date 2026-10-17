@@ -30,8 +30,7 @@ function mj_integral(theta_e)
     return acc
 end
 
-const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
-                         "/data/haiyangw/claude/Mahakala/ref-code/gpumonty/table/hotcross.dat")
+const HOTCROSS_DAT = Main.Decks.HOTCROSS_DAT
 
 @testset "Monte Carlo hot cross section" begin
     @testset "Klein–Nishina total" begin

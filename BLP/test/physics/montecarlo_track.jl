@@ -19,8 +19,7 @@ using BLP.Data: build_weight_table, load_hotcross
 
 const DK = Main.Decks
 const SPH = UniformSphere()
-const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
-                         "/data/haiyangw/claude/Mahakala/ref-code/gpumonty/table/hotcross.dat")
+const HOTCROSS_DAT = DK.HOTCROSS_DAT
 
 # A photon of energy E at x travelling along the unit direction n, flat coordinates.
 flat_photon(x, n, E; w = 1.0) = Superphoton(SVector(0.0, x...), ETA * SVector(E, (E .* n)...), w)

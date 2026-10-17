@@ -15,10 +15,6 @@ The value written for an item whose ray has no positive-energy null root at the 
 @inline invalid(::Type{T}) where {T<:Real} = T(NaN)
 @inline invalid(::Type{SVector{K,T}}) where {K,T} = SVector{K,T}(ntuple(_ -> invalid(T), Val(K)))
 
-# A fixed-control march reaches a device with its spacetime adapted (an ADM grid carries
-# its data array).
-Adapt.adapt_structure(to, c::SpacetimeMarch) = SpacetimeMarch(Adapt.adapt(to, c.st), c.budget)
-
 # The initial state of `item`'s ray, compiled as a function of its own: the ray's
 # arithmetic (and the floating-point contractions the compiler chooses in it) does not
 # depend on the program it feeds, so a pixel's ray is the one `camera_ray` makes on the

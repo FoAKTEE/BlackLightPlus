@@ -21,8 +21,7 @@ using BLP.Data: build_int_jnu_table, load_hotcross
 
 const DK = Main.Decks
 const EXEC = ThreadedExecutor(chunk = 4096)
-const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
-                         "/data/haiyangw/claude/Mahakala/ref-code/gpumonty/table/hotcross.dat")
+const HOTCROSS_DAT = DK.HOTCROSS_DAT
 
 analytic_nuLnu(s, nu) = nu * s.dV * int_jnu_zone(s.n_e, s.theta_e, s.B, nu)
 

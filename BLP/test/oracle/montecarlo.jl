@@ -62,8 +62,7 @@ load_old!(DEV, "montecarlo/mc_gpu.jl", (:_mc_gen_int_jnu, :_mc_gen_sphere_photon
                                         :_mc_nu_alpha_scatt_dev, :_mc_scatter_mom,
                                         :_mc_march_scatter!))
 
-const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
-                         "/data/haiyangw/claude/Mahakala/ref-code/gpumonty/table/hotcross.dat")
+const HOTCROSS_DAT = DK.HOTCROSS_DAT
 
 # ------------------------------------------------------------------ the torus in both packages
 
