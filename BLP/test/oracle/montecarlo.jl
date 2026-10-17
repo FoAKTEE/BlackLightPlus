@@ -460,7 +460,8 @@ limb_bytes(b) = vcat(reinterpret(UInt8, vec(b.count)), reinterpret(UInt8, vec(b.
         end
     end
 
-    if !NOFMA
+    # The no-FMA rerun concerns the host target; on CUDA devices the script runs once.
+    if !NOFMA && DK.DEVICE_KIND != "cuda"
         @testset "every comparison bitwise without FMA" begin
             cmd = `$(Base.julia_cmd()) -C generic -t 8 --project=$(Base.active_project())
                    -e "using Test; include($(repr(@__FILE__)))"`

@@ -391,7 +391,8 @@ end
     @info "Products oracle$(NOFMA ? " (no FMA)" : ""): deviations / image maximum (0 = bitwise)\n" *
           join(("$k: $v" for (k, v) in sort(collect(DEVIATIONS))), "\n")
 
-    if !NOFMA
+    # The no-FMA rerun concerns the host target; on CUDA devices the script runs once.
+    if !NOFMA && Decks.DEVICE_KIND != "cuda"
         @testset "every comparison bitwise without FMA" begin
             cmd = `$(Base.julia_cmd()) -C generic -t 8 --project=$(Base.active_project())
                    -e "using Test; include($(repr(@__FILE__)))"`
