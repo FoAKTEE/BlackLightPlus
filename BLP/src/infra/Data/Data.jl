@@ -22,6 +22,7 @@ include("athenak_bin.jl")
 include("uniform_grid.jl")
 include("series.jl")
 include("npy.jl")
+include("tables.jl")
 
 # fluid blocks and locate strategies
 export PRIM_NAMES, FluidBlocks, LeafTable, LevelHash, BlockScan, leaf_table, level_hash,
@@ -36,5 +37,8 @@ export SnapshotSeries, synthetic_series, bracketing_pair, get_frame, blend, Fram
        window, advance, SeriesProvider
 # output
 export write_npy
+# Monte Carlo tables
+export load_hotcross, build_hotcross_table, build_weight_table, build_zone_emission_table,
+       zone_counts, build_int_jnu_table, zone_int_jnu_tables
 
 end # module
