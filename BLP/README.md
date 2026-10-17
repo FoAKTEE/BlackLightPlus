@@ -74,7 +74,12 @@ julia -t 8 --project=BLP/test/oracle BLP/test/oracle/runtests.jl
 
 The first runs the suite, the structure gates included; the second compares BLP with the
 reference implementation in `src/` (instantiate `BLP/test/oracle` once). Point
-`BLP_REF_GPUMONTY` at the gpumonty `hotcross.dat` for the hot-cross comparisons.
+`BLP_REF_GPUMONTY` at the gpumonty `hotcross.dat` for the hot-cross comparisons, and set
+`BLP_TEST_DEVICES=cuda` to run the device comparisons of the oracle on the GPUs. On a
+machine whose login shell has no device access, run both commands inside the job
+scheduler's allocation, and pin the CUDA runtime in `LocalPreferences.toml`
+(`[CUDA_Runtime_jll] version = "13.3"`) so the runtime JLL does not have to see the
+driver when it compiles.
 
 ## Documentation
 

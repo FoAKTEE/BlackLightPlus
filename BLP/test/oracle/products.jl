@@ -38,7 +38,9 @@ const OLD = old_device_module(:OldDevice, ("gpu_image.jl", "gpu_pol.jl", "gpu_am
                                            "gpu_spacetime.jl", "gpu_image_ad.jl", "gpu_analytic.jl",
                                            joinpath("geodesics", "gpu_tracer.jl")))
 
-old_hosts(nd) = [OLD.HostDevice(k) for k in 1:nd]
+# The reference pools take CUDA ordinals or its own `HostDevice`s.
+old_hosts(nd) = Decks.DEVICE_KIND == "cuda" ? [d.ordinal for d in Decks.devices(nd)] :
+                [OLD.HostDevice(k) for k in 1:nd]
 
 # ---------------------------------------------------------------- decks
 const M_BH = 6.2e9 * 1.989e33
@@ -129,7 +131,7 @@ function agree_paths(label, (s1, d1), (s2, d2))
     return dev <= MARCH_RTOL
 end
 
-const POOLS = Dict(nd => PoolExecutor(Decks.hosts(nd); lanes = 2, chunk = 7) for nd in Decks.NDEV)
+const POOLS = Dict(nd => PoolExecutor(Decks.devices(nd); lanes = 2, chunk = 7) for nd in Decks.NDEV)
 const OPOOLS = Dict(nd => OLD.DevicePool(old_hosts(nd); lanes = 2, chunk = 7) for nd in Decks.NDEV)
 
 """
@@ -172,7 +174,7 @@ function report(label, new, old)
     return d <= MARCH_RTOL
 end
 
-@testset "oracle: Products$(NOFMA ? " (no FMA)" : "")" begin
+@testset "oracle: Products$(NOFMA ? " (no FMA)" : "")$(Decks.DEVICE_KIND == "cuda" ? " (CUDA)" : "")" begin
     oc = old_cfg()
     dev1 = old_hosts(1)
 
@@ -180,7 +182,7 @@ end
             (name, matter) in (("uniform grid", GRID), ("blocks", SNAP)), mode in (StokesI(), IQUV())
         p = plan(matter; mode)
         ref = bits(planes(render(p; backend = :cpu)))
-        @test bits(planes(render(p; backend = :host_pool))) == ref
+        @test bits(planes(render(p; backend = Decks.POOL_BACKEND))) == ref
         @test all(bits(planes(render(p; backend = POOLS[nd]))) == ref for nd in Decks.NDEV)
         @test count(!iszero, render(p; backend = :cpu).I) > RES^2 ÷ 4
     end
@@ -191,8 +193,8 @@ end
                                        (SNAP, () -> OLD.render_gpu_amr(oc, OSNAP; devices = dev1),
                                         () -> OLD.render_gpu_amr_polarized(oc, OSNAP; devices = dev1)))
             lab = matter === GRID ? "uniform" : "blocks"
-            @test agree("$lab I", render(plan(matter; mode = StokesI()); backend = :host_pool).I, ofused())
-            @test agree("$lab IQUV", planes(render(plan(matter); backend = :host_pool)), oplanes(opol());
+            @test agree("$lab I", render(plan(matter; mode = StokesI()); backend = Decks.POOL_BACKEND).I, ofused())
+            @test agree("$lab IQUV", planes(render(plan(matter); backend = Decks.POOL_BACKEND)), oplanes(opol());
                         contracted = true)
         end
         # the old pools over 1, 2, 3, 5 host devices render the same image
@@ -219,7 +221,7 @@ end
         coords = [(-7.3, 2.1), (0.4, -5.5), (3.3, 3.3), (10.0, -1.0), (-2.2, -9.9), (0.05, 6.0)]
         ocam = BlackLightPlus.PlaneParallelCamera(60.0, 1000.0, 24.0, RES)
         rays = BlackLightPlus.camera_rays_at(OG.KerrSchildCartesian(0.9), ocam, coords)
-        @test agree("coords I", render(plan(SNAP; mode = StokesI()), coords; backend = :host_pool),
+        @test agree("coords I", render(plan(SNAP; mode = StokesI()), coords; backend = Decks.POOL_BACKEND),
                     OLD.march_rays_gpu_amr(oc, OSNAP, rays; devices = dev1))
         @test agree("coords IQUV", render(plan(SNAP), coords; backend = POOLS[2]),
                     OLD.march_rays_gpu_amr(oc, OSNAP, rays; polarized = true, devices = dev1);
@@ -231,9 +233,9 @@ end
         stn = NS.SuperposedKerrSchild(m, s, c); sto = OG.SuperposedKerrSchild(m, s, c)
         scan = with_locate(SNAP.blocks, BlockScan())
         pb(mode) = prepare(new_cfg(); spacetime = stn, matter = scan, mode)
-        @test agree("binary I", render(pb(StokesI()); backend = :host_pool).I,
+        @test agree("binary I", render(pb(StokesI()); backend = Decks.POOL_BACKEND).I,
                     OLD.render_gpu_spacetime(oc, sto, OSNAP; devices = dev1))
-        @test agree("binary IQUV", planes(render(pb(IQUV()); backend = :host_pool)),
+        @test agree("binary IQUV", planes(render(pb(IQUV()); backend = Decks.POOL_BACKEND)),
                     oplanes(OLD.render_gpu_spacetime(oc, sto, OSNAP; polarized = true, devices = dev1));
                     contracted = true)
     end
@@ -241,11 +243,11 @@ end
     @testset "slow light" begin
         win = FrameWindow(GRID, scale_density(GRID, 1.3), 0.0, 30.0; t_obs = T_OBS)
         owin = OLD.upload_window(OGRID, OLD.scale_grid_density(OGRID, 1.3), 0.0, 30.0, dev1)
-        slowI = render(plan(win; mode = StokesI()); backend = :host_pool).I
+        slowI = render(plan(win; mode = StokesI()); backend = Decks.POOL_BACKEND).I
         @test agree("slow uniform I", slowI, OLD.render_gpu_fused_slow(oc, owin; devices = dev1, t_obs = T_OBS))
         fastI = render(plan(GRID; mode = StokesI()); backend = :cpu).I
         @test maximum(abs.(slowI .- fastI)) > 1e-3 * maximum(fastI)
-        @test agree("slow uniform IQUV", planes(render(plan(win); backend = :host_pool)),
+        @test agree("slow uniform IQUV", planes(render(plan(win); backend = Decks.POOL_BACKEND)),
                     oplanes(OLD.render_gpu_polarized_slow(oc, owin; devices = dev1, t_obs = T_OBS));
                     contracted = true)
         series = synthetic_series(SNAP; times = [0.0, 30.0], t_obs = 15.0,
@@ -254,9 +256,9 @@ end
         oawin = OLD.DeviceAMRWindow(OLD.upload_amr(OSNAP, dev1; upload_bounds = false),
                                     OLD.upload_amr(old_snapshot(scale_density(SNAP, 1.3)), dev1;
                                                    upload_bounds = false), 0.0, 1 / 30)
-        @test agree("slow blocks I", render(plan(awin; mode = StokesI()); backend = :host_pool).I,
+        @test agree("slow blocks I", render(plan(awin; mode = StokesI()); backend = Decks.POOL_BACKEND).I,
                     OLD.render_gpu_amr_slow(oc, oawin; devices = dev1, t_obs = T_OBS))
-        @test agree("slow blocks IQUV", planes(render(plan(awin); backend = :host_pool)),
+        @test agree("slow blocks IQUV", planes(render(plan(awin); backend = Decks.POOL_BACKEND)),
                     oplanes(OLD.render_gpu_amr_polarized_slow(oc, oawin; devices = dev1, t_obs = T_OBS));
                     contracted = true)
     end
@@ -266,12 +268,12 @@ end
                               (SNAP, () -> OLD.render_gpu_amr(oc, OSNAP; devices = dev1, precision = :mixed)))
             p = plan(matter; mode = StokesI(), lanes = MixedLanes())
             @test !isempty(p.rescue)
-            img = render(p; backend = :host_pool).I
+            img = render(p; backend = Decks.POOL_BACKEND).I
             @test agree("mixed I", img, old())
             @test bits(render(p; backend = :cpu).I) == bits(img)
         end
         p = plan(SNAP; lanes = MixedLanes())
-        @test agree("mixed IQUV", planes(render(p; backend = :host_pool)),
+        @test agree("mixed IQUV", planes(render(p; backend = Decks.POOL_BACKEND)),
                     oplanes(OLD.render_gpu_amr_polarized(oc, OSNAP; devices = dev1, precision = :mixed));
                     contracted = true)
     end
@@ -301,7 +303,7 @@ end
                                      excise = x -> OG.ks_radius(ko, x) < OG.horizon_radius(ko))
         for (stn, sto, d, fov) in ((kn, ko, 1000.0, 24.0), (gn, go, 15.0, 16.0))
             p = prepare(new_cfg(res = 10, d = d, fov = fov); spacetime = stn, matter = nothing)
-            sh = shadow(p; backend = :host_pool)
+            sh = shadow(p; backend = Decks.POOL_BACKEND)
             @test bits(sh.null_error) == bits(shadow(p; backend = :cpu).null_error)
             rays = BlackLightPlus.camera_rays(sto, BlackLightPlus.PlaneParallelCamera(60.0, d, fov, 10))
             st, ns, mn, rf, yf = OLD.trace_shadow_gpu(sto, rays; C = 80.0, escape = 1.1 * d,
@@ -316,7 +318,7 @@ end
     @testset "sensitivity and variants" begin
         p = plan(GRID; mode = StokesI())
         for param in (:mass_scale, :rat_high)
-            s = sensitivity(p, param; backend = :host_pool)
+            s = sensitivity(p, param; backend = Decks.POOL_BACKEND)
             img, dimg, flux, dflux = OLD.render_gpu_fused_grad(oc, OGRID, param; devices = dev1)
             # the seeded electron model is Dual in every field (only `rat_high` carries a
             # partial), so its value lane runs other code than the plain march: contracted
@@ -327,7 +329,7 @@ end
             @test count(!iszero, s.derivative) > RES^2 ÷ 4
         end
         ms = [MS, 2.5 * MS]
-        v = variants(p, ms; backend = :host_pool)
+        v = variants(p, ms; backend = Decks.POOL_BACKEND)
         @test agree("variants", v.images, OLD.render_gpu_fused_kvariant(oc, OGRID, ms; devices = dev1))
         @test bits(v.images) == bits(variants(p, ms; backend = POOLS[5]).images)
     end
@@ -356,7 +358,7 @@ end
         cfg16 = old_cfg(res = 16)
         p = plan(SNAP; mode, cfg = new_cfg(res = 16))
         pol = mode isa IQUV
-        new = render_amr(p; block = 4, max_level = 2, backend = :host_pool)
+        new = render_amr(p; block = 4, max_level = 2, backend = Decks.POOL_BACKEND)
         stk = OLD.AMRStokes(cfg16, OSNAP; polarized = pol, devices = old_hosts(2))
         old = BlackLightPlus.render_amr(cfg16, ""; block = 4, max_level = 2, stokes = stk)
         @test new.levels == old.levels && new.nrays == old.nrays && maximum(new.levels) >= 1
@@ -379,7 +381,7 @@ end
             @test r.run.executor.kind === :pool && length(r.run.executor.devices) == 2
             backend!(:cpu)
             @test render(p).run.executor.kind === :threads
-            @test render(p; backend = :host_pool).run.executor.kind === :pool
+            @test render(p; backend = Decks.POOL_BACKEND).run.executor.kind === :pool
             backend!(nothing)
             @test render(p).run.executor.kind === :pool
         end

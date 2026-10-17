@@ -13,7 +13,7 @@ over the exact accumulators, the primary and layer programs, and the sphere runs
 module Decks
 
 using StaticArrays
-using BLP.Execution: HostDevice
+using BLP.Execution: HostDevice, CUDADevice, select_devices
 using BLP.Data: UniformGrid, AthenaKSnapshot
 using BLP.Spacetime: CameraFrame, pixel_centres, npixels, pixel_coords, camera_ray,
                      MarchBudget, march_control, rk4_step
@@ -159,6 +159,29 @@ const NDEV = (1, 2, 3, 5)
 
 "The logical devices `HostDevice(1)`, …, `HostDevice(nd)`."
 hosts(nd) = [HostDevice(k) for k in 1:nd]
+
+"""
+The device kind of the multi-device comparisons, from `BLP_TEST_DEVICES`: `host` (the
+default) runs them on logical host devices, `cuda` on the functional CUDA devices.
+"""
+const DEVICE_KIND = get(ENV, "BLP_TEST_DEVICES", "host")
+
+"""
+    devices(nd) -> Vector
+
+The devices of an `nd`-device comparison: `hosts(nd)`, or under `BLP_TEST_DEVICES=cuda`
+the first `nd` functional CUDA devices (all of them when fewer are visible).
+"""
+function devices(nd)
+    DEVICE_KIND == "host" && return hosts(nd)
+    DEVICE_KIND == "cuda" || error("BLP_TEST_DEVICES must be host or cuda; got $DEVICE_KIND")
+    devs = select_devices(; fallback = true)
+    isempty(devs) && error("BLP_TEST_DEVICES=cuda: no functional CUDA device")
+    return devs[1:min(nd, length(devs))]
+end
+
+"The pool backend of the device comparisons: `:host_pool`, or `:gpu` under `BLP_TEST_DEVICES=cuda`."
+const POOL_BACKEND = DEVICE_KIND == "cuda" ? :gpu : :host_pool
 
 """
     DeviceLike()

@@ -603,7 +603,11 @@ julia -t 8 --project=BLP/test/oracle BLP/test/oracle/runtests.jl
 
 Its environment develops both packages (`BLP/` and the repository root). The comparisons
 with the gpumonty hot-cross table read `hotcross.dat` from the path in `BLP_REF_GPUMONTY`,
-else from a `Mahakala` checkout beside the repository, and skip when it is absent.
+else from a `Mahakala` checkout beside the repository, and skip when it is absent. The
+device comparisons of the `products`, `spectra` and `montecarlo` scripts run on logical
+host devices; with `BLP_TEST_DEVICES=cuda` they run on the functional CUDA devices, the
+reference drivers and BLP on the same device list, so an old-against-new comparison on
+the GPU itself is the same script.
 
 ## 7. Public API
 

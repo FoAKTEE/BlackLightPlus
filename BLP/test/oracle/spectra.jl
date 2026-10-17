@@ -30,10 +30,12 @@ const MARCH_RTOL = 1e-7
 const DEVIATIONS = Dict{String,Float64}()
 
 const OLD = old_device_module(:OldMCDevice, ("gpu_image.jl", joinpath("montecarlo", "mc_gpu.jl")))
-old_hosts(nd) = [OLD.HostDevice(k) for k in 1:nd]
+# The reference pools take CUDA ordinals or its own `HostDevice`s.
+old_hosts(nd) = Decks.DEVICE_KIND == "cuda" ? [d.ordinal for d in Decks.devices(nd)] :
+                [OLD.HostDevice(k) for k in 1:nd]
 
 const EXECS = (ThreadedExecutor(chunk = 4096), ThreadedExecutor(chunk = 37),
-               (PoolExecutor(Decks.hosts(nd); chunk = c) for (nd, c) in zip(Decks.NDEV, (512, 997, 300, 4096)))...)
+               (PoolExecutor(Decks.devices(nd); chunk = c) for (nd, c) in zip(Decks.NDEV, (512, 997, 300, 4096)))...)
 exec_name(e::ThreadedExecutor) = "threads chunk $(e.chunk)"
 exec_name(e::PoolExecutor) = "$(length(e.pool.devices)) host devices chunk $(e.pool.chunk)"
 
@@ -100,7 +102,7 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
     (ND.load_hotcross(Decks.HOTCROSS_DAT), OM.load_hotcross(Decks.HOTCROSS_DAT)) :
     (ND.build_hotcross_table(), OM.build_hotcross_table())
 
-@testset "oracle: Monte Carlo spectra$(NOFMA ? " (no FMA)" : "")" begin
+@testset "oracle: Monte Carlo spectra$(NOFMA ? " (no FMA)" : "")$(Decks.DEVICE_KIND == "cuda" ? " (CUDA)" : "")" begin
     tn, to = hotcross_tables()
     @test bits(tn.logsigma) == bits(to.logsigma)
 
@@ -120,7 +122,7 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
                                           n_ebins = 60, tabulated_gen = tab)
                 @test agree("thin sphere tabulated=$tab mc_spectrum_gpu $nd host devices",
                             mc_spectrum(p, Ns; seed = seed, n_ebins = 60, tabulated = tab,
-                                        backend = PoolExecutor(Decks.hosts(nd); chunk = 1999)), dev)
+                                        backend = PoolExecutor(Decks.devices(nd); chunk = 1999)), dev)
             end
         end
         wide = mc_spectrum(p, Ns; seed = 7, nu_min = 1.0e9, nu_max = 1.0e15, n_esamp = 200,
@@ -150,7 +152,7 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
             dev = OLD.mc_spectrum_gpu(so, to, Ns; devices = old_hosts(nd), chunk = 1500, seed = seed,
                                       min_capacity = 64)
             @test agree_scatter("scattering sphere mc_spectrum_gpu $nd host devices",
-                                mc_spectrum(p, Ns; kw..., backend = PoolExecutor(Decks.hosts(nd); chunk = 1500)),
+                                mc_spectrum(p, Ns; kw..., backend = PoolExecutor(Decks.devices(nd); chunk = 1500)),
                                 dev)
         end
         old2 = OM.mc_spectrum_scatter(so, to, Ns; nthreads = 2, seed = 3, max_scatt = 2,
@@ -158,7 +160,7 @@ hotcross_tables() = isfile(Decks.HOTCROSS_DAT) ?
         @test agree_scatter("scattering sphere max_scatt 2, tabulated",
                             mc_spectrum(p, Ns; kw..., seed = 3, max_scatt = 2, spec_nu_max = 1.0e16,
                                         n_ebins = 70, bands = BLP.Execution.PolarBands(3),
-                                        tabulated = true, backend = :host_pool), old2)
+                                        tabulated = true, backend = Decks.POOL_BACKEND), old2)
     end
 
     # ------------------------------------------------------------ torus

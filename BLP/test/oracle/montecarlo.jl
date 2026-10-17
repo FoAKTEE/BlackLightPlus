@@ -97,7 +97,7 @@ end
 limb_bytes(b) = vcat(reinterpret(UInt8, vec(b.count)), reinterpret(UInt8, vec(b.sumw)),
                      reinterpret(UInt8, vec(b.sumwE)))
 
-@testset "oracle: MonteCarlo$(NOFMA ? " (no FMA)" : "")" begin
+@testset "oracle: MonteCarlo$(NOFMA ? " (no FMA)" : "")$(DK.DEVICE_KIND == "cuda" ? " (CUDA)" : "")" begin
     rng = Xoshiro(20261016)
 
     @testset "emissivities and emission tetrad" begin
@@ -425,8 +425,8 @@ limb_bytes(b) = vcat(reinterpret(UInt8, vec(b.count)), reinterpret(UInt8, vec(b.
         drv = OM.mc_spectrum(so, Ns; nthreads = 3, seed = seed, n_ebins = 60)
         @test bits(old.sumwE) == bits(drv.sumwE) && old.count == drv.count
         execs = (ThreadedExecutor(chunk = 1), ThreadedExecutor(chunk = 37), ThreadedExecutor(chunk = 4096),
-                 (PoolExecutor(DK.hosts(nd); chunk = 1999) for nd in DK.NDEV)...,
-                 PoolExecutor(DK.hosts(3); chunk = 128))
+                 (PoolExecutor(DK.devices(nd); chunk = 1999) for nd in DK.NDEV)...,
+                 PoolExecutor(DK.devices(3); chunk = 128))
         for exec in execs
             b = DK.sphere_thin_bins(exec, sn, tabs, N, seed; n_ebins = 60)
             @test b.count == xs.count && b.sumw == xs.sumw && b.sumwE == xs.sumwE
