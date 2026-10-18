@@ -107,7 +107,9 @@ The `Adapt` adaptor that places one generation of a cascade into a program: ever
 `parents`, and with `scratch` every `ExactBins` and `ExactScalars` writes zeroed scratch
 arrays of the same types instead of its own: lane-resident arrays of the pool lane
 `lane`, or fresh host arrays when `lane` is `nothing`. `pairs` lists each (own, scratch)
-array pair in the order met.
+array pair in the order met; `allocated` says whether a lane array was allocated for one
+of them, at first use or because the accumulator's size or type changed, so that it is
+zeroed before the launch.
 """
 struct CascadeSwap{L,C,G}
     lane::L
@@ -115,9 +117,10 @@ struct CascadeSwap{L,C,G}
     parents::G
     scratch::Bool
     pairs::Vector{Any}
+    allocated::Base.RefValue{Bool}
 end
 CascadeSwap(lane, children, parents, scratch::Bool) =
-    CascadeSwap(lane, children, parents, scratch, Any[])
+    CascadeSwap(lane, children, parents, scratch, Any[], Ref(false))
 
 Adapt.adapt_structure(to::CascadeSwap, ::ChildBuffer) = to.children
 Adapt.adapt_structure(to::CascadeSwap, ::Generation) = to.parents
@@ -132,10 +135,18 @@ fresh_twins(::Twins) = Twins()
 fresh_twins(::Nothing) = nothing
 
 # The scratch array of the next pair. On a lane it is keyed by position, so the same
-# accumulator of every generation and call finds the same array.
+# accumulator of every generation and call finds the same array; an allocation (first use,
+# or a changed size or type) is noted in `allocated`, and the lane zeroes the scratch
+# before the launch (a drain leaves it at zero after every generation).
 function scratch!(to::CascadeSwap, a::AbstractArray{T}) where {T}
-    s = to.lane === nothing ? zeros(T, size(a)) :
-        lane_array(to.lane, (:cascade_scratch, length(to.pairs) + 1), T, size(a))
+    if to.lane === nothing
+        s = zeros(T, size(a))
+    else
+        key = (:cascade_scratch, length(to.pairs) + 1)
+        had = get(to.lane.bufs, (key, T, ndims(a)), nothing)
+        s = lane_array(to.lane, key, T, size(a))
+        s === had || (to.allocated[] = true)
+    end
     push!(to.pairs, (a, s))
     return s
 end
@@ -268,7 +279,8 @@ function run_cascade!(exec::PoolExecutor, c::Cascade, chunks)
 end
 
 # Every generation of the primaries `r` on `lane`; returns the children spawned. `fresh`
-# marks the lanes whose scratch arrays have not been zeroed in this call.
+# marks the lanes whose scratch arrays have not been zeroed in this call; a scratch array
+# allocated for a generation is zeroed before its launch as well.
 function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}, fresh)
     if c.slot === nothing
         launch!(lane, c.primary, program_twin!(twins[1], lane), r, length(r), ())
@@ -294,7 +306,7 @@ function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}
                               c.slot.layout, nothing)
             swap = CascadeSwap(lane, out, parents, !final)
             dprog = Adapt.adapt(swap, twin)
-            if !final && fresh[k]
+            if !final && (fresh[k] || swap.allocated[])
                 drain_lane!(lane, swap.pairs, false)
                 fresh[k] = false
             end

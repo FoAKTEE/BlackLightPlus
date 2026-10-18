@@ -176,4 +176,29 @@ end
         @test_throws ArgumentError foreach_cascade!(e, p0, p0, 10, 1; chunk = 0)
         @test_throws ArgumentError foreach_cascade!(e, p0, p0, 10, 1; capacity = 0)
     end
+
+    @testset "a layer with accumulators of its own" begin
+        # the layer's scratch arrays differ in size from the primary's at the same positions,
+        # so a lane reallocates them every generation: each allocation starts at zero
+        function run_split(exec; kw...)
+            bins, sc = fresh_acc()
+            bins2 = ExactBins(InclinationBands((30.0, 90.0, 100.0), 20.0); nu_min = 1.0e8,
+                              nu_max = 1.0e24, n_ebins = 30)
+            sc2 = ExactScalars(5)
+            slot = ChildBuffer(Superphoton, 0, MCStreamLayout(300, 16, 3))
+            k = foreach_cascade!(exec, Gen0(bins, sc, slot),
+                                 GenN(Generation(Superphoton[], MCRng[]), bins2, sc2, slot), 300, 2; kw...)
+            foreach(gather!, (bins, sc, bins2, sc2))
+            return (k, bins.count, bins.sumw, scalar(sc, 1), bins2.count, bins2.sumw,
+                    scalar(sc2, 2), scalar(sc2, 3))
+        end
+        ref = run_split(ThreadedExecutor(chunk = 1))
+        @test ref[1] > 0 && ref[8] > 0
+        for exec in (ThreadedExecutor(chunk = 64), PoolExecutor(DK.hosts(2); chunk = 16),
+                     PoolExecutor(DK.hosts(3)))
+            @test run_split(exec; chunk = 37) == ref
+            @test run_split(exec; chunk = 37, capacity = 1) == ref
+            @test run_split(exec) == ref
+        end
+    end
 end
