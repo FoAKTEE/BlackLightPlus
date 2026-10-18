@@ -112,6 +112,95 @@ chunk of 4096 idles threads on small images (192² at 128 threads runs 7× slowe
 chunk 64), and the pool's default chunk of 65,536 is 14 to 36 percent below 2^17; neither
 executor sizes chunks from the item and device counts.
 
+### 4.1 Against the reference package
+
+```
+BLP/bench/slurm/run_reference.sh "1@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384"
+BLP/bench/slurm/run_reference.sh 1@reference=bbh455_480,bbh455_pol_480/reference=bbh122_pol_480/reference=bbh_i90_amr_pol
+BLP/bench/slurm/run_reference_cpu.sh 128:reference:amr_384,amr_pol_384,amr_driver_pol,analytic_1024,mc_thin,mc_scatter 128:torus:img_192,img_384,img_768,amr_384
+julia --project=BLP BLP/bench/bench.jl merge-reference         # results/anta_<date>_reference.{json,md}
+```
+
+`BLP/bench/reference.jl` times the reference package (`src/`) on the legs of its own
+harness `bench/bench_multigpu.jl`, included unchanged, and `bench.jl` with
+`BLP_DECK=reference` times the BLP calls of the same legs. The two halves of a GPU row run
+in one Slurm allocation, back to back on the same device, from two environments that hold
+the same CUDA.jl, GPUCompiler, LLVM.jl and KernelAbstractions (`results/blp/gpu/env_old`,
+`results/blp/gpu/env`); the CPU rows run on the login shell at a load below 16.
+`BLP/bench/results/anta_2026-10-17_reference.md` holds every configuration, the CUPTI
+phases of one profiled call per leg and the Slurm history; `fig_performance.pdf` draws the
+reference's torus-deck series in grey beside BLP's.
+
+On the same hardware the two packages agree: on the A100 every pair of outputs is bitwise
+identical (the 15 reference-deck legs and the 4 torus-deck legs); on the CPU the analytic
+and Monte Carlo outputs are bitwise identical and the images agree to 1e-13 to 2.6e-11 of
+the peak on the reference deck and to 7e-10 on the torus deck (the reference's CPU render
+is two-phase, BLP's fused), with equal refinement levels.
+
+The ratios below are BLP's rate over the reference's; above 1, BLP is faster. "Default"
+pairs the two defaults (reference: the harness call, pool lanes 2, chunk 65,536, the Monte
+Carlo drivers' 2^20 primaries; BLP: lanes 2, chunk 65,536, or threads at chunk 4,096);
+"best" pairs the best configuration of each package (reference also at chunk 2^17; BLP at
+2^17 and, on the Monte Carlo and binary legs, 2^20; threads at chunk 64).
+
+| Leg, one A100 (reference deck: a = 0.9 torus, fov 40, R_high 40) | reference (s) | BLP default (s) | default | best |
+|---|--:|--:|--:|--:|
+| fused I 384² / 768², uniform resample 256³ | 0.102 / 0.334 | 0.097 / 0.329 | 1.05 / 1.02 | 1.12 / 1.01 |
+| fused I 768², mixed precision | 0.256 | 0.308 | 0.83 | 0.91 |
+| fused IQUV 256² / 384² | 0.244 / 0.414 | 0.219 / 0.421 | 1.12 / 0.98 | 1.13 / 1.28 |
+| native blocks I / IQUV 384² | 0.138 / 0.622 | 0.140 / 0.710 | 0.98 / 0.88 | 1.05 / 0.83 |
+| adaptive IQUV, base 384, block 8 | 5.32 | 5.98 | 0.89 | 0.90 |
+| exact-Kerr disk 1024² | 0.098 | 0.321 | 0.31 | 0.60 |
+| Monte Carlo thin / scattering sphere, 1e7 | 0.410 / 0.752 | 0.686 / 1.88 | 0.60 / 0.40 | 1.13 / 0.54 |
+| binary 00455 I / IQUV 480² | 1.39 / 3.76 | 2.05 / 3.94 | 0.68 / 0.95 | 0.89 / 1.11 |
+| binary 00122 IQUV 480²; 00455 at i = 90°, adaptive IQUV | 3.18; 16.0 | 3.63; 17.1 | 0.88; 0.94 | 1.02; 1.01 |
+| BLP deck: Stokes I 192² / 384² / 768²; adaptive IQUV | 0.057 / 0.148 / 0.553; 3.29 | 0.056 / 0.151 / 0.569; 3.42 | 1.02 / 0.98 / 0.97; 0.96 | 1.02 / 1.04 / 0.99; 0.91 |
+
+| Leg, 128 CPU threads | reference (s) | BLP best (s) | default | best |
+|---|--:|--:|--:|--:|
+| native blocks I / IQUV 384² | 4.80 / 6.71 | 1.11 / 2.89 | 1.68 / 1.01 | 4.32 / 2.32 |
+| adaptive IQUV, base 384, block 8 | 42.1 | 20.1 | 1.73 | 2.10 |
+| exact-Kerr disk 1024² | 0.451 | 0.314 | 1.44 | 1.44 |
+| Monte Carlo thin / scattering sphere, 1e7 | 3.55 / 3.81 | 3.39 / 4.25 | 1.00 / 0.90 | 1.05 / 0.90 |
+| BLP deck: Stokes I 192² / 384² / 768²; adaptive IQUV | 1.75 / 4.77 / 11.6; 28.8 | 0.41 / 1.30 / 4.25; 11.3 | 0.60 / 1.64 / 1.91; 1.44 | 4.31 / 3.67 / 2.73; 2.54 |
+
+| Geometric mean over the reference-deck legs | default | best |
+|---|--:|--:|
+| one A100, 15 legs | 0.79 (0.31 to 1.12) | 0.95 (0.54 to 1.28) |
+| CPU, 16 threads, 6 legs | 1.16 (0.97 to 1.60) | 1.32 (0.98 to 1.65) |
+| CPU, 64 threads, 6 legs | 1.39 (1.01 to 1.98) | 1.79 (1.11 to 3.21) |
+| CPU, 128 threads, 6 legs | 1.25 (0.90 to 1.73) | 1.75 (0.90 to 4.32) |
+
+Where the two differ, from the profiled call of each leg:
+
+- Exact-Kerr disk (0.31 at the defaults): BLP's kernels take 46 ms against the reference's
+  59 ms, followed by 304 ms on the host. The per-pixel outputs are gathered as one vector
+  of tuples and split into the band maps after the last chunk, where the reference copies
+  each chunk into its maps while the others run.
+- Scattering sphere (0.40): the device idles for 977 ms of a 2,014 ms call. Each
+  scattering order completes over all photons before its children return to the host and
+  go up again for the next order; the reference runs every order inside each 2^20-photon
+  chunk. At the same 2^20 chunk BLP is still 1.85× slower.
+- Thin sphere (0.60): the chunk alone, 153 launches of 65,536 against the drivers' 2^20.
+  At equal chunks BLP is faster, 1.13× at 2^20.
+- Mixed precision (0.83) and native-block IQUV (0.88): BLP computes the Float64 camera ray
+  inside the march kernel, which costs the Float32 lane its register saving (226 against
+  132 registers per thread, blocks of 256 against 384); both IQUV kernels sit at the
+  255-register cap, and BLP's native-block kernel is 16 percent slower at the same launch
+  shape.
+- Binary 00455 I (0.68): the profiled calls differ by 3 percent (1.69 against 1.64 s); the
+  default pool splits the image into four chunks over two lanes, and at 2^20 the call
+  takes 1.55 s against 1.39 s.
+- CPU imaging (BLP 1.2 to 4.3× faster): BLP marches each ray once, where the reference
+  traces, stores the path and integrates, and gains little from 64 to 128 threads. Monte
+  Carlo is equal within 10 percent.
+
+First calls are 12 to 16 s for both packages on a leg that compiles its program (BLP 23 s
+on the adaptive leg; the reference harness compiles it in a setup run of 32.6 s); on the
+CPU the reference's first calls are longer (23 against 6.5 s for native blocks I 384² at
+128 threads). The two-device rows of the comparison are not measured; the results file
+lists them with the pending Slurm job.
+
 ## 5. Running on `anta`
 
 The host is its own Slurm node. Outside an allocation the devices are not accessible

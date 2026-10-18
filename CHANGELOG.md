@@ -358,8 +358,9 @@ Structure and contracts: `docs/ARCHITECTURE.md`; principles and gates:
   round-off natively, from floating-point contraction on FMA hardware, and bitwise
   under `julia -C generic`; Monte Carlo spectra are exact sums.
 - **Verification record.** `docs/VERIFICATION.md`: the suite and the oracle on the CPU
-  and on an A100, the paper's eight figures regenerated from BLP (`BLP/figures/`), and
-  the CPU-versus-GPU benchmarks (`BLP/bench/`).
+  and on an A100, the paper's eight figures regenerated from BLP (`BLP/figures/`), the
+  CPU-versus-GPU benchmarks and the comparison with the reference package on the same
+  decks, bitwise equal on the same device (`BLP/bench/`).
 
 ## [0.1.0] - 2026-08-05
 

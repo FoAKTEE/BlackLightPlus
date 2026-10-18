@@ -615,7 +615,8 @@ threads on the CPU is held at tolerance, not bitwise (`Decks.CROSS_HARDWARE`): t
 targets contract floating-point operations differently: the images differ by 1e-13 to
 3e-10 of their maximum on the oracle and production decks, and the exact Monte Carlo sums
 by 1e-16 (thin sphere) to 2e-12 (third scattering order) with equal photon counts.
-Timings of both targets are in `BLP/bench/`.
+Timings of both targets, and of the reference package on the same decks (bitwise equal
+to BLP on the same device), are in `BLP/bench/` and `docs/VERIFICATION.md` §4.
 
 ## 7. Public API
 
