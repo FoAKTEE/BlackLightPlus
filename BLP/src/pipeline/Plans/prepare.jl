@@ -33,31 +33,37 @@ function transfer_params(cfg::RunConfig; mass_scale = cfg.mass_scale_cgs,
 end
 
 """
-    prepare(cfg::RunConfig; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16)
-        -> Plan
+    prepare(cfg::RunConfig; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16,
+            queue = nothing) -> Plan
 
 The plan of a run of `cfg` on `spacetime` (a `Float64` spacetime value: Kerr, a binary,
 an ADM grid, a user metric) through `matter` (a plasma provider: a snapshot, a uniform
 grid, a frame window, an analytic source; or `nothing` for products that need no
 plasma). `mode` is the transfer mode of the imaging products, `lanes` the precision
 lanes ([`Lanes`](@ref), [`MixedLanes`](@ref)), `tile` the side of the image tiles of the
-Kerr queue order.
+Kerr queue order. `queue`, a permutation of the pixel indices `1:resolution²`, is the
+order in which `render`, `sensitivity`, `variants` and `shadow` queue the pixels in place
+of the derived one: for the next frame of a movie, for example,
+`march_sort_order(vec(shadow(plan).steps))` queues the longest marches of the previous
+frame first. The queue order changes no output bit.
 
 Derived here, once: the camera and its frame, the pixel centres, the transfer
 parameters ([`transfer_params`](@ref)), the escape radius `escape_factor × distance`,
 the emission radius `R_em = domain_radius(matter)` beyond which the march stops on an
 outbound ray, the march budget on both lanes, the horizon proxy, the observer
 inclination, the Kerr critical curve with the cost-ordered queue (identity order on
-other spacetimes) and, for `MixedLanes`, the rescue set. Throws `ArgumentError` for a
-spacetime that is not `Float64`, a geodesic lane the spacetime does not have, transfer
-or accumulator lanes other than `Float64`, or `MixedLanes` off Kerr.
+other spacetimes) unless `queue` is given and, for `MixedLanes`, the rescue set. Throws
+`ArgumentError` for a spacetime that is not `Float64`, a geodesic lane the spacetime does
+not have, transfer or accumulator lanes other than `Float64`, `MixedLanes` off Kerr, or a
+`queue` that is not a permutation of the pixel indices ([`queue_items`](@ref)).
 """
 function prepare(cfg::RunConfig; spacetime, matter, mode::TransferMode = IQUV(),
-                 lanes::Union{Lanes,MixedLanes} = Lanes(), tile::Integer = 16)
+                 lanes::Union{Lanes,MixedLanes} = Lanes(), tile::Integer = 16,
+                 queue::Union{Nothing,AbstractVector{<:Integer}} = nothing)
     spacetime isa Spacetime{Float64} ||
         throw(ArgumentError("prepare: the spacetime must have Float64 scalars; got " *
                             "$(typeof(spacetime))"))
-    return plan_of(cfg, spacetime, matter, mode, lanes, Int(tile), transfer_params(cfg))
+    return plan_of(cfg, spacetime, matter, mode, lanes, Int(tile), transfer_params(cfg), queue)
 end
 
 """
@@ -71,10 +77,11 @@ coordinate length. The configuration is `RunConfig()`; its camera, march budget 
 queue are not read by the Monte Carlo, and a plan without a parameter set is not imaged.
 """
 prepare(sphere::UniformSphere) =
-    plan_of(RunConfig(), Minkowski(), sphere, StokesI(), Lanes(), 16, nothing)
+    plan_of(RunConfig(), Minkowski(), sphere, StokesI(), Lanes(), 16, nothing, nothing)
 
-# The plan of `cfg` on `spacetime` through `matter` with the parameter set `params`.
-function plan_of(cfg::RunConfig, spacetime, matter, mode, lanes, tile::Int, params)
+# The plan of `cfg` on `spacetime` through `matter` with the parameter set `params` and
+# the caller's pixel queue order (`nothing`: the derived one).
+function plan_of(cfg::RunConfig, spacetime, matter, mode, lanes, tile::Int, params, order)
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
                               cfg.camera.fov, cfg.camera.resolution)
     escape = cfg.escape_factor * cfg.camera.distance
@@ -82,7 +89,8 @@ function plan_of(cfg::RunConfig, spacetime, matter, mode, lanes, tile::Int, para
     budget = MarchBudget{Float64}(cfg.C, escape, R_em, cfg.max_steps)
     stg, bg = geodesic_lane(spacetime, budget, lanes)
     curve = scheduling_curve(spacetime, cam)
-    queue = isempty(curve[1]) ? collect(1:npixels(cam)) :
+    queue = order !== nothing ? collect(Int, queue_items(order, npixels(cam))) :
+            isempty(curve[1]) ? collect(1:npixels(cam)) :
             cost_order(curve, cam.fov, cam.npix; tile = tile)
     return Plan(cfg, spacetime, stg, matter, mode, params, cam, CameraFrame(cam),
                 PixelGrid(cam.fov, cam.npix), budget, bg, horizon_of(spacetime), escape, R_em,

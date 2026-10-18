@@ -1,8 +1,9 @@
 # `prepare` and its records: the configuration defaults, every derived field of a plan
 # on Kerr, a binary, an ADM grid and a user metric, the lanes and their validation, the
-# rescue set of mixed lanes, and the transfer parameter set with nonthermal populations
-# and seeded derivatives.
-using Test, BLP, StaticArrays
+# rescue set of mixed lanes, the caller's queue order and the images it leaves bitwise
+# unchanged, and the transfer parameter set with nonthermal populations and seeded
+# derivatives.
+using Test, BLP, StaticArrays, Random
 using ForwardDiff: Dual, value, partials
 using BLP.Plans: CameraConfig, PlasmaConfig, RunConfig, Lanes, MixedLanes, Plan, prepare,
                  transfer_params, geodesic_type
@@ -12,7 +13,8 @@ using BLP.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, UserMetric, Mink
 using BLP.Matter: ElectronModel, domain_radius
 using BLP.Transfer: StokesI, IQUV, PowerLaw, Kappa, TransferParams, output_type
 using BLP.Numerics: Units
-using BLP.Execution: cost_order, rescue_pixels, curve_inclination
+using BLP.Execution: cost_order, rescue_pixels, curve_inclination, march_sort_order, PoolExecutor
+using BLP.Products: render, shadow
 const Decks = Main.Decks
 
 cfg(; res = 12, kw...) = RunConfig(; camera = CameraConfig(fov = 24.0, resolution = res), kw...)
@@ -97,6 +99,38 @@ cfg(; res = 12, kw...) = RunConfig(; camera = CameraConfig(fov = 24.0, resolutio
         @test isnan(prepare(cfg(); spacetime = Minkowski(), matter = nothing).horizon)
         um = UserMetric(x -> metric(KerrSchildCartesian(0.3), x))
         @test isnan(prepare(cfg(); spacetime = um, matter = grid).horizon)
+    end
+
+    @testset "caller queue order" begin
+        grid = Decks.uniform_deck()
+        kerr = KerrSchildCartesian(0.9)
+        perm = randperm(Xoshiro(7), 144)
+        p = prepare(cfg(); spacetime = kerr, matter = grid, queue = perm)
+        @test p.queue == perm && p.queue isa Vector{Int} && p.queue !== perm
+        @test p.curve == critical_curve(0.9, curve_inclination(60.0))
+        bin = SuperposedKerrSchild([0.5, 0.5], [0.0, 0.0], [(3.0, 0.0, 0.0), (-3.0, 0.0, 0.0)])
+        @test prepare(cfg(); spacetime = bin, matter = grid, queue = Int32.(perm)).queue == perm
+        for bad in ([1, 2, 3], fill(1, 144), 0:143, vcat(1:143, 145))
+            @test_throws ArgumentError prepare(cfg(); spacetime = kerr, matter = grid, queue = bad)
+        end
+        # every order, on every executor, gives the image of the derived order bitwise
+        movie = march_sort_order(vec(shadow(prepare(cfg(); spacetime = kerr, matter = nothing);
+                                            backend = :cpu).steps))
+        @test sort(movie) == 1:144
+        for mode in (StokesI(), IQUV()), lanes in (Lanes(), MixedLanes())
+            ref = render(prepare(cfg(); spacetime = kerr, matter = grid, mode, lanes); backend = :cpu)
+            for q in (perm, reverse(1:144), movie),
+                exec in (:cpu, :host_pool, PoolExecutor(Decks.hosts(2); lanes = 2, chunk = 7))
+                img = render(prepare(cfg(); spacetime = kerr, matter = grid, mode, lanes, queue = q);
+                             backend = exec)
+                @test Decks.bits((img.I, img.Q, img.U, img.V)) == Decks.bits((ref.I, ref.Q, ref.U, ref.V))
+            end
+        end
+        pn = prepare(cfg(); spacetime = kerr, matter = nothing)
+        s0 = shadow(pn; backend = :cpu)
+        s1 = shadow(prepare(cfg(); spacetime = kerr, matter = nothing, queue = movie); backend = :host_pool)
+        @test s1.fate == s0.fate && s1.steps == s0.steps && Decks.bits(s1.null_error) == Decks.bits(s0.null_error)
+        @test Decks.bits(s1.final) == Decks.bits(s0.final)
     end
 
     @testset "transfer parameters" begin

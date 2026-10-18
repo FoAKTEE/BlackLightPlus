@@ -32,7 +32,8 @@ hand. Fields:
 - `curve`, the Kerr critical curve `(α, β)` at the scheduling inclination
   (`curve_inclination`), empty vectors on other spacetimes;
 - `lanes`, the precision lanes; `queue`, the pixel queue order (a permutation of
-  `1:npixels`, longest predicted march first on Kerr); `rescue`, the ascending pixels
+  `1:npixels`: the `queue` given to `prepare`, else longest predicted march first on
+  Kerr and the identity elsewhere); `rescue`, the ascending pixels
   marched on the `Float64` lane under `MixedLanes` (empty otherwise);
 - `hotcross`, the memo of [`hotcross_table`](@ref): empty until a Monte Carlo
   scattering run of the plan first needs the table.

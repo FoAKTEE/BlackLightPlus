@@ -14,7 +14,7 @@ using ..MonteCarlo: HotcrossTable
 using ..Data: build_hotcross_table
 using ..Transfer: TransferMode, StokesI, IQUV, PowerLaw, Kappa, TransferParams
 import ..Transfer: output_type
-using ..Execution: PixelGrid, cost_order, rescue_pixels, curve_inclination
+using ..Execution: PixelGrid, cost_order, rescue_pixels, curve_inclination, queue_items
 
 include("config.jl")
 include("lanes.jl")
