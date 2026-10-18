@@ -3,7 +3,7 @@
   "ptxas": "13.3.33",
   "sm": "sm_80",
   "ptx": "9.3.0",
-  "commit": "c79faf7",
+  "commit": "7be2569",
   "kernels": {
     "img_I_uniform_kerr_f64": {"regs": 240, "stack": 696, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
     "img_I_blocks_kerr_f64": {"regs": 255, "stack": 1024, "spill_st": 4, "spill_ld": 0, "callee_spill": 4},
@@ -40,11 +40,13 @@
     "shadow_kerr_f32": {"regs": 92, "stack": 320, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
     "shadow_binary_f64": {"regs": 255, "stack": 1080, "spill_st": 12, "spill_ld": 0, "callee_spill": 980},
     "shadow_adm_f64": {"regs": 255, "stack": 2792, "spill_st": 12, "spill_ld": 0, "callee_spill": 2168},
-    "mc_sphere_thin_primary": {"regs": 118, "stack": 1208, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
+    "mc_sphere_thin_primary": {"regs": 117, "stack": 1208, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
     "mc_sphere_scatter_primary": {"regs": 255, "stack": 2616, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
     "mc_sphere_scatter_layer": {"regs": 255, "stack": 2568, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
+    "mc_sphere_scatter_drain": {"regs": 32, "stack": 1272, "spill_st": 0, "spill_ld": 0, "callee_spill": 0},
     "mc_torus_thin_primary": {"regs": 255, "stack": 2264, "spill_st": 0, "spill_ld": 0, "callee_spill": 312},
     "mc_torus_scatter_primary": {"regs": 255, "stack": 2960, "spill_st": 4, "spill_ld": 4, "callee_spill": 1908},
-    "mc_torus_scatter_layer": {"regs": 255, "stack": 2848, "spill_st": 0, "spill_ld": 0, "callee_spill": 1884}
+    "mc_torus_scatter_layer": {"regs": 255, "stack": 2848, "spill_st": 0, "spill_ld": 0, "callee_spill": 1884},
+    "mc_torus_scatter_drain": {"regs": 32, "stack": 456, "spill_st": 0, "spill_ld": 0, "callee_spill": 0}
   }
 }

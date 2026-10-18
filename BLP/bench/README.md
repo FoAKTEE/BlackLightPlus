@@ -179,8 +179,14 @@ uniform grid, the native blocks, both frame windows and the Polish doughnut on K
 blocks on the binary and the ADM grid, in `StokesI` and `IQUV`, on the `Float64` and
 `Float32` geodesic lanes; its block-grid (`render_amr`) and coordinate-list forms; the
 `sensitivity` derivatives and a `variants` ladder; the analytic program and its
-photon-ring layer; the trace windows; the shadows; and the Monte Carlo primary and layer
-programs of the sphere and the torus. From the repository root, in the CUDA environment:
+photon-ring layer; the trace windows; the shadows; and the Monte Carlo cascades of the
+sphere and the torus, their primary and, when they scatter, the layer and the drain of
+the lane scratch, placed in a lane's child buffers and scratch as `foreach_cascade!`
+places them. Each kernel is compiled for the item list its lane passes: a range as
+`UnitRange{Int}` (the analytic pixels, the block chunks, the trace windows, the cascade's
+chunks, generations and drain), any other list (the pixel queues, the photon-ring band
+points) as a device vector of `Int32` when every item fits, of `Int` otherwise. From the
+repository root, in the CUDA environment:
 
 ```sh
 E=results/blp/gpu/env

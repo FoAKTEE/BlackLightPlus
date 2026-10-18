@@ -3,16 +3,24 @@
 # BLP has one kernel, `_foreach!`, specialised on the program it runs. Every program kind
 # a product launches is captured from the product itself: each case below calls a product
 # on small synthetic decks (`BLP/test/decks.jl`) with `backend = AuditExecutor()`, which
-# runs it on threads and records every program passed to `foreach_item!` or
-# `stream_blocks!` with the element types of its outputs. Each distinct program type is
-# then made into its device twin by BLP's own `device_program` on an `AuditDevice`, a
-# device whose uploads and allocations are null-pointer `CuDeviceArray`s and whose
-# read-only view is CUDA's `Const` (the type `ReadOnlyArray` of the CUDA extension turns
-# into at launch), so accumulators, block swaps and locate strategies get the twins a GPU
-# launch builds. The kernel is compiled for sm_80 as a `CUDABackend` launch compiles it
-# (`always_inline = false`, the KernelAbstractions launch context, the twin after
-# `cudaconvert`, the item indices as `run_chunk!` stages them, one device vector per
-# output), and `ptxas --verbose` reports the resources.
+# runs it on threads and records every program passed to `foreach_item!`,
+# `stream_blocks!` or `foreach_cascade!` with its item list and the element types of its
+# outputs. Each program is then made into its device twin by BLP's own `device_program`
+# on an `AuditDevice`, a device whose uploads and allocations are null-pointer
+# `CuDeviceArray`s and whose read-only view is CUDA's `Const` (the type `ReadOnlyArray` of
+# the CUDA extension turns into at launch), so accumulators, block swaps and locate
+# strategies get the twins a GPU launch builds. A cascade's programs are placed as a lane
+# places them (`chunk_generations!`): the primary and the layer spawn into a child buffer
+# of lane arrays and record into lane scratch (`CascadeSwap`), the layer reads the
+# previous generation read-only, and the `Drain` of the scratch is a kernel of its own.
+# The items are the argument the lane passes (`device_items`): a range as `UnitRange{Int}`
+# (the analytic pixels, a block chunk's pixels, the trace windows, a cascade's chunks and
+# generations, the drain), any other list (the pixel queue of `render`, `shadow`,
+# `sensitivity` and `variants`; the band points of `photon_ring_layers`) as a device
+# vector of `Int32` when every item fits, of `Int` otherwise. The kernel is compiled for
+# sm_80 as a `CUDABackend` launch compiles it (`always_inline = false`, the
+# KernelAbstractions launch context, the twin after `cudaconvert`, the items, one device
+# vector per output), and `ptxas --verbose` reports the resources.
 #
 # Output, one line per kernel (parse with grep '^KRES'):
 #   KRES <name> regs=<n> stack=<bytes> spill_st=<bytes> spill_ld=<bytes> callee_spill=<bytes>
@@ -24,8 +32,8 @@
 # list form (`render(plan, coords)`), `dmass`/`drathigh` the `sensitivity` derivatives,
 # `ladder4` a four-rung `variants` ladder; `analytic`, `analytic_layer`
 # (`photon_ring_layers`), `trace` (first window and `_resume`), `shadow`, and the Monte
-# Carlo `mc_*` programs: `primary` and `layer` of the scattering runs. `MixedLanes` runs
-# the `f64` and `f32` imaging kernels.
+# Carlo `mc_*` cascades: the `primary`, and in the scattering runs the `layer` and the
+# `drain` of the scratch sums. `MixedLanes` runs the `f64` and `f32` imaging kernels.
 #
 # Usage, from the repository root, in the CUDA environment (no GPU needed for the default
 # mode; the runtime pin of its LocalPreferences.toml lets CUDA.jl compile without a driver):
@@ -54,8 +62,10 @@ using BLP.Transfer: StokesI, IQUV
 using BLP.Data: FrameWindow, scale_density
 using BLP.Numerics: GNEWT, CL, SIGMA_THOMSON
 using BLP.MonteCarlo: HotcrossTable, NW, NT
+using BLP.Numerics: MCRng
 using BLP.Execution: Executor, ThreadedExecutor, DevicePool, AbstractDevice, ImageBlock,
-                     foreach_item!, stream_blocks!, device_program
+                     ChildBuffer, Generation, foreach_item!, stream_blocks!, foreach_cascade!,
+                     device_program
 import BLP.Execution: backend, functional, activate!, upload, readonly, describe
 
 const BLP_DIR = dirname(@__DIR__)
@@ -68,8 +78,6 @@ const SM  = v"8.0"
 const CONFIG = CC._compiler_config(nothing; arch = SM, always_inline = false)
 const GLOBAL = CUDA.AS.Global
 DV(T) = CuDeviceArray{T,1,GLOBAL}
-"The item indices of a launch as `run_chunk!` stages them."
-const ITEMS = DV(Int)
 
 # ---------------------------------------------------------------- the audit device
 "A device without memory: arrays become null-pointer device arrays of the right type."
@@ -92,9 +100,15 @@ KernelAbstractions.allocate(::AuditBackend, ::Type{T}, dims::Tuple; unified = no
 KernelAbstractions.synchronize(::AuditBackend) = nothing
 
 const POOL = DevicePool([AuditDevice()]; lanes = 1, chunk = 1)
+const LANE_A = first(POOL.lanes)
+
+# The item argument a lane passes for the list `q` (`Execution.device_items`): a range as
+# it is, any other list as a device vector of `Int32` when every item fits, else of `Int`.
+item_arg(q::AbstractUnitRange) = typeof(BLP.Execution.device_items(LANE_A, q))
+item_arg(q::AbstractVector) = DV(BLP.Execution.fits(Int32, q) ? Int32 : Int)
 
 # ---------------------------------------------------------------- the recording executor
-"Runs on threads and records each program it is given with its output element types."
+"Runs on threads and records each launch: kind, program, item list, output element types."
 struct AuditExecutor <: Executor
     inner::ThreadedExecutor
     seen::Vector{Any}
@@ -102,20 +116,70 @@ end
 AuditExecutor() = AuditExecutor(ThreadedExecutor(), Any[])
 describe(e::AuditExecutor) = describe(e.inner)
 
+note!(e::AuditExecutor, kind, prog, items, outs) =
+    push!(e.seen, (kind = kind, prog = prog, items = items, outs = outs))
+
 function BLP.Execution.foreach_item!(e::AuditExecutor, prog, items::AbstractVector{<:Integer};
                                      outs::Tuple = (), order = nothing)
-    push!(e.seen, (prog = prog, outs = map(eltype, outs), blocks = false))
+    q = order === nothing ? items : view(items, BLP.Execution.queue_items(order, length(items)))
+    note!(e, :items, prog, q, map(eltype, outs))
     return foreach_item!(e.inner, prog, items; outs, order)
 end
 function BLP.Execution.foreach_item!(e::AuditExecutor, parts::Tuple{Vararg{Pair}};
                                      outs::Tuple = ())
-    foreach(p -> push!(e.seen, (prog = p.first, outs = map(eltype, outs), blocks = false)), parts)
+    foreach(p -> note!(e, :items, p.first, p.second, map(eltype, outs)), parts)
     return foreach_item!(e.inner, parts; outs)
 end
+# A pool lane launches a chunk of blocks over the chunk's pixels, `eachindex(vals)`.
 function BLP.Execution.stream_blocks!(e::AuditExecutor, prog, work::AbstractVector{ImageBlock},
                                       block::Integer, visit; outtype::Type = Float64)
-    push!(e.seen, (prog = prog, outs = (outtype,), blocks = true))
+    note!(e, :blocks, prog, Base.OneTo(block * block), (outtype,))
     return stream_blocks!(e.inner, prog, work, block, visit; outtype)
+end
+function BLP.Execution.foreach_cascade!(e::AuditExecutor, primary, layer, n::Integer,
+                                        depth::Integer; kw...)
+    note!(e, :cascade, (primary, layer), 1:n, ())
+    return foreach_cascade!(e.inner, primary, layer, n, depth; kw...)
+end
+
+# ---------------------------------------------------------------- the device programs
+# `(name, device program, item list, output element types)` of each launch of a record.
+function launches(s)
+    s.kind === :cascade && return cascade_launches(s.prog..., s.items)
+    twin = device_program(POOL, AuditDevice(), s.prog)
+    s.kind === :blocks &&
+        (twin = BLP.Execution.with_blocks(twin, null_array(SVector{3,Float64}, (1,))))
+    return [(nameof(typeof(s.prog)), twin, s.items, s.outs)]
+end
+
+# The launches of a cascade as a lane makes them (`chunk_generations!`): the primary over
+# a chunk's range and the layer over the previous generation's children, each spawning
+# into the lane's child buffer and recording into lane scratch, then the drain of the
+# scratch over a range. A primary without a child slot runs alone, into its own sums.
+function cascade_launches(primary, layer, items)
+    X = BLP.Execution
+    dev = AuditDevice()
+    tp = device_program(POOL, dev, primary)
+    slot = X.child_slot(primary)
+    slot === nothing && return [(:primary, tp, items, ())]
+    T = eltype(slot.photons)
+    out = ChildBuffer(null_array(T, (1,)), null_array(MCRng, (1,)), null_array(Int64, (1,)),
+                      slot.layout, nothing)
+    parents = Generation(readonly(dev, null_array(T, (1,))),
+                         readonly(dev, null_array(MCRng, (1,))))
+    tl = device_program(POOL, dev, layer)
+    sp = X.CascadeSwap(LANE_A, out, nothing, true)
+    sl = X.CascadeSwap(LANE_A, out, parents, true)
+    dp = Adapt.adapt(sp, tp)
+    dl = Adapt.adapt(sl, tl)
+    typeof(Adapt.adapt(X.CascadeSwap(LANE_A, out, nothing, false), tp)) === typeof(dp) &&
+        typeof(Adapt.adapt(X.CascadeSwap(LANE_A, out, parents, false), tl)) === typeof(dl) ||
+        error("a scratch generation differs in type from the last generation")
+    shape(sw) = [(typeof(s), size(s)) for (_, s) in sw.pairs]
+    shape(sp) == shape(sl) || error("the layer's scratch differs from the primary's")
+    drain =X.Drain(Tuple(p[1] for p in sp.pairs), Tuple(p[2] for p in sp.pairs), true)
+    n = maximum(p -> length(p[2]), sp.pairs)
+    return [(:primary, dp, items, ()), (:layer, dl, 1:1, ()), (:drain, drain, 1:n, ())]
 end
 
 # ---------------------------------------------------------------- the decks
@@ -192,34 +256,31 @@ const CASES = [
     "mc_sphere_scatter" =>
         (e -> mc_spectrum(prepare(UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)),
                           1_500; scattering = true, table = THOMSON, nu_max = 1.0e13, backend = e),
-         ["_primary", "_layer"]),
+         ["_primary", "_layer", "_drain"]),
     "mc_torus_thin" =>
         (e -> mc_spectrum(TORUS_PLAN, 300; C = 32.0, stride = 2, backend = e), ["_primary"]),
     "mc_torus_scatter" =>
         (e -> mc_spectrum(TORUS_PLAN, 300; scattering = true, table = THOMSON, bias = 1.0e5,
-                          C = 32.0, stride = 2, backend = e), ["_primary", "_layer"]),
+                          C = 32.0, stride = 2, backend = e), ["_primary", "_layer", "_drain"]),
 ]
 
-# The kernel argument types (after the launch context) of every distinct program a case
-# launches: the device twin, the staged items, the item count and one device vector per
-# output.
+# The kernel argument types (after the launch context) of every distinct launch of a
+# case: the device program, the items as the lane passes them, the item count and one
+# device vector per output.
 function kernel_args(call, suffixes)
     e = AuditExecutor()
     call(e)
     seen = Any[]
-    for s in e.seen
-        any(t -> typeof(t.prog) === typeof(s.prog) && t.blocks == s.blocks, seen) || push!(seen, s)
+    for s in e.seen, (name, dprog, items, outs) in launches(s)
+        dt = CUDA.cudaconvert(dprog)
+        isbits(dt) || error("the device form of $name is not isbits")
+        a = (typeof(dt), item_arg(items), Int, map(DV, outs)...)
+        any(t -> t[2] == a, seen) || push!(seen, (name, a))
     end
     length(seen) == length(suffixes) ||
-        error("$(length(seen)) distinct programs launched, $(length(suffixes)) named: " *
-              join(string.(nameof.(typeof.(getfield.(seen, :prog)))), ", "))
-    return map(seen) do s
-        twin = device_program(POOL, AuditDevice(), s.prog)
-        s.blocks && (twin = BLP.Execution.with_blocks(twin, null_array(SVector{3,Float64}, (1,))))
-        dt = CUDA.cudaconvert(twin)
-        isbits(dt) || error("the device twin of $(nameof(typeof(s.prog))) is not isbits")
-        (typeof(dt), ITEMS, Int, map(DV, s.outs)...)
-    end
+        error("$(length(seen)) distinct launches, $(length(suffixes)) named: " *
+              join(string.(first.(seen)), ", "))
+    return last.(seen)
 end
 
 # ---------------------------------------------------------------- compile + ptxas
