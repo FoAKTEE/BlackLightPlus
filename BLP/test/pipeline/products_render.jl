@@ -40,6 +40,11 @@ same(a, b) = Decks.bits(planes(a)) == Decks.bits(planes(b))
         @test isapprox(sum(q.I), sum(img.I); rtol = 1e-2)
         @test count(!iszero, q.Q) > 40 && count(!iszero, q.V) > 40
         @test occursin("12×12", sprint(show, img))
+        v = rand(144)                            # a Float64 output vector is the I plane
+        w = Image(p, v, img.run)
+        @test w.I isa Matrix{Float64} && size(w.I) == (12, 12) && pointer(w.I) == pointer(v)
+        @test all(iszero, w.Q) && w.Q !== w.U && w.U !== w.V
+        @test Image(p, Float32.(v), img.run).I == reshape(Float64.(Float32.(v)), 12, 12)
     end
 
     @testset "$name on both executors" for (name, matter) in (("torus grid provider", Decks.TorusDeck()),

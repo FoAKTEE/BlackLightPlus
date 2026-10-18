@@ -21,10 +21,11 @@ struct Image{P,R}
     run::R
 end
 
+# A Stokes I output vector becomes the I plane itself when it is a `Vector{Float64}`.
 function Image(plan::Plan, out::AbstractVector{<:Real}, run)
     n = plan.camera.npix
-    return Image(reshape(Vector{Float64}(out), n, n), zeros(n, n), zeros(n, n), zeros(n, n),
-                 plan, run)
+    return Image(reshape(convert(Vector{Float64}, out), n, n), zeros(n, n), zeros(n, n),
+                 zeros(n, n), plan, run)
 end
 
 function Image(plan::Plan, out::AbstractVector{<:SVector{4}}, run)
