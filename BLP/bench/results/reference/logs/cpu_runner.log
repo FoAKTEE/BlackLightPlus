@@ -1,0 +1,167 @@
+2026-10-17 16:38:45 start cpu_reference_t16_amr_384_ref load1=6.31 held=[2994 ]
+2026-10-17 16:39:48 end cpu_reference_t16_amr_384_ref status=0 load1=8.96
+2026-10-17 16:39:48 start cpu_reference_t16_amr_384_blp load1=8.96 held=[2994 ]
+2026-10-17 16:40:57 end cpu_reference_t16_amr_384_blp status=0 load1=9.95
+2026-10-17 16:40:57 start cpu_reference_t16_amr_pol_384_ref load1=9.95 held=[2994 ]
+2026-10-17 16:42:40 end cpu_reference_t16_amr_pol_384_ref status=0 load1=26.55
+2026-10-17 16:42:40 wait for cpu_reference_t16_amr_pol_384_blp: load1=26.55 running_gpu_jobs=0 others>1core: emost:135% 
+2026-10-17 16:43:40 waited 60 s for cpu_reference_t16_amr_pol_384_blp
+2026-10-17 16:43:40 start cpu_reference_t16_amr_pol_384_blp load1=11.80 held=[2994 ]
+2026-10-17 16:45:59 end cpu_reference_t16_amr_pol_384_blp status=0 load1=15.29
+2026-10-17 16:45:59 start cpu_reference_t16_amr_driver_pol_ref load1=15.29 held=[2994 ]
+2026-10-17 16:54:59 end cpu_reference_t16_amr_driver_pol_ref status=0 load1=14.92
+2026-10-17 16:54:59 start cpu_reference_t16_amr_driver_pol_blp load1=14.92 held=[2994 ]
+2026-10-17 17:05:28 end cpu_reference_t16_amr_driver_pol_blp status=0 load1=18.84
+2026-10-17 17:05:28 wait for cpu_reference_t16_analytic_1024_ref: load1=18.84 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:05:58 waited 30 s for cpu_reference_t16_analytic_1024_ref
+2026-10-17 17:05:58 start cpu_reference_t16_analytic_1024_ref load1=12.46 held=[2994 ]
+2026-10-17 17:06:18 end cpu_reference_t16_analytic_1024_ref status=0 load1=11.03
+2026-10-17 17:06:18 start cpu_reference_t16_analytic_1024_blp load1=11.03 held=[2994 ]
+2026-10-17 17:06:34 end cpu_reference_t16_analytic_1024_blp status=0 load1=11.56
+2026-10-17 17:06:34 start cpu_reference_t16_mc_thin_ref load1=11.56 held=[2994 ]
+2026-10-17 17:07:46 end cpu_reference_t16_mc_thin_ref status=0 load1=15.41
+2026-10-17 17:07:46 start cpu_reference_t16_mc_thin_blp load1=15.41 held=[2994 ]
+2026-10-17 17:10:04 end cpu_reference_t16_mc_thin_blp status=0 load1=27.23
+2026-10-17 17:10:04 wait for cpu_reference_t16_mc_scatter_ref: load1=27.23 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:11:04 waited 60 s for cpu_reference_t16_mc_scatter_ref
+2026-10-17 17:11:04 start cpu_reference_t16_mc_scatter_ref load1=11.27 held=[2994 ]
+2026-10-17 17:12:21 end cpu_reference_t16_mc_scatter_ref status=0 load1=15.13
+2026-10-17 17:12:21 start cpu_reference_t16_mc_scatter_blp load1=15.13 held=[2994 ]
+2026-10-17 17:14:41 end cpu_reference_t16_mc_scatter_blp status=0 load1=16.58
+2026-10-17 17:14:41 wait for cpu_reference_t64_amr_384_ref: load1=16.58 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:15:11 waited 30 s for cpu_reference_t64_amr_384_ref
+2026-10-17 17:15:11 start cpu_reference_t64_amr_384_ref load1=11.05 held=[2994 ]
+2026-10-17 17:16:14 end cpu_reference_t64_amr_384_ref status=0 load1=23.22
+2026-10-17 17:16:14 wait for cpu_reference_t64_amr_384_blp: load1=23.22 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:16:44 waited 30 s for cpu_reference_t64_amr_384_blp
+2026-10-17 17:16:44 start cpu_reference_t64_amr_384_blp load1=14.92 held=[2994 ]
+2026-10-17 17:17:20 end cpu_reference_t64_amr_384_blp status=0 load1=18.94
+2026-10-17 17:17:20 wait for cpu_reference_t64_amr_pol_384_ref: load1=18.94 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:17:50 waited 30 s for cpu_reference_t64_amr_pol_384_ref
+2026-10-17 17:17:50 start cpu_reference_t64_amr_pol_384_ref load1=12.38 held=[2994 ]
+2026-10-17 17:19:00 end cpu_reference_t64_amr_pol_384_ref status=0 load1=34.83
+2026-10-17 17:19:00 wait for cpu_reference_t64_amr_pol_384_blp: load1=34.83 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:20:00 waited 60 s for cpu_reference_t64_amr_pol_384_blp
+2026-10-17 17:20:00 start cpu_reference_t64_amr_pol_384_blp load1=14.30 held=[2994 ]
+2026-10-17 17:20:59 end cpu_reference_t64_amr_pol_384_blp status=0 load1=29.36
+2026-10-17 17:20:59 wait for cpu_reference_t64_amr_driver_pol_ref: load1=29.36 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:21:59 waited 60 s for cpu_reference_t64_amr_driver_pol_ref
+2026-10-17 17:21:59 start cpu_reference_t64_amr_driver_pol_ref load1=12.66 held=[2994 ]
+2026-10-17 17:26:54 end cpu_reference_t64_amr_driver_pol_ref status=0 load1=53.84
+2026-10-17 17:26:54 wait for cpu_reference_t64_amr_driver_pol_blp: load1=53.84 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:28:24 waited 90 s for cpu_reference_t64_amr_driver_pol_blp
+2026-10-17 17:28:24 start cpu_reference_t64_amr_driver_pol_blp load1=14.45 held=[2994 ]
+2026-10-17 17:31:59 end cpu_reference_t64_amr_driver_pol_blp status=0 load1=61.90
+2026-10-17 17:31:59 wait for cpu_reference_t64_analytic_1024_ref: load1=61.90 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:33:59 waited 120 s for cpu_reference_t64_analytic_1024_ref
+2026-10-17 17:33:59 start cpu_reference_t64_analytic_1024_ref load1=12.79 held=[2994 ]
+2026-10-17 17:34:17 end cpu_reference_t64_analytic_1024_ref status=0 load1=12.94
+2026-10-17 17:34:17 start cpu_reference_t64_analytic_1024_blp load1=12.94 held=[2994 ]
+2026-10-17 17:34:32 end cpu_reference_t64_analytic_1024_blp status=0 load1=10.73
+2026-10-17 17:34:32 start cpu_reference_t64_mc_thin_ref load1=10.73 held=[2994 ]
+2026-10-17 17:35:13 end cpu_reference_t64_mc_thin_ref status=0 load1=24.01
+2026-10-17 17:35:13 wait for cpu_reference_t64_mc_thin_blp: load1=24.01 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:35:43 waited 30 s for cpu_reference_t64_mc_thin_blp
+2026-10-17 17:35:43 start cpu_reference_t64_mc_thin_blp load1=15.48 held=[2994 ]
+2026-10-17 17:36:37 end cpu_reference_t64_mc_thin_blp status=0 load1=39.86
+2026-10-17 17:36:37 wait for cpu_reference_t64_mc_scatter_ref: load1=39.86 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:38:37 waited 120 s for cpu_reference_t64_mc_scatter_ref
+2026-10-17 17:38:37 start cpu_reference_t64_mc_scatter_ref load1=11.03 held=[2994 ]
+2026-10-17 17:39:17 end cpu_reference_t64_mc_scatter_ref status=0 load1=25.79
+2026-10-17 17:39:17 wait for cpu_reference_t64_mc_scatter_blp: load1=25.79 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:40:17 waited 60 s for cpu_reference_t64_mc_scatter_blp
+2026-10-17 17:40:17 start cpu_reference_t64_mc_scatter_blp load1=11.19 held=[2994 ]
+2026-10-17 17:41:18 end cpu_reference_t64_mc_scatter_blp status=0 load1=37.58
+2026-10-17 17:41:18 wait for cpu_reference_t128_amr_384_ref: load1=37.58 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:42:18 waited 60 s for cpu_reference_t128_amr_384_ref
+2026-10-17 17:42:18 start cpu_reference_t128_amr_384_ref load1=15.17 held=[2994 ]
+2026-10-17 17:43:17 end cpu_reference_t128_amr_384_ref status=0 load1=62.66
+2026-10-17 17:43:17 wait for cpu_reference_t128_amr_384_blp: load1=62.66 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:45:17 waited 120 s for cpu_reference_t128_amr_384_blp
+2026-10-17 17:45:17 start cpu_reference_t128_amr_384_blp load1=10.65 held=[2994 ]
+2026-10-17 17:45:54 end cpu_reference_t128_amr_384_blp status=0 load1=26.88
+2026-10-17 17:45:54 wait for cpu_reference_t128_amr_pol_384_ref: load1=26.88 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:46:54 waited 60 s for cpu_reference_t128_amr_pol_384_ref
+2026-10-17 17:46:54 start cpu_reference_t128_amr_pol_384_ref load1=11.50 held=[2994 ]
+2026-10-17 17:48:08 end cpu_reference_t128_amr_pol_384_ref status=0 load1=50.73
+2026-10-17 17:48:08 wait for cpu_reference_t128_amr_pol_384_blp: load1=50.73 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:49:38 waited 90 s for cpu_reference_t128_amr_pol_384_blp
+2026-10-17 17:49:38 start cpu_reference_t128_amr_pol_384_blp load1=14.71 held=[2994 ]
+2026-10-17 17:50:36 end cpu_reference_t128_amr_pol_384_blp status=0 load1=46.60
+2026-10-17 17:50:36 wait for cpu_reference_t128_amr_driver_pol_ref: load1=46.60 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:52:06 waited 90 s for cpu_reference_t128_amr_driver_pol_ref
+2026-10-17 17:52:06 start cpu_reference_t128_amr_driver_pol_ref load1=12.69 held=[2994 ]
+2026-10-17 17:56:39 end cpu_reference_t128_amr_driver_pol_ref status=0 load1=79.50
+2026-10-17 17:56:39 wait for cpu_reference_t128_amr_driver_pol_blp: load1=79.50 running_gpu_jobs=0 others>1core: 
+2026-10-17 17:58:39 waited 120 s for cpu_reference_t128_amr_driver_pol_blp
+2026-10-17 17:58:39 start cpu_reference_t128_amr_driver_pol_blp load1=13.07 held=[2994 ]
+2026-10-17 18:01:58 end cpu_reference_t128_amr_driver_pol_blp status=0 load1=108.37
+2026-10-17 18:01:58 wait for cpu_reference_t128_analytic_1024_ref: load1=108.37 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:04:29 waited 150 s for cpu_reference_t128_analytic_1024_ref
+2026-10-17 18:04:29 start cpu_reference_t128_analytic_1024_ref load1=13.04 held=[2994 ]
+2026-10-17 18:04:45 end cpu_reference_t128_analytic_1024_ref status=0 load1=17.44
+2026-10-17 18:04:45 wait for cpu_reference_t128_analytic_1024_blp: load1=17.44 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:05:15 waited 30 s for cpu_reference_t128_analytic_1024_blp
+2026-10-17 18:05:15 start cpu_reference_t128_analytic_1024_blp load1=11.41 held=[2994 ]
+2026-10-17 18:05:29 end cpu_reference_t128_analytic_1024_blp status=0 load1=10.12
+2026-10-17 18:05:29 start cpu_reference_t128_mc_thin_ref load1=10.12 held=[2994 ]
+2026-10-17 18:05:58 end cpu_reference_t128_mc_thin_ref status=0 load1=41.98
+2026-10-17 18:05:58 wait for cpu_reference_t128_mc_thin_blp: load1=41.98 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:07:28 waited 90 s for cpu_reference_t128_mc_thin_blp
+2026-10-17 18:07:28 start cpu_reference_t128_mc_thin_blp load1=11.26 held=[2994 ]
+2026-10-17 18:08:08 end cpu_reference_t128_mc_thin_blp status=0 load1=54.70
+2026-10-17 18:08:08 wait for cpu_reference_t128_mc_scatter_ref: load1=54.70 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:09:38 waited 90 s for cpu_reference_t128_mc_scatter_ref
+2026-10-17 18:09:38 start cpu_reference_t128_mc_scatter_ref load1=14.55 held=[2994 ]
+2026-10-17 18:10:09 end cpu_reference_t128_mc_scatter_ref status=0 load1=33.85
+2026-10-17 18:10:09 wait for cpu_reference_t128_mc_scatter_blp: load1=33.85 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:11:09 waited 60 s for cpu_reference_t128_mc_scatter_blp
+2026-10-17 18:11:10 start cpu_reference_t128_mc_scatter_blp load1=14.50 held=[2994 ]
+2026-10-17 18:11:58 end cpu_reference_t128_mc_scatter_blp status=0 load1=64.83
+2026-10-17 18:11:59 wait for cpu_torus_t128_img_192_ref: load1=64.83 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:13:59 waited 120 s for cpu_torus_t128_img_192_ref
+2026-10-17 18:13:59 start cpu_torus_t128_img_192_ref load1=10.91 held=[2994 ]
+2026-10-17 18:14:34 end cpu_torus_t128_img_192_ref status=0 load1=16.14
+2026-10-17 18:14:34 wait for cpu_torus_t128_img_192_blp: load1=16.14 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:15:04 waited 30 s for cpu_torus_t128_img_192_blp
+2026-10-17 18:15:04 start cpu_torus_t128_img_192_blp load1=10.64 held=[2994 ]
+2026-10-17 18:15:35 end cpu_torus_t128_img_192_blp status=0 load1=9.17
+2026-10-17 18:15:35 start cpu_torus_t128_img_384_ref load1=9.17 held=[2994 ]
+2026-10-17 18:16:36 end cpu_torus_t128_img_384_ref status=0 load1=28.11
+2026-10-17 18:16:37 wait for cpu_torus_t128_img_384_blp: load1=28.11 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:17:37 waited 60 s for cpu_torus_t128_img_384_blp
+2026-10-17 18:17:37 start cpu_torus_t128_img_384_blp load1=11.90 held=[2994 ]
+2026-10-17 18:18:10 end cpu_torus_t128_img_384_blp status=0 load1=27.30
+2026-10-17 18:18:10 wait for cpu_torus_t128_img_768_ref: load1=27.30 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:19:40 waited 90 s for cpu_torus_t128_img_768_ref
+2026-10-17 18:19:40 start cpu_torus_t128_img_768_ref load1=12.20 held=[2994 ]
+2026-10-17 18:21:59 end cpu_torus_t128_img_768_ref status=0 load1=91.03
+2026-10-17 18:21:59 wait for cpu_torus_t128_img_768_blp: load1=91.03 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:23:59 waited 120 s for cpu_torus_t128_img_768_blp
+2026-10-17 18:23:59 start cpu_torus_t128_img_768_blp load1=14.37 held=[2994 ]
+2026-10-17 18:24:59 end cpu_torus_t128_img_768_blp status=0 load1=49.27
+2026-10-17 18:24:59 wait for cpu_torus_t128_amr_384_ref: load1=49.27 running_gpu_jobs=0 others>1core: 
+2026-10-17 18:26:29 waited 90 s for cpu_torus_t128_amr_384_ref
+2026-10-17 18:26:29 start cpu_torus_t128_amr_384_ref load1=12.80 held=[2994 ]
+2026-10-17 18:29:34 end cpu_torus_t128_amr_384_ref status=0 load1=76.23
+2026-10-17 18:29:34 wait for cpu_torus_t128_amr_384_blp: load1=76.23 running_gpu_jobs=0 others>1core: emost:145% 
+2026-10-17 18:31:34 waited 120 s for cpu_torus_t128_amr_384_blp
+2026-10-17 18:31:34 start cpu_torus_t128_amr_384_blp load1=13.38 held=[2994 ]
+2026-10-17 18:34:02 end cpu_torus_t128_amr_384_blp status=0 load1=83.77
+2026-10-17 18:34:02 all done: 16:reference:amr_384,amr_pol_384,amr_driver_pol,analytic_1024,mc_thin,mc_scatter 64:reference:amr_384,amr_pol_384,amr_driver_pol,analytic_1024,mc_thin,mc_scatter 128:reference:amr_384,amr_pol_384,amr_driver_pol,analytic_1024,mc_thin,mc_scatter 128:torus:img_192,img_384,img_768,amr_384
+2026-10-17 18:34:30 wait for cpu_reference_t16_amr_pol_384_ref: load1=56.48 running_gpu_jobs=0 others>1core: emost:110% 
+2026-10-17 18:36:00 waited 90 s for cpu_reference_t16_amr_pol_384_ref
+2026-10-17 18:36:00 start cpu_reference_t16_amr_pol_384_ref load1=15.34 held=[2994 ]
+2026-10-17 18:37:45 end cpu_reference_t16_amr_pol_384_ref status=0 load1=15.20
+2026-10-17 18:37:45 start cpu_reference_t64_amr_driver_pol_ref load1=15.20 held=[2994 ]
+2026-10-17 18:43:00 end cpu_reference_t64_amr_driver_pol_ref status=0 load1=51.68
+2026-10-17 18:43:00 wait for cpu_torus_t128_img_384_ref: load1=51.68 running_gpu_jobs=0 others>1core: emost:104% 
+2026-10-17 18:44:30 waited 90 s for cpu_torus_t128_img_384_ref
+2026-10-17 18:44:30 start cpu_torus_t128_img_384_ref load1=14.29 held=[2994 ]
+2026-10-17 18:45:28 end cpu_torus_t128_img_384_ref status=0 load1=54.13
+2026-10-17 18:45:28 all done: 16:reference:amr_pol_384:ref 64:reference:amr_driver_pol:ref 128:torus:img_384:ref
+2026-10-17 18:45:28 wait for cpu_reference_t16_mc_thin_blp: load1=54.13 running_gpu_jobs=0 others>1core: emost:103% 
+2026-10-17 18:46:58 waited 90 s for cpu_reference_t16_mc_thin_blp
+2026-10-17 18:46:58 start cpu_reference_t16_mc_thin_blp load1=14.67 held=[2994 ]
+2026-10-17 18:48:09 end cpu_reference_t16_mc_thin_blp status=0 load1=15.91
+2026-10-17 18:48:09 all done: 16:reference:mc_thin:blp

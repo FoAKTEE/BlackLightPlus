@@ -1,0 +1,39 @@
+2026-10-17 16:37:43 gpu1_f87f96d2 is 1@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-17 16:37:43 gpu1_f87f96d2 attempt 1 job 2994 submitted
+2026-10-17 18:50:08 gpu1_f87f96d2 is 1@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-17 18:50:08 gpu1_f87f96d2 attempt 1 job 2994 adopted
+2026-10-17 18:50:11 gpu2_f87f96d2 is 2@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-17 18:50:11 gpu2_f87f96d2 attempt 1 job 2995 submitted
+2026-10-17 21:12:12 gpu1_f87f96d2 job 2994 running
+2026-10-17 21:22:42 gpu1_f87f96d2 job 2994 COMPLETED
+2026-10-17 21:22:42 gpu1_f87f96d2 FAILED: BLP/bench/results/reference/logs/gpu1_f87f96d2_2994.log
+2026-10-17 21:22:42 all done: 1@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-17 21:22:45 gpu2_f87f96d2 job 2995 running
+2026-10-17 21:26:15 gpu2_f87f96d2 job 2995 PREEMPTED
+2026-10-17 21:26:15 gpu2_f87f96d2 attempt 2 job 2997 submitted
+2026-10-17 21:40:11 gpu1_f87f96d2 is 1@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-17 21:40:11 gpu1_f87f96d2 attempt 1 job 2998 submitted
+2026-10-17 21:40:41 gpu1_f87f96d2 job 2998 running
+2026-10-17 21:55:11 gpu1_f87f96d2 job 2998 COMPLETED
+2026-10-17 21:55:11 gpu1_f87f96d2 done: BLP/bench/results/reference/logs/gpu1_f87f96d2_2998.log
+2026-10-17 21:55:11 all done: 1@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-17 21:57:10 gpu1_efa03062 is 1@reference=mc_thin,mc_scatter
+2026-10-17 21:57:10 gpu1_efa03062 attempt 1 job 2999 submitted
+2026-10-17 21:57:40 gpu1_efa03062 job 2999 running
+2026-10-17 22:00:10 gpu1_efa03062 job 2999 COMPLETED
+2026-10-17 22:00:10 gpu1_efa03062 done: BLP/bench/results/reference/logs/gpu1_efa03062_2999.log
+2026-10-17 22:00:10 gpu1_e41829b9 is 1@reference=bbh455_480,bbh455_pol_480/reference=bbh122_pol_480/reference=bbh_i90_amr_pol
+2026-10-17 22:00:10 gpu1_e41829b9 attempt 1 job 3000 submitted
+2026-10-17 22:00:40 gpu1_e41829b9 job 3000 running
+2026-10-17 22:15:11 gpu1_e41829b9 job 3000 COMPLETED
+2026-10-17 22:15:11 gpu1_e41829b9 done: BLP/bench/results/reference/logs/gpu1_e41829b9_3000.log
+2026-10-17 22:15:11 all done: 1@reference=mc_thin,mc_scatter 1@reference=bbh455_480,bbh455_pol_480/reference=bbh122_pol_480/reference=bbh_i90_amr_pol
+2026-10-18 00:10:12 gpu2_f87f96d2 is 2@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-18 00:10:12 gpu2_f87f96d2: submit failed
+2026-10-18 00:10:12 all done: 2@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-18 00:10:37 gpu2_f87f96d2 is 2@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-18 00:10:37 gpu2_f87f96d2: submit failed (sbatch: error: Batch job submission failed: I/O error writing script/environment to file); retrying every 60 s
+2026-10-18 00:12:22 gpu2_f87f96d2 is 2@reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384
+2026-10-18 00:12:22 gpu2_f87f96d2: submit failed (sbatch: error: Batch job submission failed: I/O error writing script/environment to file); retrying every 60 s
+2026-10-18 00:08:50 gpu2_f87f96d2 job 2997 CANCELLED
+2026-10-18 00:13:22 gpu2_f87f96d2 attempt 1 job 3007 submitted

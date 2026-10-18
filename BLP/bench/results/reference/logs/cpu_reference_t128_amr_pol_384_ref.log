@@ -1,0 +1,2 @@
+# reference.jl deck=reference backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=128 job=none legs=amr_pol_384 load1=10.5 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=reference leg=amr_pol_384 backend=cpu threads=128 ndev=0 config=threads lanes=0 chunk=0 items=147456 wall_s=6.711 first_s=27.16 setup_s=2.257 rate=2.197e+04 unit=rays/s load1=10.0/50.7 other_cores=3.1 same_as_saved=true

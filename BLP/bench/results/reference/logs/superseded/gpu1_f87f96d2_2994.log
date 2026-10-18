@@ -1,0 +1,671 @@
+host anta job 2994 ndev 1 groups reference=fused_384,fused_768,fused_mixed_768/reference=fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384/reference=amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768/torus=amr_384 commit b40fdb1 CUDA_VISIBLE_DEVICES=0 2026-10-17 21:11:45
+# 2026-10-17 21:11:45 reference reference fused_384,fused_768,fused_mixed_768:  21:11:45 up 53 days,  1:05,  9 users,  load average: 6.61, 8.18, 10.50
+0, NVIDIA A100 80GB PCIe, 14 MiB, 100 %, 1065 MHz, 48
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#imaging_legs##3#imaging_legs##4"{RunConfig, DeviceFluidGrid{Dict{Int64, CuArray{Float32, 4, CUDACore.DeviceMemory}}}, typeof(render_gpu_fused)}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#imaging_legs##3#imaging_legs##4"{RunConfig, DeviceFluidGrid{Dict{Int64, CuArray{Float32, 4, CUDACore.DeviceMemory}}}, typeof(render_gpu_fused)}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#imaging_legs##3#imaging_legs##4"{RunConfig, DeviceFluidGrid{Dict{Int64, CuArray{Float32, 4, CUDACore.DeviceMemory}}}, typeof(render_gpu_fused)}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=reference backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=fused_384,fused_768,fused_mixed_768 load1=17.13 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:12:10 BLP reference fused_384,fused_768,fused_mixed_768:  21:12:10 up 53 days,  1:05,  9 users,  load average: 14.74, 10.26, 11.14
+0, NVIDIA A100 80GB PCIe, 14 MiB, 3 %, 1065 MHz, 47
+# bench.jl deck=reference backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=fused_384,fused_768,fused_mixed_768 load1=13.4 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=reference leg=fused_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=147456 wall_s=0.09013 first_s=12.63 rate=1.636e+06 unit=rays/s load1=12.3/11.4 other_cores=6.4 same_as_saved=nothing
+BENCH deck=reference leg=fused_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=147456 wall_s=0.08776 first_s=0.2288 rate=1.68e+06 unit=rays/s load1=11.2/11.2 other_cores=75.8 same_as_saved=true
+BENCH deck=reference leg=fused_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=589824 wall_s=0.3419 first_s=0.422 rate=1.725e+06 unit=rays/s load1=11.2/16.6 other_cores=76.2 same_as_saved=nothing
+BENCH deck=reference leg=fused_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=589824 wall_s=0.2872 first_s=0.353 rate=2.054e+06 unit=rays/s load1=16.6/16.6 other_cores=60.8 same_as_saved=true
+BENCH deck=reference leg=fused_mixed_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=589824 wall_s=0.2596 first_s=2.592 rate=2.272e+06 unit=rays/s load1=16.6/21.5 other_cores=76.6 same_as_saved=nothing
+BENCH deck=reference leg=fused_mixed_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=589824 wall_s=0.2659 first_s=0.3488 rate=2.218e+06 unit=rays/s load1=21.5/21.5 other_cores=65.1 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:12:59 reference reference fused_pol_256,fused_pol_384:  21:12:59 up 53 days,  1:06,  9 users,  load average: 26.36, 13.27, 12.07
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 45
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#imaging_legs##3#imaging_legs##4"{RunConfig, DeviceFluidGrid{Dict{Int64, CuArray{Float32, 4, CUDACore.DeviceMemory}}}, typeof(render_gpu_polarized)}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#imaging_legs##3#imaging_legs##4"{RunConfig, DeviceFluidGrid{Dict{Int64, CuArray{Float32, 4, CUDACore.DeviceMemory}}}, typeof(render_gpu_polarized)}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#imaging_legs##3#imaging_legs##4"{RunConfig, DeviceFluidGrid{Dict{Int64, CuArray{Float32, 4, CUDACore.DeviceMemory}}}, typeof(render_gpu_polarized)}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=reference backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=fused_pol_256,fused_pol_384 load1=36.14 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:13:25 BLP reference fused_pol_256,fused_pol_384:  21:13:25 up 53 days,  1:06,  9 users,  load average: 29.76, 15.39, 12.82
+0, NVIDIA A100 80GB PCIe, 14 MiB, 17 %, 1065 MHz, 43
+# bench.jl deck=reference backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=fused_pol_256,fused_pol_384 load1=26.26 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=reference leg=fused_pol_256 res=256 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=65536 wall_s=0.2306 first_s=15.83 rate=2.841e+05 unit=rays/s load1=23.5/19.8 other_cores=4.7 same_as_saved=nothing
+BENCH deck=reference leg=fused_pol_256 res=256 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=65536 wall_s=0.2276 first_s=0.3913 rate=2.88e+05 unit=rays/s load1=18.9/18.9 other_cores=4.6 same_as_saved=true
+BENCH deck=reference leg=fused_pol_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=147456 wall_s=0.4173 first_s=0.5096 rate=3.533e+05 unit=rays/s load1=18.9/17.9 other_cores=4.5 same_as_saved=nothing
+BENCH deck=reference leg=fused_pol_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=147456 wall_s=0.3449 first_s=0.4489 rate=4.276e+05 unit=rays/s load1=17.9/17.9 other_cores=4.4 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:14:13 reference reference amr_384,amr_pol_384:  21:14:13 up 53 days,  1:07,  9 users,  load average: 17.92, 14.26, 12.55
+0, NVIDIA A100 80GB PCIe, 14 MiB, 10 %, 1065 MHz, 43
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#imaging_legs##8#imaging_legs##9"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}, typeof(render_gpu_amr)}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#imaging_legs##8#imaging_legs##9"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}, typeof(render_gpu_amr)}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#imaging_legs##8#imaging_legs##9"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}, typeof(render_gpu_amr)}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=reference backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=amr_384,amr_pol_384 load1=15.28 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:14:38 BLP reference amr_384,amr_pol_384:  21:14:38 up 53 days,  1:08,  9 users,  load average: 14.01, 13.63, 12.39
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 42
+# bench.jl deck=reference backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=amr_384,amr_pol_384 load1=17.92 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=reference leg=amr_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=147456 wall_s=0.1414 first_s=12.98 rate=1.043e+06 unit=rays/s load1=16.9/14.2 other_cores=6.0 same_as_saved=nothing
+BENCH deck=reference leg=amr_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=147456 wall_s=0.1278 first_s=0.2678 rate=1.154e+06 unit=rays/s load1=13.7/13.7 other_cores=5.8 same_as_saved=true
+BENCH deck=reference leg=amr_pol_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=147456 wall_s=0.7049 first_s=7.017 rate=2.092e+05 unit=rays/s load1=13.7/12.6 other_cores=6.8 same_as_saved=nothing
+BENCH deck=reference leg=amr_pol_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=147456 wall_s=0.6151 first_s=0.7537 rate=2.397e+05 unit=rays/s load1=12.6/12.2 other_cores=6.0 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:15:32 reference reference amr_driver_pol:  21:15:32 up 53 days,  1:08,  9 users,  load average: 12.20, 13.38, 12.39
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 42
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#run#imaging_legs##15"{var"#stokes#imaging_legs##12"{Bool, PlaneParallelCamera, KerrSchildCartesian{Float64}, RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, RunConfig}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#run#imaging_legs##15"{var"#stokes#imaging_legs##12"{Bool, PlaneParallelCamera, KerrSchildCartesian{Float64}, RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, RunConfig}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#run#imaging_legs##15"{var"#stokes#imaging_legs##12"{Bool, PlaneParallelCamera, KerrSchildCartesian{Float64}, RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, RunConfig}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=reference backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=amr_driver_pol load1=11.06 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:16:22 BLP reference amr_driver_pol:  21:16:22 up 53 days,  1:09,  9 users,  load average: 8.74, 12.27, 12.06
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 42
+# bench.jl deck=reference backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=amr_driver_pol load1=8.17 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=reference leg=amr_driver_pol res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=1140992 wall_s=5.955 first_s=23.41 rate=1.916e+05 unit=rays/s load1=7.7/7.0 other_cores=4.4 same_as_saved=nothing
+BENCH deck=reference leg=amr_driver_pol res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=1140992 wall_s=5.052 first_s=5.116 rate=2.258e+05 unit=rays/s load1=6.8/11.3 other_cores=24.9 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:17:53 reference reference analytic_1024,mc_thin,mc_scatter:  21:17:53 up 53 days,  1:11,  9 users,  load average: 11.30, 11.65, 11.83
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 49
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#analytic_leg##2#analytic_leg##3"{EquatorialDisk{Float64}, RunConfig}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#analytic_leg##2#analytic_leg##3"{EquatorialDisk{Float64}, RunConfig}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#analytic_leg##2#analytic_leg##3"{EquatorialDisk{Float64}, RunConfig}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=reference backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=analytic_1024,mc_thin,mc_scatter load1=15.13 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:18:11 BLP reference analytic_1024,mc_thin,mc_scatter:  21:18:11 up 53 days,  1:11,  9 users,  load average: 15.92, 12.70, 12.17
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 47
+# bench.jl deck=reference backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=analytic_1024,mc_thin,mc_scatter load1=17.53 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=reference leg=analytic_1024 res=1024 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=1048576 wall_s=0.3049 first_s=21.16 rate=3.439e+06 unit=rays/s load1=19.2/20.9 other_cores=24.4 same_as_saved=nothing
+BENCH deck=reference leg=analytic_1024 res=1024 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=1048576 wall_s=0.1753 first_s=0.1797 rate=5.981e+06 unit=rays/s load1=21.3/21.3 other_cores=24.5 same_as_saved=true
+BENCH deck=reference leg=mc_thin res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=10025000 wall_s=0.6483 first_s=6.823 rate=1.546e+07 unit=photons/s load1=21.3/22.8 other_cores=33.1 same_as_saved=nothing
+BENCH deck=reference leg=mc_thin res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=10025000 wall_s=0.4919 first_s=0.5137 rate=2.038e+07 unit=photons/s load1=23.1/23.1 other_cores=24.5 same_as_saved=true
+BENCH deck=reference leg=mc_scatter res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=11848295 wall_s=1.883 first_s=11.75 rate=6.291e+06 unit=photons/s load1=23.1/25.0 other_cores=24.9 same_as_saved=nothing
+BENCH deck=reference leg=mc_scatter res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=11848295 wall_s=1.584 first_s=1.648 rate=7.479e+06 unit=photons/s load1=25.0/25.4 other_cores=24.4 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:19:36 reference torus img_192,img_384,img_768:  21:19:36 up 53 days,  1:12,  9 users,  load average: 25.41, 16.57, 13.58
+0, NVIDIA A100 80GB PCIe, 14 MiB, 9 %, 1065 MHz, 42
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#torus_img_leg##2#torus_img_leg##3"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#torus_img_leg##2#torus_img_leg##3"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#torus_img_leg##2#torus_img_leg##3"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=torus backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=img_192,img_384,img_768 load1=25.56 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:20:03 BLP torus img_192,img_384,img_768:  21:20:03 up 53 days,  1:13,  9 users,  load average: 25.70, 17.34, 13.92
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 41
+# bench.jl deck=torus backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=img_192,img_384,img_768 load1=25.76 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=torus leg=img_192 res=192 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=36864 wall_s=0.05649 first_s=15.88 rate=6.525e+05 unit=rays/s load1=25.7/25.9 other_cores=25.8 same_as_saved=nothing
+BENCH deck=torus leg=img_192 res=192 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=36864 wall_s=0.05622 first_s=0.2143 rate=6.558e+05 unit=rays/s load1=25.9/25.9 other_cores=24.6 same_as_saved=true
+BENCH deck=torus leg=img_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=147456 wall_s=0.1475 first_s=0.1972 rate=9.996e+05 unit=rays/s load1=25.9/25.9 other_cores=24.4 same_as_saved=nothing
+BENCH deck=torus leg=img_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=147456 wall_s=0.1364 first_s=0.1843 rate=1.081e+06 unit=rays/s load1=25.9/25.9 other_cores=24.6 same_as_saved=true
+BENCH deck=torus leg=img_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=589824 wall_s=0.5463 first_s=0.609 rate=1.08e+06 unit=rays/s load1=25.9/25.9 other_cores=24.4 same_as_saved=nothing
+BENCH deck=torus leg=img_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=589824 wall_s=0.4889 first_s=0.5465 rate=1.206e+06 unit=rays/s load1=25.9/25.9 other_cores=24.4 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:20:54 reference torus amr_384:  21:20:54 up 53 days,  1:14,  9 users,  load average: 25.94, 18.82, 14.62
+0, NVIDIA A100 80GB PCIe, 14 MiB, 7 %, 1065 MHz, 41
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+ERROR: LoadError: MethodError: Cannot `convert` an object of type var"#gpu_configs##8#gpu_configs##9"{Int64} to an object of type var"#gpu_configs##0#gpu_configs##1"
+The function `convert` exists, but no method is defined for this combination of argument types.
+
+Closest candidates are:
+  convert(::Type{T}, !Matched::T) where T
+   @ Base Base_compiler.jl:133
+
+Stacktrace:
+  [1] macro expansion
+    @ ./namedtuple.jl:129 [inlined]
+  [2] NamedTuple
+    @ ./namedtuple.jl:124 [inlined]
+  [3] convert(::Type{@NamedTuple{config::String, make::var"#gpu_configs##0#gpu_configs##1", run::var"#torus_amr_leg##2#torus_amr_leg##3"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, mc_chunk::Int64}}, nt::@NamedTuple{config::String, make::var"#gpu_configs##8#gpu_configs##9"{Int64}, run::var"#torus_amr_leg##2#torus_amr_leg##3"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, mc_chunk::Int64})
+    @ Base ./namedtuple.jl:184
+  [4] push!
+    @ ./array.jl:1288 [inlined]
+  [5] gpu_configs(leg::Leg, s::@NamedTuple{run::var"#torus_amr_leg##2#torus_amr_leg##3"{RunConfig, DeviceAMRGrid{Dict{Int64, CuArray{Float32, 5, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Float64, 2, CUDACore.DeviceMemory}}, Dict{Int64, CuArray{Int32, 3, CUDACore.DeviceMemory}}}}, items::Int64, variant::String})
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:304
+  [6] run_gpu_leg(leg::Leg)
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:320
+  [7] main_reference()
+    @ Main /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:369
+  [8] top-level scope
+    @ /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+  [9] include(mod::Module, _path::String)
+    @ Base ./Base.jl:306
+ [10] exec_options(opts::Base.JLOptions)
+    @ Base ./client.jl:317
+ [11] _start()
+    @ Base ./client.jl:550
+in expression starting at /data/haiyangw/claude/BlackLightPlus/BLP/bench/reference.jl:381
+# reference.jl deck=torus backend=gpu commit=b40fdb1 src_tree=e76ab3c threads=4 devices=[0] job=2994 legs=amr_384 load1=25.85 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# 2026-10-17 21:21:20 BLP torus amr_384:  21:21:20 up 53 days,  1:14,  9 users,  load average: 24.45, 19.07, 14.82
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 40
+# bench.jl deck=torus backend=gpu commit=b40fdb1 threads=4 devices=[0] job=2994 tune=false legs=amr_384 load1=22.99 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=torus leg=amr_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=629760 wall_s=3.608 first_s=20.97 rate=1.746e+05 unit=rays/s load1=22.1/16.7 other_cores=7.9 same_as_saved=nothing
+BENCH deck=torus leg=amr_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=629760 wall_s=2.988 first_s=3.105 rate=2.107e+05 unit=rays/s load1=16.2/14.7 other_cores=7.6 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# 2026-10-17 21:22:32 end:  21:22:32 up 53 days,  1:15,  9 users,  load average: 14.65, 17.30, 14.52
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 45
+exit 1

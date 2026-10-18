@@ -1,0 +1,2 @@
+# reference.jl deck=torus backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=128 job=none legs=img_192 load1=9.76 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=torus leg=img_192 backend=cpu threads=128 ndev=0 config=threads lanes=0 chunk=0 items=36864 wall_s=1.752 first_s=9.597 setup_s=2.229 rate=2.104e+04 unit=rays/s load1=9.2/16.1 other_cores=3.4 same_as_saved=nothing

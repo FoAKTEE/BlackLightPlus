@@ -1,0 +1,4 @@
+# reference.jl deck=torus backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=128 job=none legs=img_384 load1=8.45 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=torus leg=img_384 backend=cpu threads=128 ndev=0 config=threads lanes=0 chunk=0 items=147456 wall_s=4.061 first_s=23.17 setup_s=2.24 rate=3.631e+04 unit=rays/s load1=8.0/30.3 other_cores=6.4 same_as_saved=nothing
+# reference.jl deck=torus backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=128 job=none legs=img_384 load1=12.46 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=torus leg=img_384 backend=cpu threads=128 ndev=0 config=threads lanes=0 chunk=0 items=147456 wall_s=4.769 first_s=18.75 setup_s=2.189 rate=3.092e+04 unit=rays/s load1=11.9/58.3 other_cores=5.9 same_as_saved=true

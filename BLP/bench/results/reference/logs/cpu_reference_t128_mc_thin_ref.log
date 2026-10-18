@@ -1,0 +1,2 @@
+# reference.jl deck=reference backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=128 job=none legs=mc_thin load1=19.19 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=reference leg=mc_thin backend=cpu threads=128 ndev=0 config=threads lanes=0 chunk=0 items=10025000 wall_s=3.554 first_s=4.994 setup_s=2.7e-08 rate=2.821e+06 unit=photons/s load1=17.9/42.0 other_cores=2.2 same_as_saved=true

@@ -1,0 +1,4 @@
+# reference.jl deck=reference backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=64 job=none legs=amr_driver_pol load1=11.34 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=reference leg=amr_driver_pol backend=cpu threads=64 ndev=0 config=threads lanes=0 chunk=0 items=1141248 wall_s=47.47 first_s=121.1 setup_s=2.7e-08 rate=2.404e+04 unit=rays/s load1=11.3/63.0 other_cores=10.1 same_as_saved=true
+# reference.jl deck=reference backend=cpu commit=b40fdb1 src_tree=e76ab3c threads=64 job=none legs=amr_driver_pol load1=13.48 out=BLP/bench/results/reference/raw/ref_cpu.jsonl
+BENCH package=reference deck=reference leg=amr_driver_pol backend=cpu threads=64 ndev=0 config=threads lanes=0 chunk=0 items=1141248 wall_s=45.82 first_s=149.7 setup_s=3.5e-08 rate=2.49e+04 unit=rays/s load1=13.5/55.8 other_cores=3.6 same_as_saved=true

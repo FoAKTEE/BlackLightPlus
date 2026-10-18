@@ -1,0 +1,3 @@
+# bench.jl deck=reference backend=cpu commit=b40fdb1 threads=16 job=none tune=false legs=amr_384 load1=8.65 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
+BENCH deck=reference leg=amr_384 res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=4096 items=147456 wall_s=7.153 first_s=10.67 rate=2.061e+04 unit=rays/s load1=8.2/9.4 other_cores=5.8 same_as_saved=nothing
+BENCH deck=reference leg=amr_384 res=384 backend=cpu threads=16 ndev=0 lanes=0 chunk=64 items=147456 wall_s=5.46 first_s=5.615 rate=2.7e+04 unit=rays/s load1=9.4/9.9 other_cores=3.6 same_as_saved=true
