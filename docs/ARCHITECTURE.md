@@ -26,8 +26,9 @@ Rules, each a gate of `BLP/test/structure.jl`.
   MonteCarlo → Data → Execution → Plans → Analysis → Products`; a module imports
   (`using ..X`, `import ..X`) only modules before it.
 - No physics module imports `KernelAbstractions`, `HDF5`, `CUDA` or `Base.Threads`.
-  `Threads.@threads` appears only in `Execution/executor.jl` and in the `Data` loaders
-  and table builders (`athenak_hdf5.jl`, `athenak_bin.jl`, `uniform_grid.jl`, `tables.jl`).
+  `Threads.@threads` appears only in the `Data` loaders and table builders
+  (`athenak_hdf5.jl`, `athenak_bin.jl`, `uniform_grid.jl`, `tables.jl`); the executors
+  run worker tasks that pull chunks from a queue.
 - There is exactly one `@kernel`, `_foreach!` in `Execution/kernel.jl`. Every device
   computation is a per-item program run through it.
 - `src/` neither loads nor calls `CUDA`; `ext/BLPCUDAExt.jl` adds the `CUDADevice` methods
@@ -67,6 +68,7 @@ src/
 │   │                  series.jl npy.jl tables.jl
 │   └── Execution/     Execution.jl devices.jl pool.jl residency.jl kernel.jl executor.jl
 │                      backend.jl ray_sources.jl schedule.jl worklist.jl accumulators.jl
+│                      children.jl cascade.jl
 └── pipeline/
     ├── Plans/         Plans.jl config.jl lanes.jl plan.jl prepare.jl
     ├── Analysis/      Analysis.jl refinement.jl lensing_bands.jl interferometry.jl
@@ -300,14 +302,16 @@ blend(sa::PlasmaPrimitives, sb::PlasmaPrimitives, w)          # the one time ble
 ```julia
 KernelAbstractions.@kernel function _foreach!(prog, @Const(items), n, outs...)   # the one kernel
     i = @index(Global)
-    @inbounds i <= n && prog(items[i], i, outs...)
+    @inbounds i <= n && prog(Int(items[i]), i, outs...)   # items: a range, or Int32/Int indices
 end
 
 abstract type Executor end
-ThreadedExecutor(; chunk = 4096)                       # Julia threads, host arrays
-PoolExecutor(devices; lanes = 2, chunk = 65536); PoolExecutor(pool::DevicePool)
+ThreadedExecutor(; chunk = :auto)                      # Julia threads, host arrays
+PoolExecutor(devices; lanes = 2, chunk = :auto); PoolExecutor(pool::DevicePool; chunk = pool.chunk)
+chunk_for(exec, n; hint = chunk_hint(prog), bytes) -> Int   # the chunk of a run under :auto
 foreach_item!(exec, prog, items; outs::Tuple = (), order = nothing) -> outs
 foreach_item!(exec, (prog64 => rescue, prog32 => bulk); outs) -> outs   # one queue, several programs
+foreach_cascade!(exec, primary, layer, n, depth; capacity = nothing, chunk = cascade_chunk(exec, n)) -> Int
 describe(exec) -> (kind, devices, lanes, chunk, threads)
 
 abstract type RaySource end; ray(src, item) -> (y::SVector{8}, ok::Bool)
@@ -322,15 +326,28 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
   `outs[k][item]` holds the outputs of `item`, bitwise the same whatever the executor,
   chunk size, device count, lane scheduling or `order` on one hardware (threads and host
   pools, or any number of CUDA devices); CPU and GPU outputs differ in their last bits (§6).
-- **Threads.** `ThreadedExecutor` cuts the items into chunks of `chunk` and hands them to
-  threads dynamically (`Threads.@threads :dynamic`); each item calls the host program with
-  the host arrays. This is the only `Threads.@threads` over items.
+- **Chunks.** An executor's `chunk` is an item count or `:auto`, the default, resolved per
+  run by `chunk_for` from the item count `n`, the bytes of output per item and the
+  program's `chunk_hint` (a trait beside `workgroupsize`, `nothing` by default): a pool on
+  one device takes `2^20` items per launch; on `d` devices of `l` lanes
+  `clamp(cld(n, 2 l d), 2^16, 2^20)`; a pool never puts more than 16 MiB of outputs in one
+  launch (but at least `2^16` items); threads take `clamp(cld(n, 16 t), 16, 4096)` on `t`
+  threads; then at most the hint. The AMR worklist holds `max(1, c ÷ block²)` blocks per
+  chunk and the Monte Carlo cascade sizes its own chunks (`cascade_chunk`). The resolved
+  chunk of the last run is what `describe(exec).chunk` and a result's `run` record report.
+  No result depends on the chunk.
+- **Threads.** `ThreadedExecutor` cuts the items into chunks in queue order and one worker
+  task per Julia thread pulls the next chunk from one queue (`run_workers!`); each item
+  calls the host program with the host arrays. A program's exception is rethrown as a
+  `CapturedException` once the queue drains.
 - **Pool.** A `DevicePool` runs `lanes` persistent worker tasks per device pulling chunks
-  from one shared queue. A chunk stages its item indices, launches the program's device
-  twin once (after `prepare_launch!(dev, prog)`, which raises the CUDA stack to
-  `stack_bytes(prog)`, at `workgroupsize(prog)`), synchronizes and copies the outputs back
-  through host staging into `outs[k][item]`. Executors with the same devices, `lanes` and
-  `chunk` share one pool of the process registry, closed at exit; a `DevicePool` built
+  from one shared queue. A chunk passes its items to the kernel (`device_items`: a range
+  as it is, with no upload; any other list staged as `Int32` when every item fits, `Int`
+  otherwise), launches the program's device twin once (after `prepare_launch!(dev, prog)`,
+  which raises the CUDA stack to `stack_bytes(prog)`, at `workgroupsize(prog)`),
+  synchronizes and copies the outputs back through host staging into `outs[k][item]` (one
+  contiguous copy for a range). Executors with the same devices and `lanes` share one pool
+  of the process registry, whatever their chunk, closed at exit; a `DevicePool` built
   directly is the caller's to `close`.
 - **Residency.** `DeviceAdaptor(pool, dev, readonly)` is the `Adapt` adaptor of a device
   twin: each `Array` leaf becomes its device copy, cached per pool and device by the
@@ -355,13 +372,27 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
   `Spectrum(bins; plan, run)` rounds each cell once and answers `band`, `nu_centers`,
   `nuLnu`, `nuLnu_total`, `nuLnu_solid`, `total_power`, `total_weight`, `mean_energy`.
   `InclinationBands` keeps its band centres and half-width. `ExactScalars(n)` has `add!`,
-  `scalar`, `addends` (one key or a tuple of keys). `ChildBuffer(T, capacity, layout)` stores children with
-  their genealogy streams through `spawn!(buf, child, rng, event)`; a child beyond the
-  capacity is counted (`overflow`) and the layer is rerun at a capacity of at least the
-  count, which spawns identical children. `gather!(acc)` adds the device twins after
-  `foreach_item!`; `Spectrum`, `scalar` and `children` throw while twins are pending. The
-  accumulators are not `Sink`s: a Monte Carlo sink forwards `record!(sink, sph)` to
-  `record!(bins, sph.E, sph.w, escape_direction(ctl, sph))` and `spawn!` to the buffer.
+  `scalar`, `addends` (one key or a tuple of keys). `gather!(acc)` adds the device twins
+  after `foreach_item!` or `foreach_cascade!`; `Spectrum`, `scalar` and `children` throw
+  while twins are pending. The accumulators are not `Sink`s: a Monte Carlo sink forwards
+  `record!(sink, sph)` to `record!(bins, sph.E, sph.w, escape_direction(ctl, sph))` and
+  `spawn!` to the child buffer.
+- **Cascade.** `foreach_cascade!(exec, primary, layer, n, depth; capacity, chunk)` runs
+  generation 0, `primary` over `1:n`, then up to `depth` generations of `layer` over the
+  children the generation before spawned, chunk by chunk: the worker that takes a chunk
+  of `chunk` primaries (`cascade_chunk(exec, n)`) runs every generation of it before the
+  next chunk. A program spawns through `spawn!(buf, child, rng, event)` into the
+  `ChildBuffer(T, capacity, layout)` it holds (a slot of capacity 0 that supplies the
+  element type and the stream layout) and `layer` reads its `Generation(photons, rngs)`;
+  the cascade swaps both in by adaptor. On a lane the chunk's children live in two device
+  buffers swapped per generation and only their count is read back; a generation that can
+  spawn records into zeroed lane scratch, drained into the device's totals through the one
+  kernel once its children fit, and a generation whose children overflow the buffer
+  (`overflow`) runs again in full after the buffer grows to the count. On threads each
+  task keeps two growing buffers and reruns only the item that overflowed. Child streams
+  are keyed by genealogy, so a rerun spawns identical children, and the totals, the set of
+  children and the returned count are bitwise independent of the executor, the chunking,
+  the device count, the lane and the arrival order.
 - **Devices.** `HostDevice(id)` (the KernelAbstractions CPU backend as a logical device)
   and `CUDADevice(ordinal)`, an integer meaning the latter. The protocol is `backend(dev)`,
   `activate!`, `functional`, `stage_alloc`/`stage_free`, `free!`, `prepare_launch!`,
@@ -390,7 +421,8 @@ MixedLanes(rescue_px = 2)       # Float32 bulk, Float64 within rescue_px of the 
 geodesic_type(lanes)            # Tg; Float32 for MixedLanes
 
 transfer_params(cfg; mass_scale = cfg.mass_scale_cgs, rat_high = cfg.plasma.rat_high)
-prepare(cfg::RunConfig; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16) -> Plan
+prepare(cfg::RunConfig; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16,
+        queue = nothing) -> Plan
 prepare(sphere::UniformSphere) -> Plan     # the Monte Carlo sphere on Minkowski(), params = nothing
 
 struct Plan{S,Sg,P,M,T,Bg,H,L}
@@ -402,6 +434,7 @@ struct Plan{S,Sg,P,M,T,Bg,H,L}
     horizon::H; escape::Float64; R_em::Float64; theta_o::Float64
     curve::Tuple{Vector{Float64},Vector{Float64}}
     lanes::L; queue::Vector{Int}; rescue::Vector{Int}
+    hotcross::Base.RefValue{Union{Nothing,HotcrossTable{Matrix{Float64}}}}   # memo of hotcross_table(plan)
 end
 ```
 
@@ -412,10 +445,15 @@ pixel centres; the transfer parameters (units, electron model, the cuts
 nonzero fraction); `escape = escape_factor × distance`; `R_em = domain_radius(matter)`,
 `Inf` with `matter = nothing`; the march budget on both lanes; the horizon proxy (`NaN`
 when the spacetime has none); `theta_o`; on Kerr, the critical curve at
-`curve_inclination` and the cost-ordered queue (identity order elsewhere); the rescue set
-of `MixedLanes`. It throws `ArgumentError` for a spacetime that is not `Float64`, a
-geodesic lane the spacetime does not have, transfer or accumulator lanes other than
-`Float64`, and `MixedLanes` off Kerr. A plan is immutable and backend-free.
+`curve_inclination` and the cost-ordered queue (identity order elsewhere), or the `queue`
+given, a permutation of the pixel indices validated by `queue_items` (for a movie,
+`march_sort_order(vec(shadow(plan).steps))` of the previous frame); the rescue set of
+`MixedLanes`. It throws `ArgumentError` for a spacetime that is not `Float64`, a geodesic
+lane the spacetime does not have, transfer or accumulator lanes other than `Float64`,
+`MixedLanes` off Kerr, and a `queue` that is not a permutation. A plan is immutable and
+backend-free; its one memo, `hotcross_table(plan)`, builds the Monte Carlo hot-cross table
+at the plan's first scattering run and keeps it, so later runs reuse the table and its
+device copies.
 `prepare(sphere)` is the plan of the Monte Carlo sphere: `Minkowski()`, the sphere as
 matter in centimetres, `RunConfig()` and no parameter set; `output_type` and
 `imaging_program` reject such a plan.
@@ -450,9 +488,12 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   `TRACE_WINDOW + 2` output arrays keep the call below the argument count at which Julia
   boxes arguments. `ShadowProgram(st, budget, escape, rays)` records fate, step count,
   largest null error and final radius and state. `AnalyticProgram(gen, theta_o, a, ro,
-  disk, bands)` lands every band of one screen point and needs a 32 KiB device stack.
+  disk, bands)` (in `analytic.jl`) lands every band of one screen point into the `5K`
+  plain `Float64` outputs of `analytic_outputs(K, n)`, quantity-major, which
+  `render_analytic` reshapes into its maps without a copy; it needs a 32 KiB device stack.
 - The Monte Carlo programs `MCPrimary(source, transport, sink, seed)` and
-  `MCLayer(photons, rngs, transport, sink)` are called as `prog(item, i)` without outputs
+  `MCLayer(generation, transport, sink)` (a `Generation`, or `photons, rngs`) are called
+  as `prog(item, i)` without outputs
   and write through `MCSink(ctl, orders, children, ledger)`, a `Sink` over the exact
   accumulators: `SphereSource(sphere, tables)` or `ZoneSource(zones, weights, dnmax,
   offset, lint)` generates the primaries, `MCTransport(ctl, st, provider, opac, absorb,
@@ -511,10 +552,13 @@ plasma grid on a stationary spacetime spreads the primaries over
 geodesics (`CurvedMarch` with `C`, `escape`, `R_em`) and returns a `GRMHDSpectrumResult`
 of inclination bands. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
 sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
-`ExactScalars`, and scattered children into a `ChildBuffer` that the next layer tracks,
-up to `max_scatt` layers; a layer whose buffer overflows is rerun at the counted
-capacity. `gather!` follows every `foreach_item!` and `Spectrum(bins)` rounds once per
-cell, so on one hardware the bins, the ledger and the children depend only on the plan,
+`ExactScalars`, and scattered children into the `ChildBuffer` of the cascade
+(`foreach_cascade!`): within each chunk of primaries the next generation tracks the
+children of the one before, up to `max_scatt` generations, and a generation whose buffer
+overflows is rerun at the counted capacity into scratch sums. The hot-cross table is the
+`table` given or `hotcross_table(plan)`. `gather!` follows the cascade and
+`Spectrum(bins)` rounds once per cell, so on one hardware the bins, the ledger and the
+children depend only on the plan,
 `Ns` and the keywords, whatever the executor, thread count, device count or chunking.
 `analytic_nuLnu(sphere, nu)` is the thin sphere's closed form and `incl_nuLnu(result)`
 the isotropic-equivalent spectra of the bands.
@@ -629,7 +673,7 @@ Every name of `names(BLP)`. The keyword `backend` of a product defaults to `noth
 | `RunConfig` | `RunConfig(; m_bh_cgs, mass_scale_cgs, frequency_hz, camera, plasma, max_steps, C, escape_factor)` | run record (§5.1) |
 | `Lanes` | `Lanes{Tg,Tt,A}()`, `Lanes()` | precision lanes, `Tt = A = Float64` |
 | `MixedLanes` | `MixedLanes(rescue_px = 2)` | mixed lanes on Kerr |
-| `prepare` | `prepare(cfg; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16)`; `prepare(sphere::UniformSphere)` | `Plan` |
+| `prepare` | `prepare(cfg; spacetime, matter, mode = IQUV(), lanes = Lanes(), tile = 16, queue = nothing)`; `prepare(sphere::UniformSphere)` | `Plan` |
 | `KerrSchildCartesian` | `KerrSchildCartesian(a)` | `KerrSchildCartesian{T}` |
 | `Minkowski` | `Minkowski()` | `Minkowski{Float64}` |
 | `UserMetric` | `UserMetric(g)` | `UserMetric{F,Float64}` |
@@ -648,9 +692,9 @@ Every name of `names(BLP)`. The keyword `backend` of a product defaults to `noth
 | `EquatorialDisk` | `EquatorialDisk(a; sub_kep, betar, betaphi, gamma_p, mu_p, sigma_p, redshift_power, rin)` | g-disk of the exact-Kerr products |
 | `UniformSphere` | `UniformSphere(; n_e = 1e13, theta_e = 100.0, B = 1.0, R = 1.0)` | analytic provider |
 | `StokesI`, `IQUV` | `StokesI()`, `IQUV()` | transfer modes |
-| `ThreadedExecutor` | `ThreadedExecutor(; chunk = 4096)` | `Executor` |
-| `PoolExecutor` | `PoolExecutor(devices; lanes = 2, chunk = 65536)`, `PoolExecutor(pool)` | `Executor` |
-| `DevicePool` | `DevicePool(devices; lanes = 2, chunk = 65536)` | pool, closed with `close` |
+| `ThreadedExecutor` | `ThreadedExecutor(; chunk = :auto)` | `Executor` |
+| `PoolExecutor` | `PoolExecutor(devices; lanes = 2, chunk = :auto)`, `PoolExecutor(pool; chunk = pool.chunk)` | `Executor` |
+| `DevicePool` | `DevicePool(devices; lanes = 2, chunk = :auto)` | pool, closed with `close` |
 | `HostDevice` | `HostDevice(id)` | device |
 | `CUDADevice` | `CUDADevice(ordinal)` | device |
 | `select_devices` | `select_devices(; candidates, util_threshold = 15, min_free_gb = 8, fallback = false)` | `Vector{CUDADevice}` |
@@ -748,13 +792,15 @@ comment or module docstring.
 | `infra/Execution/devices.jl` | Device handles and the device protocol | `HostDevice`, `CUDADevice`, `BackendUnavailable` |
 | `infra/Execution/pool.jl` | The device pool: lanes, shared queue, registry | `DevicePool` |
 | `infra/Execution/residency.jl` | A host object as a device sees it | `DeviceAdaptor`, `resident`, `device_program` |
-| `infra/Execution/kernel.jl` | The only kernel of the package | `_foreach!`, `workgroupsize` |
-| `infra/Execution/executor.jl` | Executors: run a program over items, gather outputs | `ThreadedExecutor`, `PoolExecutor`, `foreach_item!` |
+| `infra/Execution/kernel.jl` | The only kernel of the package and the launch traits | `_foreach!`, `workgroupsize`, `chunk_hint` |
+| `infra/Execution/executor.jl` | Executors: chunk a run, run a program over items, gather outputs | `ThreadedExecutor`, `PoolExecutor`, `foreach_item!`, `chunk_for` |
 | `infra/Execution/backend.jl` | The CPU/GPU switch | `resolve`, `backend!`, `backend` |
 | `infra/Execution/ray_sources.jl` | The initial state of an item's ray, made in the program | `CameraRays`, `PixelGrid`, `BlockGrid`, `CoordList` |
 | `infra/Execution/schedule.jl` | Scheduling geometry of full-frame renders | `cost_order`, `rescue_pixels`, `mixed_partition` |
 | `infra/Execution/worklist.jl` | The image-block worklist of adaptive refinement | `ImageBlock`, `stream_blocks!` |
-| `infra/Execution/accumulators.jl` | Exact bins, exact scalars and the child buffer | `ExactBins`, `Spectrum`, `ChildBuffer`, `gather!` |
+| `infra/Execution/accumulators.jl` | Exact bins and exact scalars | `ExactBins`, `ExactScalars`, `Spectrum`, `gather!` |
+| `infra/Execution/children.jl` | The children of a cascade and how a layer reads them | `ChildBuffer`, `Generation`, `spawn!` |
+| `infra/Execution/cascade.jl` | The cascade: every generation of a chunk on the worker that took it | `foreach_cascade!`, `cascade_chunk` |
 | `pipeline/Plans/Plans.jl` | Run configuration, precision lanes and `prepare` | includes, exports |
 | `pipeline/Plans/config.jl` | Run configuration | `CameraConfig`, `PlasmaConfig`, `RunConfig` |
 | `pipeline/Plans/lanes.jl` | Precision lanes | `Lanes`, `MixedLanes`, `geodesic_type` |
@@ -769,9 +815,9 @@ comment or module docstring.
 | `pipeline/Products/image.jl` | Full-frame and coordinate renders, the run record | `Image`, `render` |
 | `pipeline/Products/trace.jl` | Trajectories, ray fates, the two-phase render | `Trajectories`, `trace`, `shadow` |
 | `pipeline/Products/sensitivity.jl` | Parameter derivatives and ladders of Stokes I | `sensitivity`, `variants` |
-| `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `render_analytic`, `photon_ring_layers` |
+| `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `AnalyticProgram`, `render_analytic`, `photon_ring_layers` |
 | `pipeline/Products/amr.jl` | Adaptive image-plane refinement | `render_amr` |
-| `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, layered transport, exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
+| `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, the scattering cascade, exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
 | `BLPCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice` | extension module |
 
 ## 9. Exports and internal interfaces

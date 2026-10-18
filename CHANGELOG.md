@@ -315,6 +315,53 @@ The pending acceptance runs are listed there.
 - `mc_spectrum_gpu(...; n_gen_override)` and `ScatterWorkspace(child_seed)`
   (`b15367f`).
 
+## [0.3.0] - 2026-10-18
+
+Every speed capability of the reference package has a form in `BLP`; the record of each,
+the execution model and the tuning knobs are `docs/PERFORMANCE.md`, the measurements
+`docs/VERIFICATION.md` §4. No output changes: every product is bitwise what 0.2.0 produced
+on the same hardware, and bitwise the reference package's on the same A100.
+
+### Added
+
+- **Chunks sized per run.** `ThreadedExecutor`, `PoolExecutor` and `DevicePool` default to
+  `chunk = :auto`, resolved by `chunk_for(exec, n; hint, bytes)` from the item count, the
+  bytes of output per item and the program's new trait `chunk_hint`; `describe(exec)` and
+  a result's `run` record report the resolved chunk. Executors on the same devices and
+  lane count share one registry pool whatever their chunk.
+- **The cascade.** `foreach_cascade!(exec, primary, layer, n, depth; capacity, chunk)` in
+  `Execution` runs every scattering generation of a chunk on the worker that took it,
+  with the children in two lane-resident device buffers (`children.jl`, `cascade.jl`;
+  `Generation`, `cascade_chunk`); `mc_spectrum` runs its scattering through it.
+- **A caller's queue.** `prepare(cfg; queue = perm)` queues the pixels in the given order,
+  validated by `queue_items`.
+- **The plan's hot-cross table.** `hotcross_table(plan)` builds the Monte Carlo table at
+  the plan's first scattering run and keeps it in `plan.hotcross`.
+- **Kernel audit.** `BLP/bench/kernel_audit.jl` compiles the device twin of every program
+  kind for sm_80 without a GPU and gates registers, stack and spills against
+  `kernel_audit_baseline.json`.
+- **Performance record.** `docs/PERFORMANCE.md`.
+
+### Changed
+
+- **Threads pull chunks.** The threaded executor's workers, one per thread, drain one
+  queue of chunks in queue order; `Threads.@threads` remains only in the `Data` loaders
+  and builders. A program's exception surfaces as a `CapturedException`.
+- **Items reach the kernel as ranges or `Int32`.** A range is passed without an upload;
+  other item lists are staged as `Int32` when they fit; the kernel hands programs `Int`.
+- **Outputs in the product's layout.** The exact-Kerr program writes its fifteen maps as
+  plain `Float64` vectors reshaped without a copy (`AnalyticProgram` now in
+  `analytic.jl`, `analytic_outputs`), visited in index order; a Stokes I image is its
+  output vector reshaped.
+- **Benchmarks at the defaults.** `BLP/bench/bench.jl` runs and reports BLP at the `auto`
+  chunk (`lanes2_chunkauto`, `chunkauto`) as the default rows of the comparison.
+- **Measured.** On one A100 the geometric mean of BLP's rate over the reference package's
+  on the same legs moves from 0.83 to 1.13 at the defaults and from 0.95 to 1.06
+  best-against-best; the scattering sphere from 0.40 to 1.01, the thin sphere from 0.60 to
+  1.15, the exact-Kerr disk from 0.31 to 1.34. On the CPU the geometric mean over six legs
+  moves from 1.16 to 1.44 at 16 threads, from 1.39 to 2.13 at 64 and from 1.25 to 2.08 at
+  128.
+
 ## [0.2.0] - 2026-10-16
 
 The package `BLP` (`BLP/`, module `BLP`). BlackLightPlus, the package in `src/`, is

@@ -89,3 +89,5 @@ driver when it compiles.
   gates.
 - [`docs/VERIFICATION.md`](../docs/VERIFICATION.md): the measured results of the tests,
   the oracle, the paper's figures and the benchmarks on the CPU and the A100.
+- [`docs/PERFORMANCE.md`](../docs/PERFORMANCE.md): the execution model, the defaults and
+  tuning knobs, and every speed capability of the reference package with its form in BLP.
