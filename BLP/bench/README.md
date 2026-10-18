@@ -6,7 +6,8 @@ table; `plot_performance.py` draws `fig_performance.pdf` from that file. `refere
 times the reference package on the same decks and `bench.jl merge-reference` pairs the
 two. The script headers of `bench.jl` and `reference.jl` list the legs, the decks, the
 protocol and every environment variable; `common.jl` holds the record, host-state and
-CUPTI helpers both include.
+CUPTI helpers both include. `kernel_audit.jl` holds the registers, stack and spills of
+every device kernel against a recorded baseline.
 
 | leg | product | sizes |
 |---|---|---|
@@ -164,6 +165,35 @@ running; pending ones are held while it runs. The reference's CPU legs are its C
 points: the two-phase `render` given the loaded snapshot, `render_amr` with its two-phase
 closure (which reads the snapshot in each call), `render_analytic`, `mc_spectrum` and
 `mc_spectrum_scatter`. `logs/cpu_runner.log` keeps the waits.
+
+## Kernel audit
+
+`kernel_audit.jl` compiles the device twin of every program kind for sm_80 without a GPU
+and reports per kernel the registers, the per-thread stack, the spill stores and loads,
+and the spills of the non-inlined functions it calls (`ptxas --verbose`). Each case calls a
+product on the synthetic decks of `BLP/test/decks.jl` through a recording executor, so
+the audited programs are the ones the products launch: the imaging program over the
+uniform grid, the native blocks, both frame windows and the Polish doughnut on Kerr, the
+blocks on the binary and the ADM grid, in `StokesI` and `IQUV`, on the `Float64` and
+`Float32` geodesic lanes; its block-grid (`render_amr`) and coordinate-list forms; the
+`sensitivity` derivatives and a `variants` ladder; the analytic program and its
+photon-ring layer; the trace windows; the shadows; and the Monte Carlo primary and layer
+programs of the sphere and the torus. From the repository root, in the CUDA environment:
+
+```sh
+E=results/blp/gpu/env
+julia -t 4 --project=$E BLP/bench/kernel_audit.jl            # the table
+julia -t 4 --project=$E BLP/bench/kernel_audit.jl --check    # against the baseline
+julia -t 4 --project=$E BLP/bench/kernel_audit.jl --write    # regenerate the baseline
+```
+
+`--check` fails (exit 1) when a kernel's registers or stack exceed
+`kernel_audit_baseline.json` by more than `--tol-regs` registers or `--tol-stack` bytes
+(both 0 by default), when any spill count grows, when a kernel no longer compiles, or
+when a baseline kernel is no longer audited; a kernel absent from the baseline is
+reported as `NEW`. `--write` records the baseline after a deliberate change of a kernel,
+with the toolchain (Julia, ptxas, PTX ISA) and the commit. `--device`, on a GPU, compiles
+each kernel for device 0 and checks that its register count equals the offline one.
 
 ## Table and figure
 
