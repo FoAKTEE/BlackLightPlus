@@ -200,18 +200,15 @@ end
 """
     run_chunk!(lane, prog, dprog, idx, outs::Tuple) -> outs
 
-One chunk on `lane`: stage the items `idx` to the device, launch the device program
-`dprog` (made from `prog`, which supplies the launch traits) over them, copy the device
-outputs back through host staging and store output `k` of item `idx[q]` at
-`outs[k][idx[q]]`.
+One chunk on `lane`: pass the items `idx` to the device ([`device_items`](@ref)), launch
+the device program `dprog` (made from `prog`, which supplies the launch traits) over them,
+copy the device outputs back through host staging and store output `k` of item `idx[q]`
+at `outs[k][idx[q]]`.
 """
 function run_chunk!(lane::PoolLane, prog, dprog, idx::AbstractVector{<:Integer},
                     outs::Tuple)
     n = length(idx)
-    st = lane_stage(lane, :items, Int, n)
-    copyto!(st, 1, idx, 1, n)
-    itd = lane_buffer(lane, :items, Int, n)
-    copyto!(itd, 1, st, 1, n)
+    itd = device_items(lane, idx)
     outd = ntuple(k -> lane_buffer(lane, (:out, k), eltype(outs[k]), n), length(outs))
     launch!(lane, prog, dprog, itd, n, outd)
     for k in eachindex(outs)
@@ -235,6 +232,30 @@ function scatter!(o, st::Vector, idx)
     end
     return o
 end
+scatter!(o, st::Vector, idx::AbstractUnitRange) = copyto!(o, first(idx), st, 1, length(idx))
+
+"""
+    device_items(lane, idx) -> device item list
+
+The items `idx` of a chunk as the kernel reads them on `lane`: a range as it is (a range
+is `isbits` and needs no copy), any other list staged into a device buffer of `Int32` when
+every item fits, of `Int` otherwise. The kernel widens each item to `Int`, so a program
+sees the same items whatever the list.
+"""
+device_items(::PoolLane, idx::AbstractUnitRange{<:Integer}) = UnitRange{Int}(idx)
+function device_items(lane::PoolLane, idx::AbstractVector{<:Integer})
+    n = length(idx)
+    T = fits(Int32, idx) ? Int32 : Int
+    st = lane_stage(lane, :items, T, n)
+    copyto!(st, 1, idx, 1, n)
+    itd = lane_buffer(lane, :items, T, n)
+    copyto!(itd, 1, st, 1, n)
+    return itd
+end
+
+# Whether every element of `idx` is representable in `T`.
+fits(::Type{T}, idx) where {T<:Integer} =
+    isempty(idx) || ((lo, hi) = extrema(idx); typemin(T) <= lo && hi <= typemax(T))
 
 """
     describe(exec) -> NamedTuple

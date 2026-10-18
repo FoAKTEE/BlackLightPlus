@@ -1,7 +1,8 @@
 # Executor equivalence: one program run through the threaded executor and through device
 # pools of 1, 2, 3 and 5 host devices (2 lanes, 7-item chunks) gives bitwise identical
 # per-item outputs for any chunking and visiting order; programs without outputs run every
-# item exactly once; several programs share one queue, part by part.
+# item exactly once, seen as `Int` whatever the item list; several programs share one
+# queue, part by part.
 using Test, BLP
 using StaticArrays, KernelAbstractions, Adapt, Random
 using Atomix: Atomix
@@ -63,6 +64,18 @@ Adapt.adapt_structure(to, p::CountProgram) = p
 @inline function (p::CountProgram)(item, i)
     Atomix.@atomic p.acc[1] += 1
     Atomix.@atomic p.acc[2] += item
+    return nothing
+end
+
+# Counts the items it sees as `Int` and sums their offsets from `base`.
+struct IntItemProgram{A}
+    acc::A
+    base::Int
+end
+Adapt.adapt_structure(to, p::IntItemProgram) = p
+@inline function (p::IntItemProgram)(item, i)
+    Atomix.@atomic p.acc[1] += (item isa Int)
+    Atomix.@atomic p.acc[2] += item - p.base
     return nothing
 end
 
@@ -166,6 +179,28 @@ end
         @test foreach_item!(exec, CountProgram(acc), 1:N) == ()
         @test acc == [N, N * (N + 1) ÷ 2]
     end
+end
+
+@testset "item lists: ranges as they are, vectors staged as Int32 or Int" begin
+    pool = PoolExecutor(Decks.hosts(2); lanes = 2, chunk = 7)
+    kinds = Channel{Any}(Inf)
+    Ex.foreach_chunk(pool.pool, 1:1) do lane, _
+        put!(kinds, Ex.device_items(lane, 3:9))
+        put!(kinds, eltype(Ex.device_items(lane, view([5, 1, 9], 1:3))))
+        put!(kinds, eltype(Ex.device_items(lane, [1, 2^40])))
+    end
+    @test take!(kinds) === 3:9 && take!(kinds) === Int32 && take!(kinds) === Int
+    wide = 2^40
+    for exec in (pool, PoolExecutor(Decks.hosts(1)), ThreadedExecutor()),
+        (items, base) in ((1:N, 0), (Base.OneTo(N), 0), (collect(N:-1:1), 0),
+                          (collect(wide .+ (1:N)), wide), (wide .+ (1:N), wide))
+        acc = zeros(Int, 2)
+        foreach_item!(exec, IntItemProgram(acc, base), items)
+        @test acc == [N, N * (N + 1) ÷ 2]
+    end
+    o = zeros(N)
+    foreach_item!(pool, (item, i, o) -> (@inbounds o[i] = 2item; nothing), 4:N; outs = (o,))
+    @test o[4:N] == 2 .* (4:N) && all(iszero, o[1:3])            # contiguous gather
 end
 
 @testset "several programs in one queue, part by part" begin

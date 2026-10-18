@@ -1,11 +1,12 @@
 # The only kernel of the package. A program is an `isbits`-after-`Adapt` functor called
 # per item as `prog(item, i, outs...)`; it writes its outputs for `item` at `outs[k][i]`
 # itself (or nothing, when it writes through atomics). The kernel specialises on the
-# program type, so each program compiles to its own device code.
+# program type, so each program compiles to its own device code. `items` is a range or a
+# device vector of `Int32` or `Int` (`device_items`); the program gets each item as `Int`.
 
 KernelAbstractions.@kernel function _foreach!(prog, @Const(items), n, outs...)
     i = @index(Global)
-    @inbounds i <= n && prog(items[i], i, outs...)
+    @inbounds i <= n && prog(Int(items[i]), i, outs...)
 end
 
 """
