@@ -87,7 +87,8 @@ function plan_of(cfg::RunConfig, spacetime, matter, mode, lanes, tile::Int, para
     return Plan(cfg, spacetime, stg, matter, mode, params, cam, CameraFrame(cam),
                 PixelGrid(cam.fov, cam.npix), budget, bg, horizon_of(spacetime), escape, R_em,
                 deg2rad(cfg.camera.inclination_deg), curve, lanes, queue,
-                rescue_set(spacetime, curve, cam, lanes))
+                rescue_set(spacetime, curve, cam, lanes),
+                Ref{Union{Nothing,HotcrossTable{Matrix{Float64}}}}(nothing))
 end
 
 # The geodesic-lane spacetime and budget of `lanes`.

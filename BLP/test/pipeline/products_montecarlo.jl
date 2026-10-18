@@ -2,9 +2,10 @@
 # spectrum, the scattering sphere's orders and weight ledger, the torus spectrum on the
 # block deck against the transport-tier template, bitwise agreement across executors,
 # device counts, chunks and child-buffer capacities (the overflow rerun), the emission
-# zones, the programs' device contract, the backend keyword and the run record.
+# zones, the programs' device contract, the hot-cross table the plan builds once, the
+# backend keyword and the run record.
 using Test, BLP, StaticArrays
-using BLP.Plans: RunConfig, Plan, prepare
+using BLP.Plans: RunConfig, Plan, prepare, hotcross_table
 using BLP.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
                     MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render
@@ -201,6 +202,20 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test DK.device_isbits(zp) && allocs(zp, 17, 17) == 0
         @test ledger_count(zsink.ledger, 6) == 2
         @test length(mc_ledger().n) == 6 * LEDGER_STRIPES
+    end
+
+    @testset "the plan's hot-cross table" begin
+        ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        ps = prepare(ss)
+        kw = (scattering = true, seed = 0xBEEF, nu_max = 1.0e13, n_ebins = 40, backend = :cpu)
+        @test ps.hotcross[] === nothing
+        r1 = mc_spectrum(ps, 300; kw...)
+        t = ps.hotcross[]
+        @test t isa HotcrossTable && hotcross_table(ps) === t
+        @test same(mc_spectrum(ps, 300; kw...), r1) && ps.hotcross[] === t
+        @test same(mc_spectrum(ps, 300; kw..., table = t), r1)
+        @test prepare(ss).hotcross[] === nothing
+        @test mc_spectrum(prepare(ss), 300; kw..., table = THOMSON).plan.hotcross[] === nothing
     end
 
     @testset "backend keyword and run record" begin

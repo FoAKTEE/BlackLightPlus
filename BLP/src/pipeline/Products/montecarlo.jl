@@ -186,10 +186,11 @@ zone radius); absorption always by default; the result a
 Generation: the weight table over `[nu_min, nu_max]` on `n_esamp` intervals for about
 `Ns` primaries, exact (`tabulated = false`) or tabulated frequency rejection. Primary `g`
 draws the stream `primary_rng(seed, g)`. Transport: absorption (`absorption`), Compton
-scattering (`scattering`) with the hot-cross `table` (`build_hotcross_table()` when
-`nothing`), at most `max_scatt` scatterings per photon, the importance `bias` (a `Bias`,
-its `b0`, or `nothing`: the sphere's Thomson depth, 1 on a grid), lengths in
-`plan.params.units.L_unit` cm (one cm for a plan without parameters). Binning:
+scattering (`scattering`) with the hot-cross `table` (`nothing`: `hotcross_table(plan)`,
+built at the plan's first scattering run and kept in the plan), at most `max_scatt`
+scatterings per photon, the importance `bias` (a `Bias`, its `b0`, or `nothing`: the
+sphere's Thomson depth, 1 on a grid), lengths in `plan.params.units.L_unit` cm (one cm
+for a plan without parameters). Binning:
 `bands` (`PolarBands(6)` for the sphere, `InclinationBands((17, 50, 90), 10)` on a grid,
 which takes inclination bands only), `n_ebins` log-frequency bins over
 `[spec_nu_min, spec_nu_max]`.
@@ -231,15 +232,16 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
                 tabulated = tabulated, Ns = Float64(Ns)),
          grid = (nu_min = Float64(spec_nu_min), nu_max = Float64(spec_nu_max),
                  n_ebins = Int(n_ebins)),
-         table = scattering ? hotcross(table) : table, bias = bias, capacity = capacity,
+         table = scattering ? hotcross(table, plan) : table, bias = bias, capacity = capacity,
          march = (C = Float64(C), escape = Float64(escape), R_em = Float64(R_em)),
          zones = (stride = Int(stride), r_emit_max = Float64(r_emit_max),
                   max_zones = Int(max_zones)))
     return mc_run(plan.provider, plan, exec, bands, o, t0)
 end
 
-hotcross(::Nothing) = build_hotcross_table()
-hotcross(table) = table
+# The hot-cross table of a run: the one given, or the plan's.
+hotcross(::Nothing, plan) = hotcross_table(plan)
+hotcross(table, plan) = table
 
 # The importance bias of a run.
 mc_bias(::Nothing, s::UniformSphere) = Bias(s)

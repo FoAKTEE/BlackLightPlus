@@ -1,5 +1,6 @@
 # The plan: everything a product needs, derived once from a configuration, a spacetime
 # and a matter source. Immutable and backend-free: the same plan runs on any executor.
+# The one value computed later is the Monte Carlo hot-cross table, memoised on first use.
 
 """
     Plan
@@ -32,7 +33,9 @@ hand. Fields:
   (`curve_inclination`), empty vectors on other spacetimes;
 - `lanes`, the precision lanes; `queue`, the pixel queue order (a permutation of
   `1:npixels`, longest predicted march first on Kerr); `rescue`, the ascending pixels
-  marched on the `Float64` lane under `MixedLanes` (empty otherwise).
+  marched on the `Float64` lane under `MixedLanes` (empty otherwise);
+- `hotcross`, the memo of [`hotcross_table`](@ref): empty until a Monte Carlo
+  scattering run of the plan first needs the table.
 """
 struct Plan{S,Sg,P,M,T,Bg,H,L}
     config::RunConfig
@@ -54,6 +57,23 @@ struct Plan{S,Sg,P,M,T,Bg,H,L}
     lanes::L
     queue::Vector{Int}
     rescue::Vector{Int}
+    hotcross::Base.RefValue{Union{Nothing,HotcrossTable{Matrix{Float64}}}}
+end
+
+"""
+    hotcross_table(plan::Plan) -> HotcrossTable
+
+The hot-cross-section table of the plan's Monte Carlo scattering, `build_hotcross_table()`,
+built at the first request and kept in the plan, so later runs of the plan reuse the
+same table (and its device copies). Concurrent first requests may each build it; the
+tables are identical.
+"""
+function hotcross_table(plan::Plan)
+    t = plan.hotcross[]
+    t === nothing || return t
+    t = build_hotcross_table()
+    plan.hotcross[] = t
+    return t
 end
 
 """
