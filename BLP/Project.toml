@@ -1,6 +1,6 @@
 name = "BLP"
 uuid = "7b227100-a5e5-4544-91a9-efa95d17790e"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Haiyang Wang <haiyang.wang@black-holes.org> and contributors"]
 
 [deps]
