@@ -212,7 +212,8 @@ function run_job!(g, pool::DevicePool, lanes, items)
     return nothing
 end
 
-# The same job loop on `nworkers` freshly spawned host tasks (worker argument `nothing`).
+# The same job loop on `nworkers` freshly spawned host tasks (worker argument `nothing`):
+# the items are pulled in queue order, and the first failure is rethrown once they drain.
 function run_workers!(g, nworkers::Integer, items)
     isempty(items) && return nothing
     job = Job(g, items, nworkers)

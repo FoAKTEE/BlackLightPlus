@@ -17,9 +17,11 @@ abstract type Executor end
     ThreadedExecutor(; chunk = :auto)
 
 Runs a program on the host from Julia threads: items are cut into chunks of `chunk` items
-(`:auto`: sized per run, [`chunk_for`](@ref)), handed to threads dynamically, and each
-item calls the host program directly with the host output arrays. Executors compare equal
-when their chunk settings do.
+(`:auto`: sized per run, [`chunk_for`](@ref)), worker tasks, one per Julia thread,
+pull the chunks from one queue in queue order, and each item calls the host program
+directly with the host output arrays. An exception in a program is rethrown, as a
+`CapturedException`, once the queue has drained. Executors compare equal when their chunk
+settings do.
 """
 struct ThreadedExecutor <: Executor
     chunk::Union{Int,Symbol}
@@ -166,9 +168,10 @@ chunk_ranges(n::Integer, c::Integer) =
 part_chunks(parts::Tuple, c::Integer) =
     [(p, r) for p in eachindex(parts) for r in chunk_ranges(length(parts[p][2]), c)]
 
+# Worker tasks, one per thread (at most one per chunk), pull the chunks in queue order.
 function run_parts!(::ThreadedExecutor, parts::Tuple, outs::Tuple, c::Int)
     chunks = part_chunks(parts, c)
-    Threads.@threads :dynamic for (p, r) in chunks
+    run_workers!(min(Threads.nthreads(), length(chunks)), chunks) do _, (p, r), _
         prog, q = parts[p]
         run_range!(prog, q, r, outs)
     end

@@ -103,10 +103,10 @@ end
         @test isempty(grep(src_files(), r"keep in sync|twin of|byte-for-byte|ported from"i))
     end
 
-    @testset "threads only in the executor and the Data loaders and builders" begin
+    @testset "threads only in the Data loaders and builders" begin
         threaded = unique(first.(grep(src_files(), r"Threads\.@threads")))
-        @test all(f -> f == "infra/Execution/executor.jl" || startswith(f, "infra/Data/"), threaded)
-        @test length(threaded) <= 5
+        @test all(f -> startswith(f, "infra/Data/"), threaded)
+        @test length(threaded) <= 4
     end
 
     @testset "public API" begin

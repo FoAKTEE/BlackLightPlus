@@ -207,6 +207,16 @@ end
         @test_throws ArgumentError foreach_item!(e, PROG, 1:N; order = [1, 1, 2])
         @test_throws ArgumentError foreach_item!(e, PROG, 1:N; order = collect(1:N - 1))
     end
+    failing(item, i, o) = (item == 50 && error("item 50 failed"); o[i] = item; nothing)
+    for e in (ThreadedExecutor(chunk = 4), ThreadedExecutor())
+        err = try
+            foreach_item!(e, failing, 1:N; outs = (zeros(N),)); nothing
+        catch x
+            x
+        end
+        @test err isa CapturedException && occursin("item 50", sprint(showerror, err.ex))
+        @test foreach_item!(e, CountProgram(zeros(Int, 2)), 1:N) == ()   # still usable
+    end
     @test_throws ArgumentError ThreadedExecutor(chunk = 0)
     @test describe(exec).chunk == 7 && describe(ThreadedExecutor(chunk = 3)).chunk == 3
 end

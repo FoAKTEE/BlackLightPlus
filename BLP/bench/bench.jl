@@ -70,7 +70,7 @@
 # commit, the tree hashes of BLP/src and BLP/ext, and the Slurm job.
 #
 # Backends: BLP_BACKEND=cpu (default; `ThreadedExecutor(chunk = BLP_CPU_CHUNK)`, 64 unless
-# set, under `julia -t N`: `Threads.@threads` gives each thread one contiguous run of
+# set, `auto` for the executor's rule, under `julia -t N`: one worker per thread pulls the
 # chunks, so a chunk count below the thread count idles threads) or gpu (a DevicePool
 # over the ordinals in BLP_DEVICES, default 0; needs CUDA in the environment). On a GPU
 # the pool's lanes and chunk are those of BLP_POOLS when set, else BLP_LANES and
