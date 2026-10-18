@@ -53,9 +53,9 @@
 # Comparison runs (BLP_DECK=reference, or BLP_COMPARE=1 on the torus deck): records go to
 # BLP/bench/results/reference/raw/blp.jsonl and arrays to
 # BLP/bench/results/reference/out/<deck> with the tags `blp-cpu`, `blp-gpuN`; each case runs on every GPU pool of BLP_POOLS
-# (lanes:chunk list, default 2:65536,2:131072, each on a fresh pool; a chunk `auto` is the
-# executor's own rule) or with every CPU chunk of BLP_CPU_CHUNKS (default 4096,64; `auto`
-# allowed); BLP_PHASES=1 (the default there on a GPU) adds one profiled call of the first
+# (lanes:chunk list, default 2:auto,2:65536,2:131072, each on a fresh pool; a chunk `auto`
+# is the executor's own rule) or with every CPU chunk of BLP_CPU_CHUNKS (default
+# auto,4096,64); BLP_PHASES=1 (the default there on a GPU) adds one profiled call of the first
 # pool, written as a `phase` record (common.jl `cuda_phases`).
 #
 # Protocol per leg: `prepare` (not in `first_s`; recorded as `setup_s`); one first call
@@ -69,13 +69,13 @@
 # from /proc/stat less this process's CPU time), on a GPU the nvidia-smi state, the
 # commit, the tree hashes of BLP/src and BLP/ext, and the Slurm job.
 #
-# Backends: BLP_BACKEND=cpu (default; `ThreadedExecutor(chunk = BLP_CPU_CHUNK)`, 64 unless
-# set, `auto` for the executor's rule, under `julia -t N`: one worker per thread pulls the
+# Backends: BLP_BACKEND=cpu (default; `ThreadedExecutor(chunk = BLP_CPU_CHUNK)`, `auto`, the
+# executor's rule, unless set, under `julia -t N`: one worker per thread pulls the
 # chunks, so a chunk count below the thread count idles threads) or gpu (a DevicePool
 # over the ordinals in BLP_DEVICES, default 0; needs CUDA in the environment). On a GPU
 # the pool's lanes and chunk are those of BLP_POOLS when set, else BLP_LANES and
 # BLP_CHUNK when both are set, else the best warm configuration of the `tune` records of
-# the same leg and device count (in BLP_TUNE_FROM, default BLP_OUT), else 2 and 65536.
+# the same leg and device count (in BLP_TUNE_FROM, default BLP_OUT), else 2 and `auto`.
 # BLP_TUNE=1 runs the sweep instead:
 # lanes 1–4 × chunk 2^14–2^17, each on a fresh pool (one first call, one warm call),
 # appending one `tune` record per configuration;
@@ -152,7 +152,7 @@ const MC_NS = parse(Float64, get(ENV, "BLP_MC_NS", "1e7"))
 const REPEAT = parse(Int, get(ENV, "BLP_REPEAT", "3"))
 # A chunk setting of the environment: an item count, or `auto` (the executor's own rule).
 chunk_arg(s) = strip(s) == "auto" ? :auto : parse(Int, s)
-const CPU_CHUNK = chunk_arg(get(ENV, "BLP_CPU_CHUNK", "64"))
+const CPU_CHUNK = chunk_arg(get(ENV, "BLP_CPU_CHUNK", "auto"))
 const DEVICES = envlist("BLP_DEVICES", "0")
 const TUNE = get(ENV, "BLP_TUNE", "0") == "1"
 const SKIP_DONE = get(ENV, "BLP_SKIP_DONE", "0") == "1"
@@ -177,10 +177,11 @@ const UNIFORM_N = parse(Int, get(ENV, "BLP_UNIFORM_N", "256"))
 parse_pools(s) = [(lanes = parse(Int, a), chunk = chunk_arg(b))
                   for (a, b) in (split(strip(x), ':') for x in split(s, ',') if !isempty(strip(x)))]
 const POOLS = haskey(ENV, "BLP_POOLS") ? parse_pools(ENV["BLP_POOLS"]) :
-    COMPARE ? [(lanes = 2, chunk = 65536), (lanes = 2, chunk = 131072)] : nothing
+    COMPARE ? [(lanes = 2, chunk = :auto), (lanes = 2, chunk = 65536), (lanes = 2, chunk = 131072)] :
+    nothing
 const CPU_CHUNKS = haskey(ENV, "BLP_CPU_CHUNKS") ?
     [chunk_arg(x) for x in split(ENV["BLP_CPU_CHUNKS"], ',') if !isempty(strip(x))] :
-    COMPARE ? [4096, 64] : [CPU_CHUNK]
+    COMPARE ? [:auto, 4096, 64] : [CPU_CHUNK]
 const PHASES = GPU && get(ENV, "BLP_PHASES", COMPARE ? "1" : "0") == "1"
 const JOB = get(ENV, "SLURM_JOB_ID", "none")
 const COMMIT = try
@@ -489,15 +490,15 @@ done(recs, kind, c, cfg = nothing, extra = Dict()) = any(recs) do r
         get(r, "deck", "torus") == DECK && same_code(r) &&
         (GPU ? r["ndev"] == length(DEVICES) &&
                (cfg === nothing || POOLS === nothing ||
-                (r["lanes"] == cfg.lanes && r["chunk"] == cfg.chunk)) :
+                (r["lanes"] == cfg.lanes && string(r["chunk"]) == string(cfg.chunk))) :
                r["threads"] == Threads.nthreads() &&
-               r["chunk"] == (cfg === nothing ? CPU_CHUNK : cfg.chunk)) &&
+               string(r["chunk"]) == string(cfg === nothing ? CPU_CHUNK : cfg.chunk)) &&
         all(get(r, k, nothing) == v for (k, v) in extra)
 end
 
 timed(f) = (t = time_ns(); r = f(); ((time_ns() - t) / 1e9, r))
 
-const POOL_DEFAULT = (lanes = 2, chunk = 65536)
+const POOL_DEFAULT = (lanes = 2, chunk = :auto)
 const TUNE_LANES = envlist("BLP_TUNE_LANES", "1,2,3,4")
 const TUNE_CHUNKS = envlist("BLP_TUNE_CHUNKS", "16384,32768,65536,131072")
 const TUNE_KIND = get(ENV, "BLP_TUNE_KIND", "tune")
@@ -843,9 +844,9 @@ end
 hwkey(r) = r["backend"] == "gpu" ? r["ndev"] : r["threads"]
 rcfg(r) = get(r, "config", r["backend"] == "gpu" ? "lanes$(r["lanes"])_chunk$(r["chunk"])" :
                                                  "chunk$(r["chunk"])")
-# BLP's configurations: the defaults (PoolExecutor lanes 2, chunk 65536; ThreadedExecutor
-# chunk 4096) and the tuned ones (chunk 2^17 on the pool; chunk 64 on threads).
-blp_default_cfg(be) = be == "gpu" ? "lanes2_chunk65536" : "chunk4096"
+# BLP's configurations: the defaults (PoolExecutor lanes 2 and ThreadedExecutor, both at
+# chunk `auto`) and the tuned ones (chunk 2^17 on the pool; chunk 64 on threads).
+blp_default_cfg(be) = be == "gpu" ? "lanes2_chunkauto" : "chunkauto"
 blp_tuned_cfg(be) = be == "gpu" ? "lanes2_chunk131072" : "chunk64"
 
 const CMP_ORDER = Dict(("reference", l) => i for (i, l) in enumerate([LEGS_REFERENCE; LEGS_BINARY]))
@@ -1040,20 +1041,22 @@ function write_reference_table(path, pairs, bench, jobs, date)
                 "inside its first call. `load` is the 1-minute load average before/after the ",
                 "timed calls. Ratio: BLP rate over reference rate (above 1: BLP faster); ",
                 "`default` pairs the defaults (reference: the harness's call; BLP: ",
-                "PoolExecutor lanes 2, chunk 65536, or ThreadedExecutor chunk 4096), `best` the ",
+                "PoolExecutor lanes 2 or ThreadedExecutor, both at chunk `auto`), `best` the ",
                 "best configuration of each package. Agreement: the BLP output against the ",
                 "reference output of the same hardware.\n")
         println(io, "The reference's GPU configurations are its harness default (the cached ",
                 "DevicePool of lanes 2, chunk 65536; the Monte Carlo drivers cut their own ",
                 "chunks of 2^20 primaries) and a DevicePool of lanes 2, chunk 131072 (Monte ",
                 "Carlo: the drivers' `chunk` keyword at 65536 and 131072). BLP's: lanes 2 at ",
-                "chunk 65536 (default) and 131072 (tuned), and where recorded 1048576 (the ",
-                "Monte Carlo and binary legs, which then count in BLP's best). On the CPU the reference runs its ",
+                "chunk `auto` (default: one launch of up to 2^20 items on one device, at most ",
+                "16 MiB of outputs per launch, the Monte Carlo cascade at 2^20 primaries), ",
+                "131072 (tuned) and 65536, and where recorded 1048576 (the Monte Carlo and ",
+                "binary legs, which then count in BLP's best). On the CPU the reference runs its ",
                 "CPU entry points: the two-phase render (trace, then march along the stored ",
                 "states), `render_amr` with its two-phase closure (which reads the snapshot in ",
                 "each call), `render_analytic`, `mc_spectrum`, `mc_spectrum_scatter`; BLP runs ",
-                "the same products as on the GPU with ThreadedExecutor chunk 4096 (default) and ",
-                "64 (tuned).\n")
+                "the same products as on the GPU with ThreadedExecutor chunk `auto` (default), ",
+                "64 (tuned) and 4096.\n")
         for (title, sel) in (("GPU", p -> p["backend"] == "gpu"), ("CPU", p -> p["backend"] == "cpu"))
             ps = filter(sel, pairs)
             isempty(ps) && continue

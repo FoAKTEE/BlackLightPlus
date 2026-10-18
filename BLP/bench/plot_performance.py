@@ -17,7 +17,7 @@ records of BLP/bench/results/anta_<date>_reference.json (the newest such file, o
 second argument), written by `bench.jl merge-reference`: its torus-deck records of the
 reference package, on the GPUs the better of its two pool configurations (the harness
 default, chunk 2^16, and chunk 2^17), as BLP's GPU rows are its tuned pool. CPU rows of
-BLP are those run with the benchmark's CPU chunk (64 items); cases without a record are
+BLP are those run at the executor's `auto` chunk; cases without a record are
 left out. Style: paper/scripts/figstyle.py. Output: fig_performance.pdf in $BLP_FIG_DIR,
 by default BLP/figures/paper.
 
@@ -42,7 +42,7 @@ _spec.loader.exec_module(fs)
 import matplotlib.pyplot as plt  # noqa: E402  (figstyle selects the backend)
 from matplotlib.ticker import FuncFormatter  # noqa: E402
 
-CPU_CHUNK = 64
+CPU_CHUNK = "auto"
 CPU_STYLE = {1: (":", "v", "grey"), 8: ("--", "s", "sky"), 16: ("-", "o", "blue"),
              64: ("-.", "^", "green"), 128: ("-", "P", "purple")}
 

@@ -38,11 +38,11 @@ BLP_LEGS=img,analytic,mc_thin,mc_scatter,mc_scatter0 BLP_OUT=$R/raw/cpu_t64.json
 BLP_LEGS=img,pol,amr BLP_OUT=$R/raw/cpu_t128.jsonl julia -t 128 --project=BLP BLP/bench/bench.jl
 ```
 
-The CPU executor is `ThreadedExecutor(chunk = 64)`; `BLP_CPU_CHUNK=4096` gives the chunk
-of `backend = :cpu`. `Threads.@threads` hands each thread one contiguous run of chunks,
-so at 4096 items per chunk a 192² image has nine chunks and keeps at most nine threads
-busy. On a shared host, run the 64- and 128-thread legs when the one-minute load average
-is low; every record carries the load before and after its timed calls.
+The CPU executor is `ThreadedExecutor()` at its `auto` chunk (`clamp(cld(n, 16 t), 16,
+4096)` items on `t` threads); `BLP_CPU_CHUNK=64` or `4096` fixes the chunk instead. One
+worker per thread pulls the chunks from a queue, so a chunk count below the thread count
+idles threads. On a shared host, run the 64- and 128-thread legs when the one-minute load
+average is low; every record carries the load before and after its timed calls.
 
 ## GPU legs
 
@@ -127,14 +127,16 @@ BLP/bench/slurm/run_reference.sh "1@$G" "2@$G"
 ```
 
 The binary legs (`bbh455_480`, `bbh455_pol_480`, `bbh122_pol_480`, `bbh_i90_amr_pol`) are
-an item of their own, and the Monte Carlo legs once more with BLP's pool also at the 2²⁰
-chunk of the reference's Monte Carlo drivers:
+an item of their own:
 
 ```sh
-BLP/bench/slurm/run_reference.sh 1@reference=bbh455_480,bbh455_pol_480/reference=bbh122_pol_480/reference=bbh_i90_amr_pol
-BLP_SKIP_DONE=0 BLP_POOLS=2:65536,2:131072,2:1048576 \
-    BLP/bench/slurm/run_reference.sh 1@reference=mc_thin,mc_scatter
+BLP/bench/slurm/run_reference.sh 1@reference=bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol
 ```
+
+BLP runs every leg at the pool's `auto` chunk (on one device one launch of up to 2²⁰
+items, the chunk of the reference's Monte Carlo drivers; at most 16 MiB of outputs per
+launch) and at the explicit chunks 65536 and 131072 (`BLP_POOLS`); on the CPU at the
+`auto` chunk and at 4096 and 64 (`BLP_CPU_CHUNKS`).
 
 An item `N@<deck>=<legs>/…` is one `slurm/reference.sbatch` job on N devices with 2N CPUs;
 for each group the reference process (`reference.jl`, `results/blp/gpu/env_old`) runs and
@@ -142,7 +144,7 @@ then the BLP process (`bench.jl`, `results/blp/gpu/env`), each with `-t 4`. The 
 runs at its harness default (the device list, whose cached pool has lanes 2 and chunk
 65536; the Monte Carlo drivers cut 2²⁰-primary chunks) and on a pool of chunk 2¹⁷ (Monte
 Carlo: the drivers' `chunk` keyword at 2¹⁶ and 2¹⁷); BLP at its default (lanes 2, chunk
-2¹⁶) and at chunk 2¹⁷. One more call of each default runs under the CUPTI profiler
+`auto`) and at chunks 2¹⁶ and 2¹⁷. One more call of each default runs under the CUPTI profiler
 (`phase` records: host prologue and epilogue, kernel, copy and idle time per device, the
 dominant kernel's registers and local memory). The job logs and `runner.log` (every
 submission and its final state) are in `results/reference/logs/`; a preempted job is
@@ -158,8 +160,8 @@ BLP/bench/slurm/run_reference_cpu.sh 16:reference:$L 64:reference:$L 128:referen
     128:torus:img_192,img_384,img_768,amr_384
 ```
 
-Each leg runs as a reference process and then a BLP process (ThreadedExecutor chunk 4096,
-then 64), both in the GPU environments above, so the shared packages have the same
+Each leg runs as a reference process and then a BLP process (ThreadedExecutor chunk `auto`,
+then 4096 and 64), both in the GPU environments above, so the shared packages have the same
 versions. A process starts when the one-minute load is below 16 and no `blp-ref-*` job is
 running; pending ones are held while it runs. The reference's CPU legs are its CPU entry
 points: the two-phase `render` given the loaded snapshot, `render_amr` with its two-phase
