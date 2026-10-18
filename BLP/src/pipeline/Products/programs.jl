@@ -461,22 +461,26 @@ end
 
 """
     MCLayer(photons, rngs, transport, sink)
+    MCLayer(generation::Generation, transport, sink)
 
 One scattered child of a layer of the layered scattering loop, called as `prog(item, i)`
-without outputs: item `j` tracks `photons[j]` on its genealogy stream `rngs[j]` by the
-[`MCTransport`](@ref) `transport` into the [`MCSink`](@ref) `sink` (ledger stripe of
+without outputs: item `j` tracks `photons[j]` on its genealogy stream `rngs[j]` (the
+members of the `Execution.Generation` `generation`, which `foreach_cascade!` fills) by
+the [`MCTransport`](@ref) `transport` into the [`MCSink`](@ref) `sink` (ledger stripe of
 item `j`).
 """
-struct MCLayer{V,R,T,K} <: Function
-    photons::V
-    rngs::R
+struct MCLayer{G,T,K} <: Function
+    generation::G
     transport::T
     sink::K
 end
+MCLayer(photons, rngs, transport, sink) =
+    MCLayer(Execution.Generation(photons, rngs), transport, sink)
 Adapt.@adapt_structure MCLayer
 
 function (p::MCLayer)(item, i)
-    @inbounds transport!(p.transport, p.photons[item], p.rngs[item], at_stripe(p.sink, item))
+    g = p.generation
+    @inbounds transport!(p.transport, g.photons[item], g.rngs[item], at_stripe(p.sink, item))
     return nothing
 end
 

@@ -3,8 +3,9 @@
 # scattering by `MonteCarlo.track!`, and binned exactly. A primary owns the stream of its
 # global index and a child the stream of its genealogy; the bins, the ledger and the
 # children are integer sums, so a spectrum is bitwise independent of the executor, the
-# device count, the chunking and the order of arrival. Scattering runs layer by layer:
-# layer n tracks the children spawned by layer n − 1.
+# device count, the chunking and the order of arrival. Scattering runs as a cascade
+# (`Execution.foreach_cascade!`): within each chunk of primaries, layer n tracks the
+# children that layer n − 1 spawned.
 #
 # Normalisation: the weight table fixes w(ν) = Σ_zones ∫j_ν dΩ dV/(h Ns/ln(ν_max/ν_min)),
 # so the generated frequency density is uniform in ln ν, about `Ns` packets are launched,
@@ -193,10 +194,14 @@ its `b0`, or `nothing`: the sphere's Thomson depth, 1 on a grid), lengths in
 which takes inclination bands only), `n_ebins` log-frequency bins over
 `[spec_nu_min, spec_nu_max]`.
 
-Scattering runs layer by layer: each layer's children are tracked by the next layer, up
-to `max_scatt` layers. A layer starts with a child buffer of `capacity` slots
-(`nothing`: at least 1024, half the layer's photons); a layer whose buffer overflows is
-rerun with fresh accumulators and a buffer of the counted size, so no child is lost.
+Scattering runs as a cascade over chunks of primaries ([`foreach_cascade!`](@ref)):
+within a chunk, each layer's children are tracked by the next layer, up to `max_scatt`
+layers, and stay on the worker that runs the chunk. On devices a layer starts with a
+child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries);
+a layer whose buffer overflows is rerun into zeroed scratch accumulators with a buffer of
+the counted size, so no child is lost or counted twice. On threads each task's two child
+buffers start with `capacity` slots (`nothing`: 4096) and grow; a photon whose children
+overflow is rerun the same way.
 
 Determinism: bitwise reduction. The bins, the ledger and the children depend only on the
 plan, `Ns` and the keywords, whatever the executor, the device count, the chunking or
@@ -261,10 +266,11 @@ function mc_run(sphere::UniformSphere, plan, exec, bands, o, t0)
     transport = MCTransport(ctl, plan.spacetime, sphere, mc_opacities(plan.params, sphere, o),
                             Val(o.absorption), Val(o.scattering))
     rows = bands === nothing ? PolarBands(6) : bands
-    fresh() = (ntuple(_ -> ExactBins(rows; o.grid...), o.K + 1), mc_ledger())
+    orders = ntuple(_ -> ExactBins(rows; o.grid...), o.K + 1)
+    ledger = mc_ledger()
     layout = MCStreamLayout(N, SPHERE_MAX_STEPS, o.K)
-    orders, ledger, nchildren = run_layers(exec, SphereSource(sphere, tables), transport,
-                                           o.seed, N, fresh, layout, o.scattering, o.capacity)
+    nchildren = run_layers(exec, SphereSource(sphere, tables), transport, o.seed, N, orders,
+                           ledger, layout, o.scattering, o.capacity)
     rec = run_record(exec, plan, t0)
     o.scattering || return Spectrum(orders[1]; plan = plan, run = rec)
     total = similar(orders[1])
@@ -311,10 +317,11 @@ function mc_run(provider, plan, exec, bands, o, t0)
     ctl = CurvedMarch(st; C = o.march.C, escape = o.march.escape, R_em = R_em)
     transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, provider, o),
                             Val(o.absorption), Val(o.scattering))
-    fresh() = ((ExactBins(rows; o.grid...),), mc_ledger())
+    orders = (ExactBins(rows; o.grid...),)
+    ledger = mc_ledger()
     layout = MCStreamLayout(max(1, N), CURVED_MAX_STEPS, o.K)
-    orders, ledger, _ = run_layers(exec, ZoneSource(zones, wgt, dnmax, offset, lint), transport,
-                                   o.seed, N, fresh, layout, o.scattering, o.capacity)
+    run_layers(exec, ZoneSource(zones, wgt, dnmax, offset, lint), transport, o.seed, N,
+               orders, ledger, layout, o.scattering, o.capacity)
     spec = Spectrum(orders[1])
     nb = length(rows.lo)
     mec2 = ME * CL * CL
@@ -338,48 +345,18 @@ function zone_offsets(Nsz::AbstractVector{Float64}, seed::UInt32)
     return offset
 end
 
-"Smallest initial child-buffer capacity of a scattering layer."
-const MIN_CAPACITY = 1024
-
-# The layered loop on `exec`: layer 0 runs `MCPrimary` over the primaries `1:n0`, layer n
-# runs `MCLayer` over the children of layer n − 1, each into fresh accumulators
-# (`fresh() -> (orders, ledger)`) that join the run totals once its child buffer did not
-# overflow; an overflowing layer is rerun with a buffer of the counted size. Without
-# scattering only layer 0 runs. Returns the orders, the ledger and the number of children.
-function run_layers(exec, source, transport, seed::UInt32, n0::Int, fresh, layout, scatter::Bool,
-                    capacity)
-    orders, ledger = fresh()
-    photons = Superphoton[]
-    rngs = MCRng[]
-    nchildren = 0
-    for depth in 0:(scatter ? layout.max_layer : 0)
-        n = depth == 0 ? n0 : length(photons)
-        n == 0 && break
-        cap = capacity === nothing ? max(MIN_CAPACITY, cld(n, 2)) : Int(capacity)
-        while true
-            lo, ll = fresh()
-            buf = scatter ? ChildBuffer(Superphoton, cap, layout) : nothing
-            sink = MCSink(transport.ctl, lo, buf, ll)
-            prog = depth == 0 ? MCPrimary(source, transport, sink, seed) :
-                   MCLayer(photons, rngs, transport, sink)
-            foreach_item!(exec, prog, 1:n)
-            foreach(gather!, lo)
-            gather!(ll)
-            if buf !== nothing
-                gather!(buf)
-                if overflow(buf) > 0
-                    cap = length(buf) + overflow(buf)
-                    continue
-                end
-            end
-            foreach(k -> merge!(orders[k], lo[k]), eachindex(orders))
-            merge!(ledger, ll)
-            if buf !== nothing
-                photons, rngs = children(buf)
-                nchildren += length(photons)
-            end
-            break
-        end
-    end
-    return orders, ledger, nchildren
+# The layered loop on `exec`, as a cascade: `MCPrimary` over the primaries `1:n0`, then
+# up to `layout.max_layer` layers of `MCLayer` over the children of the layer before,
+# into the run totals `orders` and `ledger`, gathered here. Without scattering only the
+# primaries run. Returns the number of children.
+function run_layers(exec, source, transport, seed::UInt32, n0::Int, orders, ledger, layout,
+                    scatter::Bool, capacity)
+    slot = scatter ? ChildBuffer(Superphoton, 0, layout) : nothing
+    sink = MCSink(transport.ctl, orders, slot, ledger)
+    nchildren = Execution.foreach_cascade!(exec, MCPrimary(source, transport, sink, seed),
+                                           MCLayer(Superphoton[], MCRng[], transport, sink),
+                                           n0, scatter ? layout.max_layer : 0; capacity)
+    foreach(gather!, orders)
+    gather!(ledger)
+    return nchildren
 end
