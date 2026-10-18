@@ -40,7 +40,8 @@ block_chunks(blks, per::Integer) = [blks[r] for r in chunk_ranges(length(blks), 
 
 Run the refinement worklist: march every [`ImageBlock`](@ref) of `work` and of the
 children that visits return, until none remain. A chunk of blocks (at most
-`max(1, chunk ÷ block²)` of them) is one run of the program `prog` over the chunk's
+`max(1, c ÷ block²)` of them, `c` the executor's chunk for the pixels of `work`,
+[`resolve_chunk!`](@ref)) is one run of the program `prog` over the chunk's
 `block × block` pixels, `prog` seeing its [`BlockGrid`](@ref) filled with the chunk's
 blocks (so `prog` must reach that grid through `Adapt.adapt_structure`). Each item writes
 one value of type `outtype`. Then `visit(blk, vals)` is called for each block of the
@@ -55,7 +56,8 @@ executor, the chunking, the device count and the completion order.
 function stream_blocks!(exec::Executor, prog, work::AbstractVector{ImageBlock},
                         block::Integer, visit; outtype::Type = Float64)
     bb = block * block
-    per = max(1, chunk_size(exec) ÷ bb)
+    c = resolve_chunk!(exec, length(work) * bb; hint = chunk_hint(prog), bytes = sizeof(outtype))
+    per = max(1, c ÷ bb)
     stream_run!(exec, prog, block_chunks(work, per)) do worker, ctx, blks, job
         vals = block_values(exec, worker, ctx, blks, block, outtype)
         kids = ImageBlock[]
@@ -73,8 +75,8 @@ stream_run!(f, exec::ThreadedExecutor, prog, chunks) =
 
 function block_values(exec::ThreadedExecutor, _, prog, blks, block, ::Type{T}) where {T}
     vals = Vector{T}(undef, length(blks) * block * block)
-    foreach_item!(exec, with_blocks(prog, block_geometry(blks, block)), eachindex(vals);
-                  outs = (vals,))
+    parts = ((with_blocks(prog, block_geometry(blks, block)), eachindex(vals)),)
+    run_parts!(exec, parts, (vals,), chunk_for(exec, length(vals); hint = parts_hint(parts)))
     return vals
 end
 

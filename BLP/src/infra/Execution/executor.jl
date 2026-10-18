@@ -14,41 +14,108 @@ one from [`resolve`](@ref).
 abstract type Executor end
 
 """
-    ThreadedExecutor(; chunk = 4096)
+    ThreadedExecutor(; chunk = :auto)
 
-Runs a program on the host from Julia threads: items are cut into chunks of `chunk`,
-handed to threads dynamically, and each item calls the host program directly with the
-host output arrays.
+Runs a program on the host from Julia threads: items are cut into chunks of `chunk` items
+(`:auto`: sized per run, [`chunk_for`](@ref)), handed to threads dynamically, and each
+item calls the host program directly with the host output arrays. Executors compare equal
+when their chunk settings do.
 """
 struct ThreadedExecutor <: Executor
-    chunk::Int
-    function ThreadedExecutor(chunk::Integer)
-        chunk >= 1 || throw(ArgumentError("ThreadedExecutor: chunk must be positive"))
-        return new(Int(chunk))
-    end
+    chunk::Union{Int,Symbol}
+    used::Threads.Atomic{Int}
+    ThreadedExecutor(chunk) = new(chunk_setting(chunk), Threads.Atomic{Int}(0))
 end
-ThreadedExecutor(; chunk::Integer = 4096) = ThreadedExecutor(chunk)
+ThreadedExecutor(; chunk = :auto) = ThreadedExecutor(chunk)
 
 """
-    PoolExecutor(devices; lanes = 2, chunk = 65536)
-    PoolExecutor(pool::DevicePool)
+    PoolExecutor(devices; lanes = 2, chunk = :auto)
+    PoolExecutor(pool::DevicePool; chunk = pool.chunk)
 
 Runs a program on the devices of a [`DevicePool`](@ref): items are cut into chunks of
-`chunk`, the chunks are pulled by the pool's lanes (`lanes` per device), and each chunk is
-one launch of the program's device twin on the lane's device, its outputs copied back
-into the host arrays. `devices` are device handles or CUDA ordinals; executors built with
-the same devices, `lanes` and `chunk` share one registered pool and its residency caches.
+`chunk` items (`:auto`: sized per run, [`chunk_for`](@ref)), the chunks are pulled by
+the pool's lanes (`lanes` per device), and each chunk is one launch of the program's device
+twin on the lane's device, its outputs copied back into the host arrays. `devices` are
+device handles or CUDA ordinals; executors built with the same devices and `lanes` share
+one registered pool and its residency caches, whatever their chunk. Executors compare
+equal when they share the pool and the chunk setting.
 """
 struct PoolExecutor <: Executor
     pool::DevicePool
-    PoolExecutor(pool::DevicePool) = new(pool)
+    chunk::Union{Int,Symbol}
+    used::Threads.Atomic{Int}
+    PoolExecutor(pool::DevicePool, chunk) =
+        new(pool, chunk_setting(chunk), Threads.Atomic{Int}(0))
 end
-PoolExecutor(devices; lanes::Integer = 2, chunk::Integer = 65536) =
-    PoolExecutor(device_pool(devices; lanes, chunk))
+PoolExecutor(pool::DevicePool; chunk = pool.chunk) = PoolExecutor(pool, chunk)
+PoolExecutor(devices; lanes::Integer = 2, chunk = :auto) =
+    PoolExecutor(device_pool(devices; lanes), chunk)
 
-"Items per chunk of `exec`."
-chunk_size(e::ThreadedExecutor) = e.chunk
-chunk_size(e::PoolExecutor) = e.pool.chunk
+Base.:(==)(a::ThreadedExecutor, b::ThreadedExecutor) = a.chunk == b.chunk
+Base.:(==)(a::PoolExecutor, b::PoolExecutor) = a.pool === b.pool && a.chunk == b.chunk
+Base.hash(e::ThreadedExecutor, h::UInt) = hash(e.chunk, hash(:ThreadedExecutor, h))
+Base.hash(e::PoolExecutor, h::UInt) = hash(e.chunk, hash(objectid(e.pool), h))
+
+# ---------------------------------------------------------------- automatic chunk
+const POOL_CHUNK_MAX = 2^20      # items of one launch
+const POOL_CHUNK_MIN = 2^16      # smallest chunk of a run shared by several devices
+const CHUNKS_PER_LANE = 2        # on several devices
+const CHUNK_OUT_BYTES = 2^24     # outputs of one launch, copied back and scattered by its lane
+const THREAD_CHUNK_MAX = 4096
+const THREAD_CHUNK_MIN = 16
+const CHUNKS_PER_THREAD = 16
+
+# The rule of `:auto` for a run of `n` items with `bytes` of outputs per item.
+function auto_chunk(e::PoolExecutor, n::Integer, bytes::Integer)
+    nd = length(e.pool.devices)
+    c = nd == 1 ? POOL_CHUNK_MAX :
+        clamp(cld(n, CHUNKS_PER_LANE * lanes_per_device(e.pool) * nd), POOL_CHUNK_MIN,
+              POOL_CHUNK_MAX)
+    return bytes > 0 ? min(c, max(POOL_CHUNK_MIN, CHUNK_OUT_BYTES ÷ bytes)) : c
+end
+auto_chunk(::ThreadedExecutor, n::Integer, bytes::Integer) =
+    clamp(cld(n, CHUNKS_PER_THREAD * Threads.nthreads()), THREAD_CHUNK_MIN, THREAD_CHUNK_MAX)
+
+"""
+    chunk_for(exec, n; hint = nothing, bytes = 0) -> Int
+
+The chunk of a run of `n` items on `exec` whose program writes `bytes` of outputs per item
+and has the [`chunk_hint`](@ref) `hint`: the executor's chunk setting when it is an
+integer, else the rule of `:auto`:
+
+- a pool on one device: `2^20`, one launch per run of up to `2^20` items;
+- a pool on `d > 1` devices of `l` lanes: `clamp(cld(n, 2 l d), 2^16, 2^20)`, two chunks
+  per lane where the run is large enough;
+- on a pool, at most `max(2^16, 2^24 ÷ bytes)`, so that the outputs of one launch (at most
+  16 MiB), copied back and scattered by its lane, overlap the launches of the others;
+- threads: `clamp(cld(n, 16 t), 16, 4096)` on `t` Julia threads;
+
+then at most `hint`. Results never depend on the chunk.
+"""
+chunk_for(e::Executor, n::Integer; hint = nothing, bytes::Integer = 0) =
+    e.chunk isa Int ? e.chunk : min(auto_chunk(e, n, bytes), something(hint, typemax(Int)))
+
+"""
+    resolve_chunk!(exec, n; hint = nothing, bytes = 0) -> Int
+
+The chunk of a run of `n` items on `exec` ([`chunk_for`](@ref)), recorded as the chunk of
+the executor's last run, which [`describe`](@ref) reports.
+"""
+function resolve_chunk!(e::Executor, n::Integer; hint = nothing, bytes::Integer = 0)
+    c = chunk_for(e, n; hint, bytes)
+    e.used[] = c
+    return c
+end
+
+# The smallest chunk hint of the programs of `parts`; `nothing` when none has one.
+parts_hint(parts::Tuple) = foldl((h, p) -> min_hint(h, chunk_hint(p[1])), parts; init = nothing)
+min_hint(a, b) = a === nothing ? b : b === nothing ? a : min(a, b)
+
+# Bytes of output per item.
+item_bytes(outs::Tuple) = sum(o -> sizeof(eltype(o)), outs; init = 0)
+
+# The chunk of the executor's last run, or its setting before the first run.
+last_chunk(e::Executor) = (c = e.used[]; c > 0 ? c : e.chunk)
 
 resident(e::PoolExecutor, dev, obj) = resident(e.pool, dev, obj)
 device_program(e::PoolExecutor, dev, prog) = device_program(e.pool, dev, prog)
@@ -81,6 +148,13 @@ function foreach_item!(exec::Executor, parts::Tuple{Vararg{Pair}}; outs::Tuple =
     return outs
 end
 
+# A run of the parts in one queue, cut at the run's chunk.
+function run_parts!(exec::Executor, parts::Tuple, outs::Tuple)
+    n = sum(p -> length(p[2]), parts; init = 0)
+    c = resolve_chunk!(exec, n; hint = parts_hint(parts), bytes = item_bytes(outs))
+    run_parts!(exec, parts, outs, c)
+end
+
 visit_queue(items, ::Nothing) = items
 visit_queue(items, order) = view(items, queue_items(order, length(items)))
 
@@ -92,11 +166,11 @@ chunk_ranges(n::Integer, c::Integer) =
 part_chunks(parts::Tuple, c::Integer) =
     [(p, r) for p in eachindex(parts) for r in chunk_ranges(length(parts[p][2]), c)]
 
-function run_parts!(exec::ThreadedExecutor, parts::Tuple, outs::Tuple)
-    chunks = part_chunks(parts, exec.chunk)
-    Threads.@threads :dynamic for c in chunks
-        prog, q = parts[c[1]]
-        run_range!(prog, q, c[2], outs)
+function run_parts!(::ThreadedExecutor, parts::Tuple, outs::Tuple, c::Int)
+    chunks = part_chunks(parts, c)
+    Threads.@threads :dynamic for (p, r) in chunks
+        prog, q = parts[p]
+        run_range!(prog, q, r, outs)
     end
     return nothing
 end
@@ -109,9 +183,9 @@ function run_range!(prog, q, r::UnitRange{Int}, outs::Tuple)
     return nothing
 end
 
-function run_parts!(exec::PoolExecutor, parts::Tuple, outs::Tuple)
+function run_parts!(exec::PoolExecutor, parts::Tuple, outs::Tuple, c::Int)
     pool = exec.pool
-    chunks = part_chunks(parts, pool.chunk)
+    chunks = part_chunks(parts, c)
     twins = map(p -> ProgramTwins(pool, p[1]), parts)
     foreach_chunk(pool, chunks) do lane, (p, r)
         prog, q = parts[p]
@@ -164,20 +238,21 @@ end
 
 Where and how `exec` runs, as plain data for a result's `run` record:
 `(kind, devices, lanes, chunk, threads)` with `kind` `:threads` or `:pool`, `devices` the
-device names, `lanes` the workers per device (0 for threads), `chunk` the items per
-chunk and `threads` the Julia thread count.
+device names, `lanes` the workers per device (0 for threads), `chunk` the items per chunk
+of the executor's last run (its setting, an integer or `:auto`, before the first run) and
+`threads` the Julia thread count.
 """
 describe(e::ThreadedExecutor) =
-    (kind = :threads, devices = String[], lanes = 0, chunk = e.chunk,
+    (kind = :threads, devices = String[], lanes = 0, chunk = last_chunk(e),
      threads = Threads.nthreads())
 describe(e::PoolExecutor) =
     (kind = :pool, devices = string.(e.pool.devices), lanes = lanes_per_device(e.pool),
-     chunk = e.pool.chunk, threads = Threads.nthreads())
+     chunk = last_chunk(e), threads = Threads.nthreads())
 
 Base.show(io::IO, e::ThreadedExecutor) =
-    print(io, "ThreadedExecutor(chunk = ", e.chunk, ") on ", Threads.nthreads(),
+    print(io, "ThreadedExecutor(chunk = ", repr(e.chunk), ") on ", Threads.nthreads(),
           " Julia threads")
 Base.show(io::IO, e::PoolExecutor) =
     print(io, "PoolExecutor([", join(string.(e.pool.devices), ", "), "]; lanes = ",
-          lanes_per_device(e.pool), ", chunk = ", e.pool.chunk, ") on ",
+          lanes_per_device(e.pool), ", chunk = ", repr(e.chunk), ") on ",
           Threads.nthreads(), " Julia threads")

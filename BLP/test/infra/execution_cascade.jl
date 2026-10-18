@@ -13,7 +13,7 @@ using BLP.Numerics: MCRng, MCStreamLayout, child_rng, stream_id, primary_rng, ph
 using BLP.MonteCarlo: Superphoton
 using BLP.Execution: ThreadedExecutor, PoolExecutor, ExactBins, ExactScalars, ChildBuffer,
                      Generation, InclinationBands, PolarBands, foreach_cascade!,
-                     cascade_chunk, gather!, add!, scalar, addends, spawn!, children
+                     cascade_chunk, gather!, add!, scalar, addends, spawn!, children, describe
 import BLP.Execution
 
 const DK = Main.Decks
@@ -157,6 +157,18 @@ end
         @test cascade_chunk(PoolExecutor(DK.hosts(2); chunk = 4096), 4_000) == 4096
         @test cascade_chunk(ThreadedExecutor(chunk = 4096), 10^7) ==
               max(4096, cld(10^7, 64 * Threads.nthreads()))
+        # `:auto` leaves the rule; the run records the cascade's chunk
+        @test cascade_chunk(PoolExecutor(DK.hosts(2)), 4_000) == 500
+        @test cascade_chunk(PoolExecutor(DK.hosts(1)), 10^7) == 2^20
+        @test cascade_chunk(ThreadedExecutor(), 10^7) == cld(10^7, 64 * Threads.nthreads())
+        @test cascade_chunk(ThreadedExecutor(), 10) == 1
+        for ex in (ThreadedExecutor(), PoolExecutor(DK.hosts(2)))
+            @test describe(ex).chunk === :auto
+            run_cascade(ex, 100, 1; chunk = 37)
+            @test describe(ex).chunk == 37
+            run_cascade(ex, 100, 1)
+            @test describe(ex).chunk == cascade_chunk(ex, 100)
+        end
         e = ThreadedExecutor(chunk = 64)
         p0 = Gen0(fresh_acc()..., nothing)
         @test_throws ArgumentError foreach_cascade!(e, p0, p0, -1, 1)

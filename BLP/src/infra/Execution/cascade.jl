@@ -16,13 +16,16 @@ const MIN_CHILD_SLOTS = 4096
     cascade_chunk(exec, n) -> Int
 
 Primaries per chunk of a cascade over `n` primaries on `exec`. On a pool: a quarter of a
-device's share, at most `CASCADE_CHUNK` and at least the pool's chunk. On threads: a
-sixty-fourth of a thread's share, at least the executor's chunk.
+device's share, at most `CASCADE_CHUNK`. On threads: a sixty-fourth of a thread's share.
+Either is at least the executor's chunk when that is an explicit count (`:auto` leaves
+the rule), and at least 1. The chunk of a cascade is recorded as the executor's last
+chunk, which [`describe`](@ref) reports.
 """
 cascade_chunk(e::PoolExecutor, n::Integer) =
-    max(e.pool.chunk, min(cld(n, 4 * length(e.pool.devices)), CASCADE_CHUNK))
+    cascade_floor(e, min(cld(n, 4 * length(e.pool.devices)), CASCADE_CHUNK))
 cascade_chunk(e::ThreadedExecutor, n::Integer) =
-    max(e.chunk, cld(n, 64 * Threads.nthreads()))
+    cascade_floor(e, cld(n, 64 * Threads.nthreads()))
+cascade_floor(e::Executor, c::Integer) = max(e.chunk isa Int ? e.chunk : 1, Int(c))
 
 """
     foreach_cascade!(exec, primary, layer, n, depth; capacity = nothing,
@@ -67,6 +70,7 @@ function foreach_cascade!(exec::Executor, primary, layer, n::Integer, depth::Int
     chunk >= 1 || throw(ArgumentError("foreach_cascade!: chunk must be positive"))
     capacity === nothing || capacity >= 1 ||
         throw(ArgumentError("foreach_cascade!: capacity must be positive"))
+    exec.used[] = Int(chunk)
     n == 0 && return 0
     slot = child_slot(primary)
     c = Cascade(primary, layer, slot, slot === nothing ? 0 : Int(depth), capacity)

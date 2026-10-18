@@ -1,7 +1,8 @@
 # The device pool on host devices: the queue runs every item exactly once in queue order
 # across persistent lanes, rethrows a worker's exception and stays usable, streams items
 # added while running, refuses nested jobs, reuses one registered pool per device list,
-# shuts its workers down, and releases replaced and dropped staging buffers.
+# whatever the chunk, shuts its workers down, and releases replaced and dropped staging
+# buffers.
 using Test, BLP
 using KernelAbstractions
 using BLP.Execution: DevicePool, PoolExecutor, HostDevice, CUDADevice, resident, describe
@@ -24,9 +25,13 @@ const Decks = Main.Decks
     q = Ex.device_pool(Decks.hosts(2))
     @test Ex.device_pool(Decks.hosts(2)) === q && Ex.device_pool(q) === q
     @test Ex.device_pool(Decks.hosts(3)) !== q
-    @test Ex.device_pool(Decks.hosts(2); chunk = 9) !== q
+    @test Ex.device_pool(Decks.hosts(2); lanes = 3) !== q
     @test PoolExecutor(Decks.hosts(2)).pool === q
-    @test PoolExecutor(q).pool === q
+    @test PoolExecutor(Decks.hosts(2); chunk = 9).pool === q    # any chunk shares the pool
+    @test PoolExecutor(q).pool === q && q.chunk === :auto
+    @test PoolExecutor(q).chunk === :auto && PoolExecutor(q; chunk = 9).chunk == 9
+    @test PoolExecutor(DevicePool(Decks.hosts(1); chunk = 5)).chunk == 5
+    @test_throws ArgumentError DevicePool(Decks.hosts(1); chunk = :fast)
 end
 
 @testset "queue: each item once, in order, on every lane" begin

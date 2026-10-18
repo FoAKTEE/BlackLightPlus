@@ -17,6 +17,15 @@ register footprint limits residency, runs at 64. Results never depend on it.
 """
 workgroupsize(prog) = nothing
 
+"""
+    chunk_hint(prog) -> Union{Int,Nothing}
+
+The most items a chunk of the program `prog` holds when the executor sizes its chunks
+itself (`chunk = :auto`); `nothing` (the default) leaves the executor's rule
+([`chunk_for`](@ref)). An explicit chunk ignores it. Results never depend on it.
+"""
+chunk_hint(prog) = nothing
+
 # One launch of the device program `dprog`, made from `prog`, over the first `n` entries
 # of the device item buffer `items` into the device outputs `outs`, on `lane`; returns
 # after the device has finished.

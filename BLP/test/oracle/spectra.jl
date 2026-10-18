@@ -37,7 +37,7 @@ old_hosts(nd) = Decks.DEVICE_KIND == "cuda" ? [d.ordinal for d in Decks.devices(
 const EXECS = (ThreadedExecutor(chunk = 4096), ThreadedExecutor(chunk = 37),
                (PoolExecutor(Decks.devices(nd); chunk = c) for (nd, c) in zip(Decks.NDEV, (512, 997, 300, 4096)))...)
 exec_name(e::ThreadedExecutor) = "threads chunk $(e.chunk)"
-exec_name(e::PoolExecutor) = "$(length(e.pool.devices)) $(Decks.DEVICE_KIND) devices chunk $(e.pool.chunk)"
+exec_name(e::PoolExecutor) = "$(length(e.pool.devices)) $(Decks.DEVICE_KIND) devices chunk $(e.chunk)"
 
 # A pool against the reference CPU driver crosses hardware under BLP_TEST_DEVICES=cuda.
 crosses(e) = Decks.CROSS_HARDWARE && e isa PoolExecutor

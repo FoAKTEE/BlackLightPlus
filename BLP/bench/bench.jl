@@ -53,9 +53,10 @@
 # Comparison runs (BLP_DECK=reference, or BLP_COMPARE=1 on the torus deck): records go to
 # BLP/bench/results/reference/raw/blp.jsonl and arrays to
 # BLP/bench/results/reference/out/<deck> with the tags `blp-cpu`, `blp-gpuN`; each case runs on every GPU pool of BLP_POOLS
-# (lanes:chunk list, default 2:65536,2:131072, each on a fresh pool) or with every CPU
-# chunk of BLP_CPU_CHUNKS (default 4096,64); BLP_PHASES=1 (the default there on a GPU) adds
-# one profiled call of the first pool, written as a `phase` record (common.jl `cuda_phases`).
+# (lanes:chunk list, default 2:65536,2:131072, each on a fresh pool; a chunk `auto` is the
+# executor's own rule) or with every CPU chunk of BLP_CPU_CHUNKS (default 4096,64; `auto`
+# allowed); BLP_PHASES=1 (the default there on a GPU) adds one profiled call of the first
+# pool, written as a `phase` record (common.jl `cuda_phases`).
 #
 # Protocol per leg: `prepare` (not in `first_s`; recorded as `setup_s`); one first call
 # (timed as `first_s`: the JIT compilation when the leg's program has not run in this
@@ -149,7 +150,9 @@ const AMR_RES = parse(Int, get(ENV, "BLP_AMR_RES", "384"))
 const AN_RES = parse(Int, get(ENV, "BLP_AN_RES", "1024"))
 const MC_NS = parse(Float64, get(ENV, "BLP_MC_NS", "1e7"))
 const REPEAT = parse(Int, get(ENV, "BLP_REPEAT", "3"))
-const CPU_CHUNK = parse(Int, get(ENV, "BLP_CPU_CHUNK", "64"))
+# A chunk setting of the environment: an item count, or `auto` (the executor's own rule).
+chunk_arg(s) = strip(s) == "auto" ? :auto : parse(Int, s)
+const CPU_CHUNK = chunk_arg(get(ENV, "BLP_CPU_CHUNK", "64"))
 const DEVICES = envlist("BLP_DEVICES", "0")
 const TUNE = get(ENV, "BLP_TUNE", "0") == "1"
 const SKIP_DONE = get(ENV, "BLP_SKIP_DONE", "0") == "1"
@@ -171,11 +174,12 @@ const MATTER = lowercase(get(ENV, "BLP_MATTER", "blocks"))
 MATTER in ("blocks", "uniform") || error("BLP_MATTER must be blocks or uniform, got $MATTER")
 const UNIFORM_HALF = parse(Float64, get(ENV, "BLP_UNIFORM_HALF", "40"))
 const UNIFORM_N = parse(Int, get(ENV, "BLP_UNIFORM_N", "256"))
-parse_pools(s) = [(lanes = parse(Int, a), chunk = parse(Int, b))
+parse_pools(s) = [(lanes = parse(Int, a), chunk = chunk_arg(b))
                   for (a, b) in (split(strip(x), ':') for x in split(s, ',') if !isempty(strip(x)))]
 const POOLS = haskey(ENV, "BLP_POOLS") ? parse_pools(ENV["BLP_POOLS"]) :
     COMPARE ? [(lanes = 2, chunk = 65536), (lanes = 2, chunk = 131072)] : nothing
-const CPU_CHUNKS = haskey(ENV, "BLP_CPU_CHUNKS") ? envlist("BLP_CPU_CHUNKS", "") :
+const CPU_CHUNKS = haskey(ENV, "BLP_CPU_CHUNKS") ?
+    [chunk_arg(x) for x in split(ENV["BLP_CPU_CHUNKS"], ',') if !isempty(strip(x))] :
     COMPARE ? [4096, 64] : [CPU_CHUNK]
 const PHASES = GPU && get(ENV, "BLP_PHASES", COMPARE ? "1" : "0") == "1"
 const JOB = get(ENV, "SLURM_JOB_ID", "none")
@@ -509,7 +513,7 @@ end
 # The pool configuration of a GPU case: the environment, else the best tune record.
 function pool_config(c::Case)
     haskey(ENV, "BLP_LANES") && haskey(ENV, "BLP_CHUNK") &&
-        return (lanes = parse(Int, ENV["BLP_LANES"]), chunk = parse(Int, ENV["BLP_CHUNK"]),
+        return (lanes = parse(Int, ENV["BLP_LANES"]), chunk = chunk_arg(ENV["BLP_CHUNK"]),
                 source = "env")
     tunes = filter(r -> get(r, "kind", "") == "tune" && r["key"] == key(c) &&
                         r["ndev"] == length(DEVICES) && same_code(r), read_records(TUNE_FROM))

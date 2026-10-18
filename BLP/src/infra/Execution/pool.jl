@@ -31,21 +31,21 @@ end
 ResidencyCache() = ResidencyCache(ReentrantLock(), Dict{UInt,Tuple{WeakRef,Any}}())
 
 """
-    DevicePool(devices; lanes = 2, chunk = 65536)
+    DevicePool(devices; lanes = 2, chunk = :auto)
 
 Persistent multi-device runtime over `devices` (device handles or CUDA ordinals): `lanes`
-worker tasks per device, spawned once, a shared work queue cut into `chunk`-item chunks,
-and one residency cache per device ([`resident`](@ref)). Every device must be
-functional (`BackendUnavailable` otherwise). Run Julia with more threads than devices so
-the workers of different devices run concurrently. `close(pool)` stops the workers and
-releases their buffers; a pool built here is the caller's to close, a pool obtained
-through `PoolExecutor(devices)` or [`resolve`](@ref) belongs to the process registry and
-is closed at exit.
+worker tasks per device, spawned once, a shared work queue, and one residency cache per
+device ([`resident`](@ref)). `chunk` is the chunk setting of the executors built on the
+pool with `PoolExecutor(pool)`: a positive item count, or `:auto`, sized per run
+([`chunk_for`](@ref)). Every device must be functional (`BackendUnavailable` otherwise). Run Julia with more threads than devices so the workers of different devices
+run concurrently. `close(pool)` stops the workers and releases their buffers; a pool built
+here is the caller's to close, a pool obtained through `PoolExecutor(devices)` or
+[`resolve`](@ref) belongs to the process registry and is closed at exit.
 """
 mutable struct DevicePool
     const devices::Vector{AbstractDevice}
     const lanes::Vector{PoolLane}
-    const chunk::Int
+    const chunk::Union{Int,Symbol}
     const post_lock::ReentrantLock
     const resident::Vector{ResidencyCache}
     @atomic open::Bool
@@ -71,12 +71,24 @@ end
 
 const LANE_KEY = :blp_pool_lane
 
-function DevicePool(devices; lanes::Integer = 2, chunk::Integer = 65536)
+"""
+    chunk_setting(c) -> Union{Int,Symbol}
+
+A validated chunk setting: a positive item count as `Int`, or `:auto`, which the executor
+resolves for every run from its item count ([`chunk_for`](@ref)).
+"""
+function chunk_setting(c)
+    c === :auto && return :auto
+    c isa Integer && c >= 1 && return Int(c)
+    throw(ArgumentError("chunk must be a positive integer or :auto; got $(repr(c))"))
+end
+
+function DevicePool(devices; lanes::Integer = 2, chunk = :auto)
     devs = AbstractDevice[device(d) for d in devices]
     isempty(devs) && throw(ArgumentError("DevicePool: no devices"))
     allunique(devs) || throw(ArgumentError("DevicePool: duplicate devices in $devs"))
-    (lanes >= 1 && chunk >= 1) ||
-        throw(ArgumentError("DevicePool: lanes and chunk must be positive"))
+    lanes >= 1 || throw(ArgumentError("DevicePool: lanes must be positive"))
+    setting = chunk_setting(chunk)
     foreach(check_available, devs)
     Threads.nthreads() > length(devs) ||
         @warn "DevicePool: $(Threads.nthreads()) Julia thread(s) for $(length(devs)) " *
@@ -88,14 +100,14 @@ function DevicePool(devices; lanes::Integer = 2, chunk::Integer = 65536)
         lane.task = Threads.@spawn lane_loop(lane)
         push!(ls, lane)
     end
-    return DevicePool(devs, ls, Int(chunk), ReentrantLock(),
+    return DevicePool(devs, ls, setting, ReentrantLock(),
                       [ResidencyCache() for _ in devs], true)
 end
 
 Base.isopen(pool::DevicePool) = @atomic pool.open
 Base.show(io::IO, pool::DevicePool) =
     print(io, "DevicePool(", join(string.(pool.devices), ", "), "; lanes = ",
-          lanes_per_device(pool), ", chunk = ", pool.chunk,
+          lanes_per_device(pool), ", chunk = ", repr(pool.chunk),
           isopen(pool) ? "" : ", closed", ")")
 
 "Worker tasks per device of `pool`."
@@ -281,19 +293,20 @@ const POOLS = Dict{Any,DevicePool}()
 const POOLS_LOCK = ReentrantLock()
 
 """
-    device_pool(devices; lanes = 2, chunk = 65536) -> DevicePool
+    device_pool(devices; lanes = 2) -> DevicePool
 
-The process-wide pool of the device list `devices` with `lanes` and `chunk`, created on
-first use and reused after (a closed pool is replaced), so repeated runs share its
-workers, staging buffers and residency caches. A `DevicePool` is returned unchanged.
+The process-wide pool of the device list `devices` with `lanes` workers per device and
+the chunk setting `:auto`, created on first use and reused after (a closed pool is
+replaced), so repeated runs share its workers, staging buffers and residency caches
+whatever chunk their executors use. A `DevicePool` is returned unchanged.
 """
 device_pool(pool::DevicePool; kw...) = pool
-function device_pool(devices; lanes::Integer = 2, chunk::Integer = 65536)
+function device_pool(devices; lanes::Integer = 2)
     devs = AbstractDevice[device(d) for d in devices]
-    key = (Tuple(devs), Int(lanes), Int(chunk))
+    key = (Tuple(devs), Int(lanes))
     return @lock POOLS_LOCK begin
         p = get(POOLS, key, nothing)
-        (p === nothing || !isopen(p)) && (p = POOLS[key] = DevicePool(devs; lanes, chunk))
+        (p === nothing || !isopen(p)) && (p = POOLS[key] = DevicePool(devs; lanes))
         p
     end
 end

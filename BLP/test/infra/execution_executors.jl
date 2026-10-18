@@ -6,7 +6,8 @@ using Test, BLP
 using StaticArrays, KernelAbstractions, Adapt, Random
 using Atomix: Atomix
 using BLP.Execution: ThreadedExecutor, PoolExecutor, HostDevice, HostRays, ray,
-                     foreach_item!, workgroupsize, describe, mixed_partition
+                     foreach_item!, workgroupsize, chunk_hint, describe, mixed_partition
+const Ex = BLP.Execution
 const Decks = Main.Decks
 
 # A nonlinear oscillator pair, integrated by fixed-step RK4.
@@ -44,6 +45,14 @@ end
 Adapt.@adapt_structure WGProgram
 BLP.Execution.workgroupsize(::WGProgram) = 4
 @inline (p::WGProgram)(item, i, o64, o32) = p.inner(item, i, o64, o32)
+
+# The same program with a chunk hint.
+struct HintProgram{P}
+    inner::P
+end
+Adapt.@adapt_structure HintProgram
+BLP.Execution.chunk_hint(::HintProgram) = 10
+@inline (p::HintProgram)(item, i, o64, o32) = p.inner(item, i, o64, o32)
 
 # Counts items and sums their values through atomics on a host array, which it shares
 # with every host device instead of taking a device copy.
@@ -90,7 +99,8 @@ function run_outputs(exec, prog, items; order = nothing)
 end
 
 executors() = [ThreadedExecutor(chunk = 3); ThreadedExecutor();
-               [PoolExecutor(Decks.hosts(nd); lanes = 2, chunk = 7) for nd in Decks.NDEV]]
+               [PoolExecutor(Decks.hosts(nd); lanes = 2, chunk = 7) for nd in Decks.NDEV];
+               PoolExecutor(Decks.hosts(1)); PoolExecutor(Decks.hosts(3); lanes = 1)]
 
 @testset "executors" begin
 
@@ -105,6 +115,41 @@ executors() = [ThreadedExecutor(chunk = 3); ThreadedExecutor();
     pool = PoolExecutor(Decks.hosts(3); lanes = 2, chunk = 7)
     @test Decks.bits(run_outputs(pool, WGProgram(PROG), 1:N)) == ref     # workgroup size 4
     @test workgroupsize(PROG) === nothing && workgroupsize(WGProgram(PROG)) == 4
+end
+
+@testset "automatic chunk: the rule, the hint, an explicit chunk, the record" begin
+    t = ThreadedExecutor()
+    nt = Threads.nthreads()
+    @test t.chunk === :auto && describe(t).chunk === :auto && t == ThreadedExecutor(chunk = :auto)
+    @test t != ThreadedExecutor(chunk = 64) && ThreadedExecutor(chunk = 64) == ThreadedExecutor(64)
+    @test Ex.chunk_for(t, 10^8) == 4096 && Ex.chunk_for(t, 48 * 16 * nt) == 48
+    @test Ex.chunk_for(t, 10) == 16 && Ex.chunk_for(t, 10^5; hint = 7) == 7
+    @test Ex.chunk_for(t, 10^8; bytes = 10^6) == 4096                 # outputs: pools only
+    p1 = PoolExecutor(Decks.hosts(1))
+    @test Ex.chunk_for(p1, 10^8) == 2^20 && Ex.chunk_for(p1, 1000) == 2^20
+    @test Ex.chunk_for(p1, 10^8; hint = 1000) == 1000
+    @test Ex.chunk_for(p1, 10^8; bytes = 8) == 2^20                   # 16 MiB of outputs
+    @test Ex.chunk_for(p1, 10^8; bytes = 120) == 2^24 ÷ 120
+    @test Ex.chunk_for(p1, 10^8; bytes = 1600) == 2^16
+    p3 = PoolExecutor(Decks.hosts(3); lanes = 2)
+    @test Ex.chunk_for(p3, 10^7) == cld(10^7, 12) && Ex.chunk_for(p3, 10^8) == 2^20
+    @test Ex.chunk_for(p3, 300_000) == 2^16 && Ex.chunk_for(p3, 1000) == 2^16
+    @test Ex.chunk_for(PoolExecutor(Decks.hosts(3); lanes = 1), 10^6) == cld(10^6, 6)
+    for e in (PoolExecutor(Decks.hosts(1); chunk = 7), ThreadedExecutor(chunk = 7))
+        @test Ex.chunk_for(e, 10^8; hint = 3, bytes = 10^6) == 7     # explicit wins
+    end
+    ref = Decks.bits(serial_reference(PROG, 1:N))
+    bytes = sizeof(SVector{4,Float64}) + sizeof(SVector{4,Float32})
+    for e in (ThreadedExecutor(), p1, p3)
+        @test Decks.bits(run_outputs(e, PROG, 1:N)) == ref
+        @test describe(e).chunk == Ex.chunk_for(e, N; bytes)            # the chunk used
+        @test Decks.bits(run_outputs(e, HintProgram(PROG), collect(1:N))) == ref
+        @test describe(e).chunk == 10
+        @test e.chunk === :auto
+    end
+    e = PoolExecutor(Decks.hosts(2); chunk = 9)
+    run_outputs(e, PROG, 1:N)
+    @test describe(e).chunk == 9 && chunk_hint(PROG) === nothing
 end
 
 @testset "a subset of items leaves the other slots untouched" begin
