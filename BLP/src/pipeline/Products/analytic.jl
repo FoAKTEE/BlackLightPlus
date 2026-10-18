@@ -2,6 +2,73 @@
 # every photon-ring layer and the disk intensity there, on the camera pixels or on the
 # lensing bands of the Bardeen screen.
 
+"""
+    AnalyticProgram(gen, theta_o, a, ro, disk, bands)
+
+One screen point of the exact-Kerr equatorial tracer: `(α, β) = image_coords(gen,
+item)` (Bardeen coordinates), `prep = pixel_prep(α, β, theta_o, a; ro)` once, then for
+each photon-ring order `n` of `bands` (an `NTuple{K,Int}`) the landing
+`band_landing(prep, n)` and the intensity `intensity(disk, landing)`. Called as
+`prog(item, i, outs...)` with the `5K` `Float64` vectors of [`analytic_outputs`](@ref):
+`outs[(q - 1) K + b][i]` is quantity `q` of band `b`, the quantities being the band
+intensity, the landing radius, the time of flight, the azimuth and the emitted
+radial-velocity sign; an invalid landing gives intensity 0 and NaN observables. Needs a
+32 KiB device stack.
+"""
+struct AnalyticProgram{G,D,B} <: Function
+    gen::G
+    theta_o::Float64
+    a::Float64
+    ro::Float64
+    disk::D
+    bands::B
+end
+Adapt.@adapt_structure AnalyticProgram
+
+"Quantities an [`AnalyticProgram`](@ref) writes per band: intensity, radius, time, azimuth, sign."
+const ANALYTIC_QUANTITIES = 5
+
+"""
+    analytic_outputs(K, n) -> NTuple{5K,Vector{Float64}}
+
+The output vectors of an [`AnalyticProgram`](@ref) of `K` bands over `n` items,
+quantity-major: the intensity of bands `1:K`, then their landing radius, time of flight,
+azimuth and emitted radial-velocity sign.
+"""
+analytic_outputs(K::Integer, n::Integer) =
+    ntuple(_ -> Vector{Float64}(undef, n), ANALYTIC_QUANTITIES * K)
+
+@inline function paint(prep, n, disk)
+    l = band_landing(prep, n)
+    l.valid || return (0.0, NaN, NaN, NaN, NaN)
+    return (Float64(intensity(disk, l)), Float64(l.r), Float64(l.t), Float64(l.φ), Float64(l.νr))
+end
+
+# The painted quantities of every band, quantity-major: the order of the outputs.
+@inline quantity_major(maps) =
+    (map(m -> m[1], maps)..., map(m -> m[2], maps)..., map(m -> m[3], maps)...,
+     map(m -> m[4], maps)..., map(m -> m[5], maps)...)
+
+# `outs[k][i] = vals[k]` for every k, unrolled over the tuples: indexing a tuple of host
+# arrays at run time would put the tuple on the heap.
+@inline store_all!(::Tuple{}, i, ::Tuple{}) = nothing
+@inline function store_all!(outs::Tuple, i, vals::Tuple)
+    @inbounds first(outs)[i] = first(vals)
+    return store_all!(Base.tail(outs), i, Base.tail(vals))
+end
+
+function (p::AnalyticProgram)(item, i, outs::Vararg{Any,N}) where {N}
+    N == ANALYTIC_QUANTITIES * length(p.bands) ||
+        throw(ArgumentError("AnalyticProgram: $N outputs for $(length(p.bands)) bands"))
+    α, β = image_coords(p.gen, item)
+    prep = pixel_prep(α, β, p.theta_o, p.a; ro = p.ro)
+    maps = map(n -> paint(prep, n, p.disk), p.bands)
+    store_all!(outs, i, quantity_major(maps))
+    return nothing
+end
+
+stack_bytes(::AnalyticProgram) = 32 * 1024
+
 # The spin of the analytic tracer: the plan's Kerr spin, which the disk must share.
 function analytic_spin(plan::Plan, disk::EquatorialDisk)
     st = plan.spacetime
@@ -13,8 +80,9 @@ function analytic_spin(plan::Plan, disk::EquatorialDisk)
     return Float64(st.a)
 end
 
-# The band maps of per-item SVector outputs: map `k` of band `b` as an `npix × npix` matrix.
-band_maps(out::Vector{<:SVector}, b, n) = reshape([o[b] for o in out], n, n)
+# The maps of quantity `q` of every band among the outputs `outs` of `K` bands, each an
+# `n × n` matrix sharing its output vector.
+band_maps(outs, q, K, n) = [reshape(outs[(q - 1) * K + b], n, n) for b in 1:K]
 
 """
     render_analytic(plan, disk::EquatorialDisk; bands = (0, 1, 2), ro = plan.camera.d,
@@ -29,7 +97,8 @@ disk's spin; its matter is not used. Returns `(I, Ib, rs, ts, phis, redshift_sig
 bands, plan, run)`: per band `b` the image `Ib[b]` and the landing radius `rs[b]`, time
 of flight `ts[b]`, azimuth `phis[b]` and emitted radial-velocity sign
 `redshift_sign[b]` (each `npix × npix`, NaN off the disk; `Ib` zero there), and
-`I = Σ_b Ib[b]`, summed in band order.
+`I = Σ_b Ib[b]`, summed in band order. The pixels are visited in their index order, so
+every chunk of the executor writes a contiguous run of each map.
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
@@ -41,12 +110,13 @@ function render_analytic(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
     prog = AnalyticProgram(plan.pixels, plan.theta_o, analytic_spin(plan, disk), Float64(ro),
                            disk, bt)
     N = npixels(plan)
-    outs = ntuple(_ -> Vector{SVector{length(bt),Float64}}(undef, N), 5)
-    foreach_item!(exec, prog, plan.queue; outs)
+    K = length(bt)
+    outs = analytic_outputs(K, N)
+    foreach_item!(exec, prog, 1:N; outs)
     n = plan.camera.npix
-    Ib, rs, ts, phis, rsgn = map(o -> [band_maps(o, b, n) for b in eachindex(bt)], outs)
+    Ib, rs, ts, phis, rsgn = ntuple(q -> band_maps(outs, q, K, n), ANALYTIC_QUANTITIES)
     I = zeros(n, n)
-    for b in eachindex(bt)
+    for b in 1:K
         I .+= Ib[b]
     end
     return (I = I, Ib = Ib, rs = rs, ts = ts, phis = phis, redshift_sign = rsgn,
@@ -87,7 +157,7 @@ function photon_ring_layers(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
         _, bmask, _ = band_grid(lensing_band(a, θo, Int(n); kw...)...; dx = Float64(dx),
                                 box = kw.box)
         items = findall(vec(bmask))
-        outs = ntuple(_ -> Vector{SVector{1,Float64}}(undef, N * N), 5)
+        outs = analytic_outputs(1, N * N)
         prog = AnalyticProgram(gen, θo, a, Float64(ro), disk, (Int(n),))
         foreach_item!(exec, prog, items; outs)
         paint_band!(Ib[b], masks[b], outs[1], outs[2], items, N)
@@ -104,11 +174,11 @@ end
 # `[(idx - 1) ÷ N + 1, (idx - 1) % N + 1]` (row β, column α).
 function paint_band!(img, mask, Ib, rs, items, N)
     for idx in items
-        isfinite(rs[idx][1]) || continue
+        isfinite(rs[idx]) || continue
         ix = (idx - 1) % N + 1
         iy = (idx - 1) ÷ N + 1
-        img[iy, ix] = Ib[idx][1]
-        mask[iy, ix] = Ib[idx][1] > 0
+        img[iy, ix] = Ib[idx]
+        mask[iy, ix] = Ib[idx] > 0
     end
     return img
 end

@@ -236,52 +236,6 @@ function (p::ShadowProgram{S,T})(item, i, out_y, out_m) where {S,T}
     return nothing
 end
 
-# ---------------------------------------------------------------- analytic Kerr
-
-"""
-    AnalyticProgram(gen, theta_o, a, ro, disk, bands)
-
-One screen point of the exact-Kerr equatorial tracer: `(α, β) = image_coords(gen,
-item)` (Bardeen coordinates), `prep = pixel_prep(α, β, theta_o, a; ro)` once, then for
-each photon-ring order `n` of `bands` (an `NTuple{K,Int}`) the landing
-`band_landing(prep, n)` and the intensity `intensity(disk, landing)`. Called as
-`prog(item, i, Ib, rs, ts, phis, rsgn)`, each output an `SVector{K,Float64}` per item:
-the band intensity and the landing radius, time of flight, azimuth and emitted
-radial-velocity sign; an invalid landing gives intensity 0 and NaN observables. Needs a
-32 KiB device stack.
-"""
-struct AnalyticProgram{G,D,B} <: Function
-    gen::G
-    theta_o::Float64
-    a::Float64
-    ro::Float64
-    disk::D
-    bands::B
-end
-Adapt.@adapt_structure AnalyticProgram
-
-@inline function paint(prep, n, disk)
-    l = band_landing(prep, n)
-    l.valid || return (0.0, NaN, NaN, NaN, NaN)
-    return (Float64(intensity(disk, l)), Float64(l.r), Float64(l.t), Float64(l.φ), Float64(l.νr))
-end
-
-function (p::AnalyticProgram)(item, i, Ib, rs, ts, phis, rsgn)
-    α, β = image_coords(p.gen, item)
-    prep = pixel_prep(α, β, p.theta_o, p.a; ro = p.ro)
-    maps = map(n -> paint(prep, n, p.disk), p.bands)
-    @inbounds begin
-        Ib[i] = SVector(map(m -> m[1], maps))
-        rs[i] = SVector(map(m -> m[2], maps))
-        ts[i] = SVector(map(m -> m[3], maps))
-        phis[i] = SVector(map(m -> m[4], maps))
-        rsgn[i] = SVector(map(m -> m[5], maps))
-    end
-    return nothing
-end
-
-stack_bytes(::AnalyticProgram) = 32 * 1024
-
 # ---------------------------------------------------------------- Monte Carlo
 
 "Stripes of the Monte Carlo ledger: the program of item `g` adds to stripe `(g − 1) mod LEDGER_STRIPES`, so the atomics of one quantity spread over that many cells."

@@ -2,7 +2,8 @@
 # horizon, executor independence, the lensing-band layers, and the argument checks.
 using Test, BLP, StaticArrays
 using BLP.Plans: CameraConfig, RunConfig, prepare
-using BLP.Products: render_analytic, photon_ring_layers
+using BLP.Products: render_analytic, photon_ring_layers, AnalyticProgram
+import BLP.Products: analytic_outputs
 using BLP.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, kerr_horizon
 using BLP.Matter: EquatorialDisk
 using BLP.Execution: PoolExecutor
@@ -29,6 +30,14 @@ const FIELDS = (:I, :Ib, :rs, :ts, :phis, :redshift_sign)
         end
         @test count(>(0), r.Ib[1]) > 30 && count(>(0), r.Ib[2]) > 0
         @test count(!isnan, r.rs[3]) <= count(!isnan, r.rs[2]) <= count(!isnan, r.rs[1])
+        # the program writes quantity q of band b to output (q - 1) K + b, which the maps share
+        prog = AnalyticProgram(p.pixels, p.theta_o, 0.9, p.camera.d, disk, (0, 1, 2))
+        outs = analytic_outputs(3, 144)
+        foreach(k -> prog(k, k, outs...), 1:144)
+        @test all(Decks.bits(reshape(outs[(q - 1) * 3 + b], 12, 12)) == Decks.bits(getfield(r, f)[b])
+                  for (q, f) in enumerate(FIELDS[2:end]) for b in 1:3)
+        @test all(m isa Matrix{Float64} for f in FIELDS[2:end] for m in getfield(r, f))
+        @test_throws ArgumentError prog(1, 1, outs[1:14]...)
         for exec in (:host_pool, PoolExecutor(Decks.hosts(3); lanes = 2, chunk = 7))
             q = render_analytic(p, disk; backend = exec)
             @test all(Decks.bits(getfield(q, f)) == Decks.bits(getfield(r, f)) for f in FIELDS)

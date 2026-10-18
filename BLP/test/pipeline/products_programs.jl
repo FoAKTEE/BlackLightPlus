@@ -12,7 +12,7 @@ using BLP.Matter: PolishDoughnut, EquatorialDisk
 using BLP.Transfer: StokesI, IQUV, output_type
 using BLP.Data: FrameWindow, scale_density
 using BLP.Execution: CameraRays, BlockGrid, CoordList, workgroupsize, stack_bytes
-import BLP.Products: invalid
+import BLP.Products: invalid, analytic_outputs
 const Decks = Main.Decks
 
 allocs(f, args...) = (f(args...); @allocated f(args...))
@@ -80,8 +80,8 @@ bits_equal(a, b) = Decks.bits((a.I, a.Q, a.U, a.V)) == Decks.bits((b.I, b.Q, b.U
         ys = Vector{SVector{8,Float64}}(undef, 64); ms = Vector{SVector{4,Float64}}(undef, 64)
         @test allocs(sp, 28, 1, ys, ms) == 0
         ap = AnalyticProgram(p.pixels, p.theta_o, 0.9, 1000.0, EquatorialDisk(0.9), (0, 1, 2))
-        aouts = ntuple(_ -> Vector{SVector{3,Float64}}(undef, 64), 5)
-        @test Decks.device_isbits(ap)
+        aouts = analytic_outputs(3, 64)
+        @test Decks.device_isbits(ap) && aouts isa NTuple{15,Vector{Float64}}
         # JacobiElliptic's sn and cn allocate when bounds checks are forced on (Pkg.test)
         Base.JLOptions().check_bounds == 1 || @test allocs(ap, 28, 1, aouts...) == 0
         @test Decks.device_isbits(AnalyticProgram(CoordList([(1.0, 2.0)]), 1.0, 0.9, 1000.0,
