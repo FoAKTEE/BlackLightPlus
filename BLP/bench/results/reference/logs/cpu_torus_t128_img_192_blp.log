@@ -1,3 +1,7 @@
 # bench.jl deck=torus backend=cpu commit=b40fdb1 threads=128 job=none tune=false legs=img_192 load1=9.46 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
 BENCH deck=torus leg=img_192 res=192 backend=cpu threads=128 ndev=0 lanes=0 chunk=4096 items=36864 wall_s=2.918 first_s=5.837 rate=1.264e+04 unit=rays/s load1=9.0/9.5 other_cores=3.5 same_as_saved=nothing
 BENCH deck=torus leg=img_192 res=192 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=36864 wall_s=0.407 first_s=0.4352 rate=9.057e+04 unit=rays/s load1=9.5/9.5 other_cores=3.4 same_as_saved=true
+# bench.jl deck=torus backend=cpu commit=bf486b4 threads=128 job=none tune=false legs=img_192 load1=11.86 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
+BENCH deck=torus leg=img_192 res=192 backend=cpu threads=128 ndev=0 lanes=0 chunk=18 items=36864 wall_s=0.2664 first_s=3.939 rate=1.384e+05 unit=rays/s load1=11.2/20.8 other_cores=1.6 same_as_saved=true
+BENCH deck=torus leg=img_192 res=192 backend=cpu threads=128 ndev=0 lanes=0 chunk=4096 items=36864 wall_s=2.714 first_s=2.666 rate=1.358e+04 unit=rays/s load1=19.4/18.0 other_cores=1.6 same_as_saved=true
+BENCH deck=torus leg=img_192 res=192 backend=cpu threads=128 ndev=0 lanes=0 chunk=64 items=36864 wall_s=0.2798 first_s=0.3404 rate=1.318e+05 unit=rays/s load1=18.0/18.0 other_cores=1.0 same_as_saved=true

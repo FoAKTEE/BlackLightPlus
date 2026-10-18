@@ -1,0 +1,41 @@
+host anta job 3025 phase bench ndev 1 legs img,pol,amr,analytic,mc_thin,mc_scatter0,mc_scatter commit 97b23ac CUDA_VISIBLE_DEVICES=0 2026-10-18 03:08:23
+0, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+# bench.jl deck=torus backend=gpu commit=97b23ac threads=4 devices=[0] job=3025 tune=false legs=img,pol,amr,analytic,mc_thin,mc_scatter0,mc_scatter load1=4.26 out=BLP/bench/results/raw/gpu.jsonl
+BENCH deck=torus leg=img_192 res=192 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=36864 wall_s=0.05763 first_s=13.3 rate=6.396e+05 unit=rays/s load1=4.2/4.1 other_cores=3.2 same_as_saved=true
+BENCH deck=torus leg=img_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=147456 wall_s=0.1291 first_s=0.2511 rate=1.142e+06 unit=rays/s load1=4.1/4.3 other_cores=2.9 same_as_saved=true
+BENCH deck=torus leg=img_768 res=768 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=589824 wall_s=0.4766 first_s=0.5124 rate=1.237e+06 unit=rays/s load1=4.3/4.3 other_cores=2.4 same_as_saved=true
+BENCH deck=torus leg=pol_256 res=256 backend=gpu threads=4 ndev=1 lanes=2 chunk=524288 items=65536 wall_s=0.2967 first_s=5.128 rate=2.209e+05 unit=rays/s load1=4.3/4.2 other_cores=2.6 same_as_saved=true
+BENCH deck=torus leg=pol_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=524288 items=147456 wall_s=0.5879 first_s=0.6179 rate=2.508e+05 unit=rays/s load1=4.2/4.2 other_cores=2.7 same_as_saved=true
+BENCH deck=torus leg=amr_384 res=384 backend=gpu threads=4 ndev=1 lanes=2 chunk=524288 items=629760 wall_s=2.654 first_s=7.358 rate=2.373e+05 unit=rays/s load1=4.2/4.4 other_cores=4.1 same_as_saved=true
+BENCH deck=torus leg=analytic_1024 res=1024 backend=gpu threads=4 ndev=1 lanes=2 chunk=139810 items=1048576 wall_s=0.1348 first_s=6.844 rate=7.778e+06 unit=rays/s load1=4.4/5.0 other_cores=10.6 same_as_saved=true
+BENCH deck=torus leg=mc_thin res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=10025000 wall_s=0.3633 first_s=5.563 rate=2.76e+07 unit=photons/s load1=5.0/5.5 other_cores=3.4 same_as_saved=true
+BENCH deck=torus leg=mc_scatter0 res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=10025000 wall_s=0.6157 first_s=7.191 rate=1.628e+07 unit=photons/s load1=5.4/5.6 other_cores=8.1 same_as_saved=true
+BENCH deck=torus leg=mc_scatter res=0 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=11839088 wall_s=0.8375 first_s=3.338 rate=1.414e+07 unit=photons/s load1=5.6/5.5 other_cores=3.6 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+exit 0

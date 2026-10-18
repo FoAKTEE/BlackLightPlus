@@ -1,3 +1,7 @@
 # bench.jl deck=reference backend=cpu commit=b40fdb1 threads=64 job=none tune=false legs=mc_thin load1=14.48 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
 BENCH deck=reference leg=mc_thin res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=4096 items=10025000 wall_s=5.584 first_s=9.598 rate=1.795e+06 unit=photons/s load1=14.5/29.4 other_cores=2.4 same_as_saved=true
 BENCH deck=reference leg=mc_thin res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=10025000 wall_s=4.424 first_s=5.504 rate=2.266e+06 unit=photons/s load1=29.4/39.9 other_cores=2.4 same_as_saved=true
+# bench.jl deck=reference backend=cpu commit=bf486b4 threads=64 job=none tune=false legs=mc_thin load1=10.42 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
+BENCH deck=reference leg=mc_thin res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=2448 items=10025000 wall_s=4.45 first_s=8.915 rate=2.253e+06 unit=photons/s load1=10.0/26.8 other_cores=5.1 same_as_saved=true
+BENCH deck=reference leg=mc_thin res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=4096 items=10025000 wall_s=4.144 first_s=4.403 rate=2.419e+06 unit=photons/s load1=26.8/38.4 other_cores=3.9 same_as_saved=true
+BENCH deck=reference leg=mc_thin res=0 backend=cpu threads=64 ndev=0 lanes=0 chunk=2448 items=10025000 wall_s=4.136 first_s=4.124 rate=2.424e+06 unit=photons/s load1=38.4/44.9 other_cores=3.8 same_as_saved=true

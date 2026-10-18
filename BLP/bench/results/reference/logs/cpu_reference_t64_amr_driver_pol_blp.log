@@ -1,3 +1,7 @@
 # bench.jl deck=reference backend=cpu commit=b40fdb1 threads=64 job=none tune=false legs=amr_driver_pol load1=13.53 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
 BENCH deck=reference leg=amr_driver_pol res=384 backend=cpu threads=64 ndev=0 lanes=0 chunk=4096 items=1141248 wall_s=26.54 first_s=30.6 rate=4.299e+04 unit=rays/s load1=12.8/48.2 other_cores=2.4 same_as_saved=true
 BENCH deck=reference leg=amr_driver_pol res=384 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=1141248 wall_s=22.09 first_s=22.68 rate=5.167e+04 unit=rays/s load1=44.6/61.9 other_cores=3.1 same_as_saved=true
+# bench.jl deck=reference backend=cpu commit=bf486b4 threads=64 job=none tune=false legs=amr_driver_pol load1=7.48 out=BLP/bench/results/reference/raw/blp_cpu.jsonl
+BENCH deck=reference leg=amr_driver_pol res=384 backend=cpu threads=64 ndev=0 lanes=0 chunk=144 items=1141248 wall_s=21.7 first_s=26.29 rate=5.26e+04 unit=rays/s load1=7.1/53.4 other_cores=2.3 same_as_saved=true
+BENCH deck=reference leg=amr_driver_pol res=384 backend=cpu threads=64 ndev=0 lanes=0 chunk=4096 items=1141248 wall_s=26.88 first_s=26.73 rate=4.246e+04 unit=rays/s load1=49.3/55.1 other_cores=5.7 same_as_saved=true
+BENCH deck=reference leg=amr_driver_pol res=384 backend=cpu threads=64 ndev=0 lanes=0 chunk=64 items=1141248 wall_s=21.84 first_s=22.37 rate=5.226e+04 unit=rays/s load1=55.1/64.3 other_cores=4.5 same_as_saved=true

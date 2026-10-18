@@ -1,0 +1,82 @@
+host anta job 3026 ndev 1 groups reference=bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol commit 97b23ac CUDA_VISIBLE_DEVICES=0 2026-10-18 03:10:23
+# 2026-10-18 03:10:23 reference reference bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol:  03:10:23 up 53 days,  7:03,  7 users,  load average: 8.41, 8.16, 12.07
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 48
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+# reference.jl deck=reference backend=gpu commit=97b23ac src_tree=e76ab3c threads=4 devices=[0] job=3026 legs=bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol load1=7.49 out=BLP/bench/results/reference/raw/ref_gpu.jsonl
+# skip bbh455_480: recorded
+# skip bbh455_pol_480: recorded
+# skip bbh122_pol_480: recorded
+# skip bbh_i90_amr_pol: recorded
+# 2026-10-18 03:10:35 BLP reference bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol:  03:10:35 up 53 days,  7:03,  7 users,  load average: 7.13, 7.89, 11.92
+0, NVIDIA A100 80GB PCIe, 14 MiB, 0 %, 1065 MHz, 47
+# bench.jl deck=reference backend=gpu commit=97b23ac threads=4 devices=[0] job=3026 tune=false legs=bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol load1=6.34 out=BLP/bench/results/reference/raw/blp_gpu.jsonl
+BENCH deck=reference leg=bbh455_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=1048576 items=230400 wall_s=1.555 first_s=16.25 rate=1.482e+05 unit=rays/s load1=5.8/4.6 other_cores=1.9 same_as_saved=true
+BENCH deck=reference leg=bbh455_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=230400 wall_s=1.914 first_s=3.234 rate=1.204e+05 unit=rays/s load1=4.5/4.6 other_cores=1.8 same_as_saved=true
+BENCH deck=reference leg=bbh455_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=230400 wall_s=1.781 first_s=2.45 rate=1.293e+05 unit=rays/s load1=4.6/4.6 other_cores=1.6 same_as_saved=true
+BENCH deck=reference leg=bbh455_pol_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=524288 items=230400 wall_s=2.927 first_s=9.448 rate=7.871e+04 unit=rays/s load1=4.6/4.3 other_cores=1.7 same_as_saved=true
+BENCH deck=reference leg=bbh455_pol_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=230400 wall_s=3.075 first_s=4.882 rate=7.492e+04 unit=rays/s load1=4.2/4.3 other_cores=1.6 same_as_saved=true
+BENCH deck=reference leg=bbh455_pol_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=230400 wall_s=3.435 first_s=4.063 rate=6.707e+04 unit=rays/s load1=4.3/4.1 other_cores=2.3 same_as_saved=true
+BENCH deck=reference leg=bbh122_pol_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=524288 items=230400 wall_s=2.77 first_s=3.226 rate=8.318e+04 unit=rays/s load1=3.9/3.6 other_cores=1.9 same_as_saved=true
+BENCH deck=reference leg=bbh122_pol_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=230400 wall_s=3.313 first_s=4.107 rate=6.955e+04 unit=rays/s load1=3.5/3.3 other_cores=1.9 same_as_saved=true
+BENCH deck=reference leg=bbh122_pol_480 res=480 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=230400 wall_s=2.884 first_s=3.564 rate=7.988e+04 unit=rays/s load1=3.3/3.2 other_cores=1.8 same_as_saved=true
+BENCH deck=reference leg=bbh_i90_amr_pol res=256 backend=gpu threads=4 ndev=1 lanes=2 chunk=524288 items=573696 wall_s=13.9 first_s=19.79 rate=4.128e+04 unit=rays/s load1=3.2/2.6 other_cores=1.9 same_as_saved=true
+BENCH deck=reference leg=bbh_i90_amr_pol res=256 backend=gpu threads=4 ndev=1 lanes=2 chunk=65536 items=573696 wall_s=16.2 first_s=18.55 rate=3.542e+04 unit=rays/s load1=2.7/3.5 other_cores=2.6 same_as_saved=true
+BENCH deck=reference leg=bbh_i90_amr_pol res=256 backend=gpu threads=4 ndev=1 lanes=2 chunk=131072 items=573696 wall_s=14.29 first_s=16.23 rate=4.015e+04 unit=rays/s load1=3.5/3.4 other_cores=2.0 same_as_saved=true
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: athenak_bin_snapshot: zeroed 1 non-finite cell values (isolated c2p failures; zeroed cells emit nothing)
+└ @ BLP.Data /data/haiyangw/claude/BlackLightPlus/BLP/src/infra/Data/athenak_bin.jl:306
+# 2026-10-18 03:17:10 end:  03:17:10 up 53 days,  7:10,  7 users,  load average: 3.44, 4.49, 8.91
+0, NVIDIA A100 80GB PCIe, 14 MiB, 19 %, 1065 MHz, 58
+exit 0

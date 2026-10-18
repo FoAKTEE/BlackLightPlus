@@ -37,3 +37,15 @@
 2026-10-18 00:12:22 gpu2_f87f96d2: submit failed (sbatch: error: Batch job submission failed: I/O error writing script/environment to file); retrying every 60 s
 2026-10-18 00:08:50 gpu2_f87f96d2 job 2997 CANCELLED
 2026-10-18 00:13:22 gpu2_f87f96d2 attempt 1 job 3007 submitted
+2026-10-18 02:55:32 gpu1_765ddd02 is 1@reference=fused_384,fused_768,fused_mixed_768,fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384,amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768,amr_384
+2026-10-18 02:55:32 gpu1_765ddd02 attempt 1 job 3023 submitted
+2026-10-18 02:58:02 gpu1_765ddd02 job 3023 running
+2026-10-18 03:05:02 gpu1_765ddd02 job 3023 COMPLETED
+2026-10-18 03:05:02 gpu1_765ddd02 done: BLP/bench/results/reference/logs/gpu1_765ddd02_3023.log
+2026-10-18 03:05:02 gpu1_dc5503fc is 1@reference=bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol
+2026-10-18 03:05:02 gpu1_dc5503fc attempt 1 job 3026 submitted
+2026-10-18 03:10:33 gpu1_dc5503fc job 3026 running
+2026-10-18 03:13:41 gpu1_an7 is 1@reference=analytic_1024 with BLP_REPEAT=7 BLP_SKIP_DONE=0, job 3029 submitted
+2026-10-18 03:17:33 gpu1_dc5503fc job 3026 COMPLETED
+2026-10-18 03:17:33 gpu1_dc5503fc done: BLP/bench/results/reference/logs/gpu1_dc5503fc_3026.log
+2026-10-18 03:17:33 all done: 1@reference=fused_384,fused_768,fused_mixed_768,fused_pol_256,fused_pol_384/reference=amr_384,amr_pol_384,amr_driver_pol/reference=analytic_1024,mc_thin,mc_scatter/torus=img_192,img_384,img_768,amr_384 1@reference=bbh455_480,bbh455_pol_480,bbh122_pol_480,bbh_i90_amr_pol

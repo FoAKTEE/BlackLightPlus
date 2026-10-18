@@ -39,3 +39,9 @@
 2026-10-17 15:12:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 job 2989 COMPLETED
 2026-10-17 15:12:31 bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0 done: BLP/bench/results/logs/bench1_img-pol-amr-analytic-mc_thin-mc_scatter-mc_scatter0_2989.log
 2026-10-17 15:12:31 all done: bench:1:img,pol,amr,analytic,mc_thin,mc_scatter,mc_scatter0
+2026-10-18 02:58:03 bench1_img-pol-amr-analytic-mc_thin-mc_scatter0-mc_scatter attempt 1 job 3025 submitted
+2026-10-18 03:08:34 bench1_img-pol-amr-analytic-mc_thin-mc_scatter0-mc_scatter job 3025 running
+2026-10-18 03:10:04 bench1_img-pol-amr-analytic-mc_thin-mc_scatter0-mc_scatter job 3025 COMPLETED
+2026-10-18 03:10:04 bench1_img-pol-amr-analytic-mc_thin-mc_scatter0-mc_scatter done: BLP/bench/results/logs/bench1_img-pol-amr-analytic-mc_thin-mc_scatter0-mc_scatter_3025.log
+2026-10-18 03:10:04 all done: bench:1:img,pol,amr,analytic,mc_thin,mc_scatter0,mc_scatter
+2026-10-18 03:14:03 bench2_img-pol-amr-analytic-mc_thin-mc_scatter0-mc_scatter attempt 1 job 3030 submitted
