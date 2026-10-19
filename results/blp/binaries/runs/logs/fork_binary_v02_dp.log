@@ -1,0 +1,7 @@
+q_ratio: 1 a1: 0.5 a2: 0.3 time: 0 
+ xbh1: 5 0 0 
+ xbh2: -5 0 0 
+Warning: 2308 out of 4096 geodesics terminate unexpectedly.
+q_ratio: 1: time: 0 
+ xbh1: 5 0 0 
+ xbh2: -5 0 0 

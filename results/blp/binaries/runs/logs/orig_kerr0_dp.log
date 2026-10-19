@@ -1,0 +1,9 @@
+
+Calculation completed.
+Elapsed time:            0.8178329 s
+  Integrating geodesics: 0.2188761 s
+  Reading simulation:    0.01585464 s
+  Sampling simulation:   0.253726 s
+  Integrating image:     0.2927254 s
+  Rendering:             0 s
+

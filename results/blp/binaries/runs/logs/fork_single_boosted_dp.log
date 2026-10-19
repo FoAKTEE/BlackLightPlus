@@ -1,0 +1,16 @@
+q_ratio: 0 a1: 0 a2: 0 time: 0 
+ xbh1: 0 0 0 
+ xbh2: 10000 0 0 
+Warning: 427 out of 4096 geodesics terminate unexpectedly.
+q_ratio: 0: time: 0 
+ xbh1: 0 0 0 
+ xbh2: 10000 0 0 
+
+Calculation completed.
+Elapsed time:            6.365077 s
+  Integrating geodesics: 2.233617 s
+  Reading simulation:    0.01055985 s
+  Sampling simulation:   0.2212919 s
+  Integrating image:     3.824307 s
+  Rendering:             0 s
+

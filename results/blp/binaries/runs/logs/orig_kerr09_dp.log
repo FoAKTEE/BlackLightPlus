@@ -1,0 +1,10 @@
+Warning: 482 out of 4096 geodesics terminate unexpectedly.
+
+Calculation completed.
+Elapsed time:            1.171218 s
+  Integrating geodesics: 0.3673375 s
+  Reading simulation:    0.02413651 s
+  Sampling simulation:   0.2965342 s
+  Integrating image:     0.4307276 s
+  Rendering:             0 s
+

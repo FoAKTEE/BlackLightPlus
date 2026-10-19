@@ -1,0 +1,15 @@
+q_ratio: 0 a1: 0 a2: 0 time: 0 
+ xbh1: 0 0 0 
+ xbh2: 10000 0 0 
+q_ratio: 0: time: 0 
+ xbh1: 0 0 0 
+ xbh2: 10000 0 0 
+
+Calculation completed.
+Elapsed time:            2.564625 s
+  Integrating geodesics: 1.814722 s
+  Reading simulation:    0.01075601 s
+  Sampling simulation:   0.2886992 s
+  Integrating image:     0.381948 s
+  Rendering:             0 s
+

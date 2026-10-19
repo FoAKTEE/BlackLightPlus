@@ -1,0 +1,190 @@
+src/geodesic_integrator/geodesic_geometry.cpp: In member function ‘bool GeodesicIntegrator::gluInvertMatrix(double (*)[4], double (*)[4]) const’:
+src/geodesic_integrator/geodesic_geometry.cpp:240:9: warning: unused variable ‘i’ [-Wunused-variable]
+  240 |     int i;
+      |         ^
+src/geodesic_integrator/geodesic_geometry.cpp: In member function ‘void GeodesicIntegrator::boosted_BH_metric_addition(double, double, double, double, double, double, double, double, double, double, double, double, Array<double>&) const’:
+src/geodesic_integrator/geodesic_geometry.cpp:347:133: warning: unused parameter ‘Rprime’ [-Wunused-parameter]
+  347 | void GeodesicIntegrator::boosted_BH_metric_addition(double q_rat,double xprime, double yprime, double zprime, double rprime, double Rprime, double vx, double vy, double vz,double ax, double ay, double az,Array<double> &g_pert )
+      |                                                                                                                              ~~~~~~~^~~~~~
+src/geodesic_integrator/geodesic_geometry.cpp: In member function ‘void GeodesicIntegrator::CovariantSimulationMetricFunctionForDerivatives(Array<double>, double, double, double, double (*)[4]) const’:
+src/geodesic_integrator/geodesic_geometry.cpp:484:10: warning: unused variable ‘a1’ [-Wunused-variable]
+  484 |   double a1 = std::sqrt( SQR(a1x) + SQR(a1y) + SQR(a1z) );
+      |          ^~
+src/geodesic_integrator/geodesic_geometry.cpp:485:10: warning: unused variable ‘a2’ [-Wunused-variable]
+  485 |   double a2 = std::sqrt( SQR(a2x) + SQR(a2y) + SQR(a2z) );
+      |          ^~
+src/geodesic_integrator/geodesic_geometry.cpp:496:10: warning: unused variable ‘v1’ [-Wunused-variable]
+  496 |   double v1 = std::sqrt( SQR(v1x) + SQR(v1y) + SQR(v1z) );
+      |          ^~
+src/geodesic_integrator/geodesic_geometry.cpp:497:10: warning: unused variable ‘v2’ [-Wunused-variable]
+  497 |   double v2 = std::sqrt( SQR(v2x) + SQR(v2y) + SQR(v2z) );
+      |          ^~
+src/geodesic_integrator/geodesic_geometry.cpp: In member function ‘void GeodesicIntegrator::ContravariantGeodesicMetric(double, double, double, double (*)[4], double (*)[4])’:
+src/geodesic_integrator/geodesic_geometry.cpp:697:8: warning: unused variable ‘invertible’ [-Wunused-variable]
+  697 |   bool invertible =  gluInvertMatrix(gcov,gcon);
+      |        ^~~~~~~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:672:61: warning: unused parameter ‘x’ [-Wunused-parameter]
+  672 | void GeodesicIntegrator::ContravariantGeodesicMetric(double x, double y, double z,
+      |                                                      ~~~~~~~^
+src/geodesic_integrator/geodesic_geometry.cpp:672:71: warning: unused parameter ‘y’ [-Wunused-parameter]
+  672 | void GeodesicIntegrator::ContravariantGeodesicMetric(double x, double y, double z,
+      |                                                                ~~~~~~~^
+src/geodesic_integrator/geodesic_geometry.cpp:672:81: warning: unused parameter ‘z’ [-Wunused-parameter]
+  672 | void GeodesicIntegrator::ContravariantGeodesicMetric(double x, double y, double z,
+      |                                                                          ~~~~~~~^
+src/geodesic_integrator/geodesic_geometry.cpp: In member function ‘void GeodesicIntegrator::ContravariantGeodesicMetricDerivative(double, double, double, double (*)[4][4])’:
+src/geodesic_integrator/geodesic_geometry.cpp:1152:14: warning: unused variable ‘xm2’ [-Wunused-variable]
+ 1152 |       double xm2 = x-2.0*DEL;
+      |              ^~~
+src/geodesic_integrator/geodesic_geometry.cpp:1153:14: warning: unused variable ‘xp2’ [-Wunused-variable]
+ 1153 |       double xp2 = x+2.0*DEL;
+      |              ^~~
+src/geodesic_integrator/geodesic_geometry.cpp:1156:14: warning: unused variable ‘ym2’ [-Wunused-variable]
+ 1156 |       double ym2 = y-2.0*DEL;
+      |              ^~~
+src/geodesic_integrator/geodesic_geometry.cpp:1157:14: warning: unused variable ‘yp2’ [-Wunused-variable]
+ 1157 |       double yp2 = y+2.0*DEL;
+      |              ^~~
+src/geodesic_integrator/geodesic_geometry.cpp:1160:14: warning: unused variable ‘zm2’ [-Wunused-variable]
+ 1160 |       double zm2 = z-2.0*DEL;
+      |              ^~~
+src/geodesic_integrator/geodesic_geometry.cpp:1161:14: warning: unused variable ‘zp2’ [-Wunused-variable]
+ 1161 |       double zp2 = z+2.0*DEL;
+      |              ^~~
+src/geodesic_integrator/geodesic_geometry.cpp:1163:26: warning: unused variable ‘gconm’ [-Wunused-variable]
+ 1163 |       double gcovm[4][4],gconm[4][4];
+      |                          ^~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:1164:14: warning: unused variable ‘gcovm2’ [-Wunused-variable]
+ 1164 |       double gcovm2[4][4],gconm2[4][4];
+      |              ^~~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:1164:27: warning: unused variable ‘gconm2’ [-Wunused-variable]
+ 1164 |       double gcovm2[4][4],gconm2[4][4];
+      |                           ^~~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:1165:26: warning: unused variable ‘gconp’ [-Wunused-variable]
+ 1165 |       double gcovp[4][4],gconp[4][4];
+      |                          ^~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:1166:14: warning: unused variable ‘gcovp2’ [-Wunused-variable]
+ 1166 |       double gcovp2[4][4],gconp2[4][4];
+      |              ^~~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:1166:27: warning: unused variable ‘gconp2’ [-Wunused-variable]
+ 1166 |       double gcovp2[4][4],gconp2[4][4];
+      |                           ^~~~~~
+src/geodesic_integrator/geodesic_geometry.cpp:1127:12: warning: unused variable ‘R’ [-Wunused-variable]
+ 1127 |     double R = std::sqrt( SQR(x) + SQR(y) + SQR(z) );
+      |            ^
+src/geodesic_integrator/geodesic_integrator.cpp: In member function ‘void GeodesicIntegrator::interp_orbits(double, int, int, double, double, Array<double>&, Array<double>&, double*)’:
+src/geodesic_integrator/geodesic_integrator.cpp:304:55: warning: use of old-style cast to ‘int’ [-Wold-style-cast]
+  304 |     int it = (int) ((t - t0_orbits) / dt_orbits + 1000) - 1000; //Rounds down
+      |                                                       ^
+      |              -----
+      |              static_cast<int> (                        )
+src/blacklight.cpp: In function ‘int main(int, char**)’:
+src/blacklight.cpp:115:12: warning: unused variable ‘dummy’ [-Wunused-variable]
+  115 |     double dummy = p_simulation_reader->Read(0);
+      |            ^~~~~
+src/geodesic_integrator/geodesic_integrator.cpp: In member function ‘void GeodesicIntegrator::read_orbit_file_and_set_quantities(double, std::string)’:
+src/geodesic_integrator/geodesic_integrator.cpp:337:11: warning: ignoring return value of ‘int fscanf(FILE*, const char*, ...)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  337 |     fscanf(input_file, "%i %lf \n", &nt, &q_ratio);
+      |     ~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/geodesic_integrator/geodesic_integrator.cpp:355:12: warning: ignoring return value of ‘size_t fread(void*, size_t, size_t, FILE*)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  355 |       fread( &t_orbits(it), sizeof( double ), 1, input_file );
+      |       ~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/geodesic_integrator/geodesic_integrator.cpp:359:14: warning: ignoring return value of ‘size_t fread(void*, size_t, size_t, FILE*)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  359 |         fread( &orbit_array(iorbit,it), sizeof( double ), 1, input_file );
+      |         ~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/geodesic_integrator/geodesics.cpp:17:5: warning: no previous declaration for ‘int is_pos_def(double (*)[4])’ [-Wmissing-declarations]
+   17 | int is_pos_def(double g_in[4][4]) {
+      |     ^~~~~~~~~~
+src/geodesic_integrator/geodesics.cpp:44:6: warning: no previous declaration for ‘void check_inverse_debug(double (*)[4], double (*)[4])’ [-Wmissing-declarations]
+   44 | void check_inverse_debug(double A[4][4], double B[4][4]) {
+      |      ^~~~~~~~~~~~~~~~~~~
+src/geodesic_integrator/geodesics.cpp: In member function ‘void GeodesicIntegrator::IntegrateGeodesicsDP()’:
+src/geodesic_integrator/geodesics.cpp:286:16: warning: unused variable ‘r_mid_tot’ [-Wunused-variable]
+  286 |         double r_mid_tot = RadialGeodesicCoordinate(y_vals_4m[1], y_vals_4m[2], y_vals_4m[3]);
+      |                ^~~~~~~~~
+src/geodesic_integrator/geodesics.cpp:363:16: warning: unused variable ‘factor’ [-Wunused-variable]
+  363 |         double factor =
+      |                ^~~~~~
+src/geodesic_integrator/geodesics.cpp:417:15: warning: unused variable ‘fp’ [-Wunused-variable]
+  417 |         FILE *fp;
+      |               ^~
+src/geodesic_integrator/geodesics.cpp:418:18: warning: unused variable ‘r_minus_rbh_min’ [-Wunused-variable]
+  418 |           double r_minus_rbh_min=0;
+      |                  ^~~~~~~~~~~~~~~
+src/geodesic_integrator/geodesics.cpp:503:16: warning: unused variable ‘factor’ [-Wunused-variable]
+  503 |         double factor =
+      |                ^~~~~~
+src/geodesic_integrator/geodesics.cpp: In member function ‘void GeodesicIntegrator::IntegrateGeodesicsRK4()’:
+src/geodesic_integrator/geodesics.cpp:618:14: warning: unused variable ‘r_new_BH_min’ [-Wunused-variable]
+  618 |       double r_new_BH_min = std::min(r_new_BH1,r_new_BH2);
+      |              ^~~~~~~~~~~~
+src/geodesic_integrator/geodesics.cpp:944:16: warning: unused variable ‘factor’ [-Wunused-variable]
+  944 |         double factor =
+      |                ^~~~~~
+src/geodesic_integrator/geodesics.cpp: In member function ‘void GeodesicIntegrator::IntegrateGeodesicsRK2()’:
+src/geodesic_integrator/geodesics.cpp:1057:14: warning: unused variable ‘r_new_BH_min’ [-Wunused-variable]
+ 1057 |       double r_new_BH_min = std::min(r_new_BH1,r_new_BH2);
+      |              ^~~~~~~~~~~~
+src/geodesic_integrator/geodesics.cpp: In member function ‘void GeodesicIntegrator::GeodesicSubstepWithoutDistance(double*, double*, bool)’:
+src/geodesic_integrator/geodesics.cpp:1320:88: warning: unused parameter ‘print_out’ [-Wunused-parameter]
+ 1320 | void GeodesicIntegrator::GeodesicSubstepWithoutDistance(double y[8], double k[8], bool print_out)
+      |                                                                                   ~~~~~^~~~~~~~~
+src/radiation_integrator/radiation_geometry.cpp: In member function ‘void RadiationIntegrator::ContravariantGeodesicMetric(double, double, double, double (*)[4], double (*)[4]) const’:
+src/radiation_integrator/radiation_geometry.cpp:237:8: warning: unused variable ‘invertible’ [-Wunused-variable]
+  237 |   bool invertible =  gluInvertMatrix(gcov,gcon);
+      |        ^~~~~~~~~~
+src/radiation_integrator/radiation_geometry.cpp:211:62: warning: unused parameter ‘x’ [-Wunused-parameter]
+  211 | void RadiationIntegrator::ContravariantGeodesicMetric(double x, double y, double z,
+      |                                                       ~~~~~~~^
+src/radiation_integrator/radiation_geometry.cpp:211:72: warning: unused parameter ‘y’ [-Wunused-parameter]
+  211 | void RadiationIntegrator::ContravariantGeodesicMetric(double x, double y, double z,
+      |                                                                 ~~~~~~~^
+src/radiation_integrator/radiation_geometry.cpp:211:82: warning: unused parameter ‘z’ [-Wunused-parameter]
+  211 | void RadiationIntegrator::ContravariantGeodesicMetric(double x, double y, double z,
+      |                                                                           ~~~~~~~^
+src/radiation_integrator/radiation_geometry.cpp: In member function ‘bool RadiationIntegrator::gluInvertMatrix(double (*)[4], double (*)[4]) const’:
+src/radiation_integrator/radiation_geometry.cpp:696:9: warning: unused variable ‘i’ [-Wunused-variable]
+  696 |     int i;
+      |         ^
+src/radiation_integrator/radiation_geometry.cpp: In member function ‘void RadiationIntegrator::boosted_BH_metric_addition(double, double, double, double, double, double, double, double, double, double, double, double, Array<double>&) const’:
+src/radiation_integrator/radiation_geometry.cpp:803:134: warning: unused parameter ‘Rprime’ [-Wunused-parameter]
+  803 | void RadiationIntegrator::boosted_BH_metric_addition(double q_rat,double xprime, double yprime, double zprime, double rprime, double Rprime, double vx, double vy, double vz,double ax, double ay, double az,Array<double> &g_pert )
+      |                                                                                                                               ~~~~~~~^~~~~~
+src/radiation_integrator/radiation_geometry.cpp: In member function ‘void RadiationIntegrator::CovariantSimulationMetricFunctionForDerivatives(Array<double>, double, double, double, double (*)[4]) const’:
+src/radiation_integrator/radiation_geometry.cpp:935:10: warning: unused variable ‘a1’ [-Wunused-variable]
+  935 |   double a1 = std::sqrt( SQR(a1x) + SQR(a1y) + SQR(a1z) );
+      |          ^~
+src/radiation_integrator/radiation_geometry.cpp:936:10: warning: unused variable ‘a2’ [-Wunused-variable]
+  936 |   double a2 = std::sqrt( SQR(a2x) + SQR(a2y) + SQR(a2z) );
+      |          ^~
+src/radiation_integrator/radiation_geometry.cpp:947:10: warning: unused variable ‘v1’ [-Wunused-variable]
+  947 |   double v1 = std::sqrt( SQR(v1x) + SQR(v1y) + SQR(v1z) );
+      |          ^~
+src/radiation_integrator/radiation_geometry.cpp:948:10: warning: unused variable ‘v2’ [-Wunused-variable]
+  948 |   double v2 = std::sqrt( SQR(v2x) + SQR(v2y) + SQR(v2z) );
+      |          ^~
+src/radiation_integrator/radiation_geometry.cpp: In member function ‘void RadiationIntegrator::ContravariantSimulationMetric(double, double, double, double (*)[4], double (*)[4]) const’:
+src/radiation_integrator/radiation_geometry.cpp:1144:10: warning: unused variable ‘invertible’ [-Wunused-variable]
+ 1144 |     bool invertible =  gluInvertMatrix(gcov,gcon);
+      |          ^~~~~~~~~~
+src/radiation_integrator/simulation_coefficients.cpp: In member function ‘void RadiationIntegrator::CalculateSimulationCoefficients()’:
+src/radiation_integrator/simulation_coefficients.cpp:315:16: warning: unused variable ‘udotu’ [-Wunused-variable]
+  315 |         double udotu = ucov_sim[0]*ucon_sim[0] + ucov_sim[1]*ucon_sim[1] + ucov_sim[2]*ucon_sim[2] + ucov_sim[3]*ucon_sim[3] ;
+      |                ^~~~~
+src/radiation_integrator/radiation_integrator.cpp: In member function ‘void RadiationIntegrator::interp_orbits(double, int, int, double, double, Array<double>&, Array<double>&, double*)’:
+src/radiation_integrator/radiation_integrator.cpp:791:55: warning: use of old-style cast to ‘int’ [-Wold-style-cast]
+  791 |     int it = (int) ((t - t0_orbits) / dt_orbits + 1000) - 1000; //Rounds down
+      |                                                       ^
+      |              -----
+      |              static_cast<int> (                        )
+src/radiation_integrator/radiation_integrator.cpp: In member function ‘void RadiationIntegrator::read_orbit_file_and_set_quantities(double, std::string)’:
+src/radiation_integrator/radiation_integrator.cpp:824:11: warning: ignoring return value of ‘int fscanf(FILE*, const char*, ...)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  824 |     fscanf(input_file, "%i %lf \n", &nt, &q_ratio);
+      |     ~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/radiation_integrator/radiation_integrator.cpp:842:12: warning: ignoring return value of ‘size_t fread(void*, size_t, size_t, FILE*)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  842 |       fread( &t_orbits(it), sizeof( double ), 1, input_file );
+      |       ~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+src/radiation_integrator/radiation_integrator.cpp:846:14: warning: ignoring return value of ‘size_t fread(void*, size_t, size_t, FILE*)’ declared with attribute ‘warn_unused_result’ [-Wunused-result]
+  846 |         fread( &orbit_array(iorbit,it), sizeof( double ), 1, input_file );
+      |         ~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+lto-wrapper: warning: using serial compilation of 8 LTRANS jobs
