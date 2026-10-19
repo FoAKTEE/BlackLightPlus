@@ -36,3 +36,7 @@ BLP/out/
 # dynamic-ray figures (small, curated)
 !results/blp/dynrays/*.png
 !results/blp/dynrays/*.gif
+
+# paper-figure reproductions (small, curated)
+!results/blp/figures_*/*.png
+!results/blp/figures_*/*.gif
