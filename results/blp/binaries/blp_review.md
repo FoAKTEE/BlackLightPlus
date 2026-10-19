@@ -40,7 +40,8 @@ M2. Spin direction. Spins are restricted to ±z; the SKS term takes any a^i
 (eq. covectorBH). The dumps imaged so far have a = 0; `fig_eht_bbh.jl` maps |a| > m_A to
 the dimensionless spin and errors on th_a ≠ 0. [SOLID]
 
-M3. Time dependence. `SuperposedKerrSchild <: StationarySpacetime`: the holes do not move
+M3. Time dependence (addressed 2026-10-19 by `BoostedSuperposedKerrSchild`, see §3).
+`SuperposedKerrSchild <: StationarySpacetime`: the holes do not move
 during a ray's passage and ∂_t g ≡ 0. A ray crosses the near zone of a sep-25 binary in
 ~50–100 M of coordinate time, during which each hole moves 5–10 M, more than its horizon
 diameter. The slow-light machinery for the fluid exists (`FrameWindow`, `SnapshotSeries`,
@@ -52,8 +53,14 @@ numerical implementation) have no counterpart. [SOLID]
 
 Consequence for the published binary images. The AthenaK dynbbh runs were evolved on the
 SKS metric of their own code (`use_traj_table = 0`, analytic circular orbit, sep 25, q 1,
-a = 0 in the dump header; the dynbbh source is not on this machine, so whether that
-implementation boosts is to be confirmed with its authors). BLP reconstructs the fluid
+a = 0 in the dump header). That implementation is `/data/haiyangw/athenak/src/pgen/dynbbh.cpp`
+(read 2026-10-19): `SuperposedBBH` (l.1356–) forms each hole's coordinates with the spatial
+Lorentz contraction of x − ξ_A along v_A (`x1BH1 = (x − ξ) − (Γ−1)(v·(x−ξ)) v_x/v²`, l.1430–1435)
+and `numerical_4metric` (l.1060–1130) differentiates the metric in time along the
+trajectory (h = 5e-5), so the simulation metric is boosted and time dependent; it also
+excises r' < |a|(1 + buffer) + floor by clamping z' and scales each mass by
+`adjust_mass`. BLP's static unboosted superposition therefore differs from the metric the
+fluid was evolved on by the boost terms quantified above. [SOLID] BLP reconstructs the fluid
 four-velocity from the dump's normal-frame velocity with its own metric (decode.jl) and
 traces rays in it. If the simulation metric is boosted, u^μ, b^μ and the frame
 transformations carry an O(v f) ≈ 10–20% error near each horizon, and the shadows sit
@@ -88,6 +95,16 @@ Exact tests that exist for it: single boosted Kerr (vacuum; shadow = Lorentz-tra
 Kerr shadow, `checks/frozen_vs_moving.jl` gives the camera and the expected edges);
 reduction to `SuperposedKerrSchild` at v = 0 bitwise; reduction to `KerrSchildCartesian`
 for one hole at rest.
+
+Status 2026-10-19: `BoostedSuperposedKerrSchild{N} <: Spacetime` exists
+(`BLP/src/physics/Spacetime/boosted_superposed.jl`) with per-hole mass, spin vector and a
+trajectory callable (`CircularOrbit`, or any closure generic in t), the adaptive tracer
+and the march control with per-hole r'_A at the ray's time, and the tests of
+`BLP/test/physics/spacetime_boosted.jl` (at rest = single Kerr and the static
+superposition to 1e-12; uniform motion: null covector, Ricci < 1e-7, g = Λ g_rest Λ to
+1e-12, ∂_t g = −v·∇g to 1e-10; capture by a moving hole; a miss when aimed at the frozen
+position). Not done: an orbit table from a file, the fused kernels on the device, and the
+`FrameWindow` coupling of the fluid time. Figures: `results/blp/dynrays/`.
 
 ## 4. Slow light across the three codes
 
