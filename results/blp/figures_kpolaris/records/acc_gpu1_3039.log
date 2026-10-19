@@ -1,0 +1,77 @@
+host anta job 3039 ndev 1 script fig_accuracy_cost commit 4108b10 CUDA_VISIBLE_DEVICES=0 2026-10-18 23:20:28
+0, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+Precompiling packages...
+   9682.3 ms  ✓ BLP
+  1 dependency successfully precompiled in 10 seconds. 219 already precompiled.
+Precompiling packages...
+Info Given BLPCUDAExt was explicitly requested, output will be shown live [0K
+[0K┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+[0K│ This may cause errors.
+[0K│ 
+[0K│ If you're running under a profiler, this situation is expected. Otherwise,
+[0K│ ensure that your library path environment variable (e.g., `PATH` on Windows
+[0K│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+[0K│ 
+[0K│ In any other case, please file an issue.
+[0K└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+[0K┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+[0K│ This may cause errors.
+[0K│ 
+[0K│ If you're running under a profiler, this situation is expected. Otherwise,
+[0K│ ensure that your library path environment variable (e.g., `PATH` on Windows
+[0K│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+[0K│ 
+[0K│ In any other case, please file an issue.
+[0K└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+[0K┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+[0K│ This may cause errors.
+[0K│ 
+[0K│ If you're running under a profiler, this situation is expected. Otherwise,
+[0K│ ensure that your library path environment variable (e.g., `PATH` on Windows
+[0K│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+[0K│ 
+[0K│ In any other case, please file an issue.
+[0K└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+   8552.6 ms  ✓ BLP → BLPCUDAExt
+  1 dependency successfully precompiled in 9 seconds. 279 already precompiled.
+  1 dependency had output during precompilation:
+┌ BLP → BLPCUDAExt
+│  [Output was shown above]
+└  
+reference C = 2560  median 10.41 s
+C =    10  median    0.04 s  NMSE I 1.96e-03  max 1.77e-02
+C =    20  median    0.08 s  NMSE I 4.91e-04  max 6.32e-03
+C =    40  median    0.16 s  NMSE I 1.22e-04  max 4.70e-04
+C =    80  median    0.32 s  NMSE I 3.01e-05  max 1.92e-04
+C =   160  median    0.64 s  NMSE I 7.67e-06  max 6.29e-05
+C =   320  median    1.27 s  NMSE I 1.93e-06  max 1.26e-05
+C =   640  median    2.63 s  NMSE I 5.07e-07  max 3.08e-06
+wrote /data/haiyangw/claude/BlackLightPlus/BLP/figures/kpolaris/../out/kpolaris/accuracy_cost
+exit 0

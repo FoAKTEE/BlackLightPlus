@@ -1,0 +1,35 @@
+host anta job 3040 ndev 1 script fig_performance commit 4108b10 CUDA_VISIBLE_DEVICES=0 2026-10-18 23:22:23
+0, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+  256^2  median     0.30 s  range 0.30–0.31  prepare 0.88 s
+  512^2  median     0.97 s  range 0.96–1.04  prepare 0.01 s
+ 1024^2  median     3.81 s  range 3.81–3.89  prepare 0.01 s
+ 2048^2  median    15.43 s  range 15.40–15.58  prepare 0.20 s
+wrote /data/haiyangw/claude/BlackLightPlus/BLP/figures/kpolaris/../out/kpolaris/performance
+exit 0

@@ -1,0 +1,36 @@
+host anta job 3041 ndev 2 script fig_performance commit 4108b10 CUDA_VISIBLE_DEVICES=0,1 2026-10-18 23:24:17
+0, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+1, NVIDIA A100 80GB PCIe, 580.105.08, 14 MiB, 0 %
+┌ Warning: CUDA runtime library `libcublasLt.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libcublasLt.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libnvJitLink.so.13` was loaded from a system path, `/usr/local/cuda-13/lib64/libnvJitLink.so.13`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+┌ Warning: CUDA runtime library `libcusparse.so.12` was loaded from a system path, `/usr/local/cuda-13/lib64/libcusparse.so.12`.
+│ This may cause errors.
+│ 
+│ If you're running under a profiler, this situation is expected. Otherwise,
+│ ensure that your library path environment variable (e.g., `PATH` on Windows
+│ or `LD_LIBRARY_PATH` on Linux) does not include CUDA library paths.
+│ 
+│ In any other case, please file an issue.
+└ @ CUDACore ~/.julia/packages/CUDACore/GtzaO/src/initialization.jl:199
+  256^2  median     0.33 s  range 0.30–3.33  prepare 0.88 s
+  512^2  median     0.64 s  range 0.62–0.67  prepare 0.01 s
+ 1024^2  median     2.20 s  range 2.19–2.41  prepare 0.03 s
+ 2048^2  median     7.88 s  range 7.81–8.02  prepare 0.03 s
+wrote /data/haiyangw/claude/BlackLightPlus/BLP/figures/kpolaris/../out/kpolaris/performance
+exit 0

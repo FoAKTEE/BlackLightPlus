@@ -1,0 +1,16 @@
+Warning: 46 out of 65536 geodesics terminate unexpectedly.
+Warning: Ignoring plasma_gamma_i selection.
+Warning: Ignoring plasma_gamma_e selection.
+
+Calculation completed.
+Elapsed time:            31.13682 s
+  Integrating geodesics: 8.01558 s
+  Reading simulation:    1.972612 s
+  Sampling simulation:   4.812472 s
+  Integrating image:     14.90565 s
+  Rendering:             0 s
+
+
+real	0m31.139s
+user	2m9.482s
+sys	0m14.742s
