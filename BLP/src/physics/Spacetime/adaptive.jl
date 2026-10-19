@@ -14,9 +14,10 @@ the spacetime's events:
 - `KerrSchildCartesian`: horizon at `ks_radius = r_h + horizon_eps`
   (default `HORIZON_EPS`); escape on the Kerr-Schild radius past `escape`
   (default `ESCAPE_RADIUS`);
-- `SuperposedKerrSchild`: any hole at `r_A = r_h,A + horizon_eps` (default
-  `HORIZON_EPS_SAMPLED`), the normal-frame energy at `CAPTURE_REDSHIFT`, or
-  escape on the coordinate radius;
+- `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`: any hole at
+  `r_A = r_h,A + horizon_eps` (default `HORIZON_EPS_SAMPLED`, `r_A` in the
+  hole's rest frame at the ray's time), the normal-frame energy at
+  `CAPTURE_REDSHIFT`, or escape on the coordinate radius;
 - `ADMGrid`: interpolated lapse at `alpha_min` (off the grid the lapse reads 1),
   or escape on the coordinate radius (default `ADM_ESCAPE_RADIUS`, which should
   lie inside the grid);
@@ -37,7 +38,8 @@ function trace_geodesic(st::KerrSchildCartesian, y0::SVector{8}; λmax = 1.0e5,
                  save_everystep, save_start = save_everystep)
 end
 
-function trace_geodesic(st::SuperposedKerrSchild{N}, y0::SVector{8}; λmax = 1.0e5,
+function trace_geodesic(st::Union{SuperposedKerrSchild{N},BoostedSuperposedKerrSchild{N}},
+                        y0::SVector{8}; λmax = 1.0e5,
                         reltol = 1e-10, abstol = 1e-12, escape = ESCAPE_RADIUS,
                         horizon_eps = HORIZON_EPS_SAMPLED,
                         solver = Vern7(), save_everystep = false) where {N}

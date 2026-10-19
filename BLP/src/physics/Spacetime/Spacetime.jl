@@ -4,7 +4,7 @@
 module Spacetime
 
 using StaticArrays
-using LinearAlgebra: dot, Diagonal
+using LinearAlgebra: dot, cross, Diagonal
 import ForwardDiff
 import Adapt
 import JacobiElliptic
@@ -16,6 +16,7 @@ include("protocol.jl")
 include("kerr_schild.jl")
 include("user_metric.jl")
 include("superposed.jl")
+include("boosted_superposed.jl")
 include("adm_grid.jl")
 include("metric_ops.jl")
 include("geodesic.jl")
@@ -28,7 +29,8 @@ include("analytic_kerr.jl")
 # protocol and spacetimes
 export Spacetime, StationarySpacetime, ETA, metric, inverse_metric, metric_and_inverse,
        lower_index, raise_index, raise_and_norm, horizon_radius, lane,
-       KerrSchildCartesian, Minkowski, UserMetric, SuperposedKerrSchild, ADMGrid,
+       KerrSchildCartesian, Minkowski, UserMetric, SuperposedKerrSchild,
+       BoostedSuperposedKerrSchild, CircularOrbit, ADMGrid,
        ks_radius, sample_adm, on_grid, adm_grid_from_metric
 # derivatives and geodesics
 export inverse_metric_gradient, metric_gradient, christoffel,

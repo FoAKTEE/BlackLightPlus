@@ -121,8 +121,9 @@ decision, `Inf` at the first):
 
 - `KerrSchildCartesian`: `d = r - r_h` on the Kerr-Schild radius `r`,
   `stop = march_stop(d, E_n, r, r_prev, escape, R_em)`, `h = d / C`, `R = r`;
-- `SuperposedKerrSchild`: `d = min_A(r_A - r_h,A)` (`-Inf` on a non-finite
-  `r_A`), the same rule on the coordinate radius `R`, `h = d / C`;
+- `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`: `d = min_A(r_A - r_h,A)`
+  (`-Inf` on a non-finite `r_A`; the moving holes' `r_A` at the ray's time), the
+  same rule on the coordinate radius `R`, `h = d / C`;
 - `ADMGrid`: `d` is the lapse `1/√(-g^{tt})` minus `alpha_min` (lapse 1 and no
   redshift cut where `g^{tt} ≥ 0`), capture at `d < 0`, `h = max(R, 1)/C` on the
   coordinate radius `R`; a non-finite `R` captures;
@@ -136,8 +137,8 @@ decision, `Inf` at the first):
                         (r - st.r_h) / b.C, r)
 end
 
-@inline function march_control(st::SuperposedKerrSchild{N,T}, y::SVector{8,T}, r_prev::T,
-                               b::MarchBudget{T}) where {N,T}
+@inline function march_control(st::Union{SuperposedKerrSchild{N,T},BoostedSuperposedKerrSchild{N,T}},
+                               y::SVector{8,T}, r_prev::T, b::MarchBudget{T}) where {N,T}
     x = position(y)
     dmin = T(Inf)
     @inbounds for A in 1:N

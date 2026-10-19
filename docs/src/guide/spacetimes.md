@@ -63,6 +63,42 @@ which is the test to run first if results look wrong.
     violation grows as the holes approach. It is a reasonable model at wide
     separation and a poor one near merger — for that, use a Z4c slice below.
 
+## Binary black holes in motion: the boosted superposition
+
+`SuperposedKerrSchild` holds the holes still. `BoostedSuperposedKerrSchild`
+moves them along a prescribed trajectory and boosts each hole's term into
+the rest frame of its instantaneous velocity (Combi & Ressler 2024,
+arXiv:2403.13308),
+
+```math
+g_{\mu\nu} = \eta_{\mu\nu} + \sum_A f_A\, (\Lambda_A l^A)_\mu (\Lambda_A l^A)_\nu ,
+\qquad x'_A = \Lambda(v_A)\,(x - s_A(t)) ,
+```
+
+with the Kerr–Schild term of hole ``A`` (any spin direction) evaluated at the
+Lorentz-contracted offset ``x'_A`` and its null covector boosted back by
+``\Lambda(v_A)``. The term is exact Kerr for a hole in uniform motion, and the
+boosted covector stays null, so the Woodbury inverse of the static
+superposition serves unchanged. The metric depends on time through
+``s_A(t)`` and ``v_A(t)``, so this is not a `StationarySpacetime`: the
+geodesic right-hand side keeps ``\partial_t g`` and ``p_t`` drifts along a
+ray. A `CircularOrbit` supplies the Keplerian binary; any closure
+`t -> ((s₁, v₁), (s₂, v₂))` generic in `t` does as well.
+
+```julia
+orbit = CircularOrbit((0.5, 0.5), 8.0)                 # separation 8 M, ω = √(M/d³)
+st = BoostedSuperposedKerrSchild([0.5, 0.5], [(0, 0, 0), (0, 0, 0)], orbit)
+sol = trace_geodesic(st, y0; save_everystep = true)    # captured at r'_A < r_h,A + ε or by the redshift cut
+```
+
+The observer time is `t = 0` at the camera; a backward-traced ray runs to
+earlier times and meets the holes where they were then. Freezing the metric
+at one time is not an option for a moving hole: the frozen boosted horizon
+is not a null surface and rays stall on it. `boost = false` carries the
+static terms along the trajectory without the boost, for comparison.
+`BLP/figures/fig_dyn_rays.jl` traces the orbiting binary's ray fan and the
+snapshot trajectories of arXiv:1410.7775, figure 8, in this spacetime.
+
 ## Numerical relativity: Z4c slices from AthenaK
 
 `z4c_grid_spacetime` reads an AthenaK Z4c `.bin` dump [Zhu2025](@citep), maps

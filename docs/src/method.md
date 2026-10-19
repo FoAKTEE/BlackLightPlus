@@ -69,6 +69,12 @@ metric never needs hand-coded derivatives.
   $F={\rm diag}(f_A)$, so a binary needs one $2\times2$ solve, and AD
   differentiates through it. The construction reduces bitwise to single Kerr when a
   second mass vanishes; rays end by the shared rule of [March termination](@ref).
+- **`BoostedSuperposedKerrSchild`** — the superposition in motion: each
+  hole's term in the rest frame of its instantaneous velocity along a
+  prescribed trajectory (`CircularOrbit` or a closure), the covector boosted
+  back, the Woodbury inverse unchanged; a non-stationary spacetime whose
+  geodesic flow keeps ``\partial_t g``. Capture is per hole at the rest-frame
+  radius ``r'_A < r_{h,A} + \epsilon`` or by the redshift cut.
 - **`ADMGridSpacetime`** — a frozen-slice numerical spacetime: a Cartesian grid
   of the ten ADM fields $(\alpha,\beta^i,\gamma_{ij})$, reassembled into the
   4-metric via the standard 3+1 decomposition. Fields are interpolated with a

@@ -97,9 +97,8 @@ end
     return _eta_apply(p) - U * ((inv(K) * F) * (U' * p))
 end
 
-@inline function raise_and_norm(st::SuperposedKerrSchild{N}, x::SVector{4},
-                                p::SVector{4}) where {N}
-    terms = _hole_terms(st, x)
+# (g⁻¹ p, g⁻¹(p, p)) by the Woodbury form from one assembly of K.
+@inline function _superposed_raise_and_norm(terms::NTuple{N}, p::SVector{4}) where {N}
     L = hcat(map(t -> t[2], terms)...)
     U = hcat(map(t -> (l = t[2]; SVector(-l[1], l[2], l[3], l[4])), terms)...)
     F = Diagonal(SVector(map(first, terms)))
@@ -109,10 +108,14 @@ end
     ηp = _eta_apply(p)
     return ηp - U * Mw, dot(p, ηp) - dot(w, Mw)
 end
+@inline raise_and_norm(st::SuperposedKerrSchild, x::SVector{4}, p::SVector{4}) =
+    _superposed_raise_and_norm(_hole_terms(st, x), p)
 
+# g v = η v + Σ_A f_A (l_A·v) l_A, hole by hole.
+@inline _superposed_lower(terms::Tuple, v::SVector{4}) =
+    _tfold((g, t) -> (@inline; g + (t[1] * dot(t[2], v)) * t[2]), _eta_apply(v), terms)
 @inline lower_index(st::SuperposedKerrSchild, x::SVector{4}, v::SVector{4}) =
-    _tfold((g, t) -> (@inline; g + (t[1] * dot(t[2], v)) * t[2]), _eta_apply(v),
-           _hole_terms(st, x))
+    _superposed_lower(_hole_terms(st, x), v)
 @inline raise_index(st::SuperposedKerrSchild, x::SVector{4}, p::SVector{4}) =
     _superposed_raise(_hole_terms(st, x), p)
 
