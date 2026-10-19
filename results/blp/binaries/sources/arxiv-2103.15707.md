@@ -1,0 +1,9 @@
+# arxiv-2103.15707 — Combi, Lopez Armengol, Campanelli, Ireland, Noble, Nakano, Bowen 2021, superposed metric for spinning binaries approaching merger (PRD 104, 044041)
+- Mirror: ref-paper/arxiv-2103.15707/ (PROVENANCE.md; main tex sPN_metricpaper_v0.tex).
+- Role: origin of the boosted-superposition construction (SHPN metric) that the 2024 paper (arxiv-2403.13308) restates in Kerr-Schild coordinates and that `smressle-blacklight_binaries` implements.
+- Declarations (literature-grounded):
+  - Kerr-Schild form $g_{ab}=\eta_{ab}+2Hl_al_b$, $H=2Mr^3/(r^4+a^2z^2)$ in the paper's convention (so $2H$ is the usual $f$), null covector with $l_t$ written with a sign that makes $-l_a dx^a = dt + \dots$ (l.302–321, eq: ks, eq: blradius).
+  - The 2021 superposition is built in Cook–Scheel harmonic coordinates: $g_{ab}=\eta_{ab}+M\mathcal H_{ab}$ per hole with $\mathcal H_{ab}=2Hl^{\rm H}_al^{\rm H}_b+\mathcal A_{ab}$, $\mathcal A\sim1/r$ (l.329–375, eq: harmonicmetric, eq: BBHharmonicmetric). The KS→harmonic map obeys $(x_{\rm KS}-x_{\rm H})^2=M^2$ (l.361–363).
+  - Each hole term is boosted by a time-dependent Lorentz transformation built from Fermi normal coordinates along the PN worldline: spatial frame $e^a_{(i)}=\Lambda^a_i(t)$, coordinates $x^a=s^a(\tau)+X^ie^a_{(i)}$ (l.386–425); the boost matrix is written for motion in the $xy$ plane only (spins (anti-)aligned, no precession, l.400–412). Final metric: Jacobians of $X_A(x)$ contracted with $\mathcal H$ (l.431, eq-metric).
+  - Trajectories: quasi-circular adiabatic inspiral, TaylorT4 phase at 3.5PN (l.437–470); valid for separations $\gtrsim10M$ (l.472).
+- Differences from the fork and from BLP: harmonic coordinates (the fork and BLP use Kerr-Schild); boost restricted to the $xy$ plane (the fork implements the general 3-velocity form of the 2024 paper).
