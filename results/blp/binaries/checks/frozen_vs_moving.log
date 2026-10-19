@@ -1,0 +1,14 @@
+Calibration, v = 0 (static Schwarzschild), fine scan of the edge, exact 5.19615:
+  static                             captured  23 escaped  18 stuck   0  interval [4.900, 5.120] centre 5.010 half-width 0.110
+Collinear v = 0.2 (approaching), fine scan, λmax 20000:
+  time-dependent                     captured  23 escaped  18 stuck   0  interval [4.900, 5.120] centre 5.010 half-width 0.110
+  frozen, v = 0.05                   captured  59 escaped 112 stuck 110  interval [-4.150, 4.150] centre 0.000 half-width 4.150
+  frozen, v = 0.10                   captured  47 escaped 146 stuck  88  interval [-3.350, 3.350] centre 0.000 half-width 3.350
+  frozen, v = 0.20                   captured  39 escaped 202 stuck  40  interval [-1.950, 1.950] centre 0.000 half-width 1.950
+Transverse v = 0.2 along +x (scan centred on the hole position at light passage, x_h = -60):
+  time-dependent (a - x_h)           captured 205 escaped  76 stuck   0  interval [-4.300, 5.900] centre 0.800 half-width 5.100
+  frozen at s(-d) (a - x_h)          captured   4 escaped 181 stuck  96  interval [2.050, 2.200] centre 2.125 half-width 0.075
+  time-dependent v = 0.05            captured 205 escaped  76 stuck   0  interval [-4.900, 5.300] centre 0.200 half-width 5.100
+  frozen v = 0.05                    captured  51 escaped  77 stuck 153  interval [-3.450, 6.650] centre 1.600 half-width 5.050
+  time-dependent v = 0.10            captured 205 escaped  76 stuck   0  interval [-4.700, 5.500] centre 0.400 half-width 5.100
+  frozen v = 0.10                    captured  25 escaped 104 stuck 152  interval [-1.750, 7.000] centre 2.625 half-width 4.375

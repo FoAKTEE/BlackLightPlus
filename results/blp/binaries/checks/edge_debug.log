@@ -1,0 +1,4 @@
+a = 5.10  Kerr path: p0 = [1.0, -0.0, -1.013419, -0.0]  r_end 2.000 r_min 2.000 steps 232 |  UserMetric: p0 = [1.0, -0.0, -1.013419, -0.0] r_end 2.001 r_min 2.001 steps 209  null_err 1.3e-06
+a = 5.15  Kerr path: p0 = [1.0, -0.0, -1.013419, -0.0]  r_end 450.000 r_min 3.175 steps 184 |  UserMetric: p0 = [1.0, -0.0, -1.013419, -0.0] r_end 450.000 r_min 3.175 steps 184  null_err 2.6e-11
+a = 5.19  Kerr path: p0 = [1.0, -0.0, -1.013419, -0.0]  r_end 450.000 r_min 3.305 steps 170 |  UserMetric: p0 = [1.0, -0.0, -1.013419, -0.0] r_end 450.000 r_min 3.305 steps 170  null_err 2.7e-11
+a = 5.21  Kerr path: p0 = [1.0, -0.0, -1.013419, -0.0]  r_end 450.000 r_min 3.357 steps 167 |  UserMetric: p0 = [1.0, -0.0, -1.013419, -0.0] r_end 450.000 r_min 3.357 steps 168  null_err 2.5e-11

@@ -1,0 +1,23 @@
+Fork formulas, uniformly boosted spinning hole (exact Kerr expected):
+  r'= 5.145  max|R_μν| = 2.80e-17   det g = -1.000000  (η: -1)
+  r'= 3.862  max|R_μν| = 1.04e-16   det g = -1.000000  (η: -1)
+  r'= 3.563  max|R_μν| = 4.19e-17   det g = -1.000000  (η: -1)
+  r'= 7.055  max|R_μν| = 5.88e-18   det g = -1.000000  (η: -1)
+Control 1: same hole, no boost of l but moving centre (Galilean, wrong):
+  r'= 4.979  max|R_μν| = 9.57e-03
+  r'= 3.710  max|R_μν| = 2.55e-02
+Control 2: boost with the opposite velocity sign in Λ (wrong sign convention):
+  max|R_μν| = 2.78e-02
+  max|R_μν| = 4.08e-02
+Control 3: static spinning hole with arbitrary spin direction (v = 0):
+  max|R_μν| = 4.84e-17
+  max|R_μν| = 1.09e-16
+Round trip x' -> (r,θ,φ) -> x' (convert_spherical_to_cartesian_ks):
+  max|Δx'| = 4.44e-16
+  max|Δx'| = 6.66e-16
+  max|Δx'| = 4.44e-16
+Horizon clamp: metric continuity across r' = 0.8 r_h (jump of the frozen interior):
+  r'/r_h = 0.81  g_tt = -0.12637  det = -1.0000
+  r'/r_h = 0.80  g_tt = -0.12896  det = -1.0000
+  r'/r_h = 0.79  g_tt = -0.13156  det = -1.0000
+  r'/r_h = 0.50  g_tt = -0.17763  det = -1.0000

@@ -1,0 +1,7 @@
+Two massive holes: Woodbury inverse, index ops and AD gradient
+  max|g g⁻¹ - I| = 2.2e-16   max index-op mismatch = 2.2e-16   max|AD - FD| gradient = 2.6e-10
+Omitted boost of one hole (mass 1/2), metric perturbation h = g - η at the hole's own radius r':
+  sep 20 (v = 0.112), r' = 3: max|Δh|/max|h| = 0.20, |Δg_tt|/|h_tt| = 0.20
+  sep 20 (v = 0.112), r' = 2: max|Δh|/max|h| = 0.20, |Δg_tt|/|h_tt| = 0.20
+  sep 10 (v = 0.158), r' = 3: max|Δh|/max|h| = 0.27, |Δg_tt|/|h_tt| = 0.27
+  sep 10 (v = 0.158), r' = 2: max|Δh|/max|h| = 0.27, |Δg_tt|/|h_tt| = 0.27
