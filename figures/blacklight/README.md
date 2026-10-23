@@ -1,6 +1,6 @@
 # Blacklight paper (arXiv:2203.15963, White 2022) — the 17 figures with BlackLightPlus
 
-> The figure images and run records of this set are kept on the `blp` branch under `results/blp/figures_blacklight/ (blp branch) `; this branch holds the generators and this standing table.
+> The figure images and run records of this set are kept on the `blp` branch under `results/blp/figures_blacklight/`; this branch holds the generators and this standing table.
 
 Generators `figures/blacklight/fig_*.jl` (Julia, `julia -t 32 --project=.`, from the
 repository root), plotters `figures/blacklight/plot_*.py`, data under

@@ -1,6 +1,6 @@
 # KPolaris (arXiv:2609.26298) figures reproduced with BlackLightPlus
 
-> The figure images and run records of this set are kept on the `blp` branch under `results/blp/figures_kpolaris/ (blp branch) `; this branch holds the generators and this standing table.
+> The figure images and run records of this set are kept on the `blp` branch under `results/blp/figures_kpolaris/`; this branch holds the generators and this standing table.
 
 Generators in `figures/kpolaris/` (run from the repository root), data under
 `figures/paper/out/kpolaris/` (not tracked), the curated figures and records here. The

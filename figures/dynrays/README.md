@@ -7,7 +7,7 @@ Reproductions, with BlackLightPlus's time-dependent geodesic tracer, of the two 
 snapshots against the horizons of a merging binary, traced through a SpEC spacetime) and
 `rays.gif` (a fan of rays in the orbital plane of an orbiting binary, holes moving while
 the light crosses). Both are planar views of the orbital plane. Generator
-`figures/paper/fig_dyn_rays.jl` (commit recorded in `setup.json`), plotter
+`figures/dynrays/fig_dyn_rays.jl` (commit recorded in `setup.json`), plotter
 `figures/paper/plot_dyn_rays.py`; data under `figures/dynrays/out/dyn_rays/` (not tracked).
 
 ## Spacetime
@@ -53,8 +53,8 @@ the binary ends the approach at r'_A − r_h,A ≈ 0.2), escaped at R > 200 M ou
 The same spacetime with masses 100/101 and 1/101 (separation 8 M, the same period 142 M;
 the secondary at radius 7.92 M moves at 0.35 c, the primary's horizon radius is 1.98 M and
 the secondary's 0.020 M). Generator runs: `BLP_DYN_Q=100 julia -t 16 --project=.
-figures/paper/fig_dyn_rays.jl` (the fan; the Bohn row is skipped: no far-hole captures on
-the scan row) and `julia -t 48 --project=. figures/paper/fig_dyn_class.jl`, drawn by
+figures/dynrays/fig_dyn_rays.jl` (the fan; the Bohn row is skipped: no far-hole captures on
+the scan row) and `julia -t 48 --project=. figures/dynrays/fig_dyn_class.jl`, drawn by
 `plot_dyn_rays.py figures/dynrays/out/dyn_rays_q100` and `plot_dyn_class.py`.
 
 - `fan_q100_boosted.gif`, `fan_q100_boosted_last.png`, `fan_q100_compare.png`,

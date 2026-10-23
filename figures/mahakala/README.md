@@ -1,6 +1,6 @@
 # Mahakala (arXiv:2304.03804) figures with BlackLightPlus
 
-> The figure images and run records of this set are kept on the `blp` branch under `results/blp/figures_mahakala/ (blp branch) `; this branch holds the generators and this standing table.
+> The figure images and run records of this set are kept on the `blp` branch under `results/blp/figures_mahakala/`; this branch holds the generators and this standing table.
 
 The twelve figures of Sarkar et al. 2023 (Mahakala) traced with BlackLightPlus. The geodesic tests
 (figures 1, 3–6) are the paper's setups; the GRMHD figures (2, 8–11) use the AthenaK
