@@ -8,6 +8,7 @@ bench/results/
 *.png
 *.gif
 *.pdf
+!docs/src/assets/*.png
 
 # environment
 Manifest.toml

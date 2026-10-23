@@ -1,4 +1,6 @@
-# BlackLight+
+<p align="center">
+  <img src="docs/src/assets/logo.png" alt="BlackLight+" width="720">
+</p>
 
 BlackLight+ is a Julia package for general-relativistic ray tracing, polarized radiative
 transfer and Monte Carlo Comptonization. The package module is `BlackLightPlus`. A run is a
@@ -82,25 +84,6 @@ backend!(:gpu)                     # session default; backend!(nothing) clears i
 
 The keyword wins over `backend!`, which wins over the environment variable `BLP_BACKEND`
 (`auto | cpu | gpu | gpu:0,1 | host_pool | host_pool:N`), which wins over `:auto`.
-
-## Standing
-
-The measured record is in the documentation (`docs/src/validation.md`,
-`docs/src/design/verification.md`); the statements below are its headlines.
-
-- Against the reference implementation it replaced: analytic images, traces and Monte
-  Carlo sums agree bitwise on one hardware; `IQUV` images agree to round-off. On an A100
-  the reference device drivers and this package agree bitwise, `IQUV` included. A GPU
-  against the CPU differs by 1e-14 to 3e-10 of the image maximum.
-- Against RAPTOR: the Gold et al. (2020) test problems T1–T5 agree to NMSE 2.5e-13 in
-  intensity, and the images of a binary GRMHD snapshot agree in flux to 5.2e-4.
-- Against Blacklight (C++): intensity images of one torus snapshot agree to NMSE 7.9e-4 to
-  5.7e-3. The released Blacklight disagrees in Stokes V by a factor of 2 to 7 because its
-  polarized coupling misplaces two matrix entries; with those corrected, V agrees to
-  NMSE 0.04 (validation page).
-- Speed, on the machine named in the verification record: one A100 traces 1.24e6 Stokes-I
-  rays per second against 1.69e5 on 128 CPU threads; two A100s give results bitwise equal
-  to one.
 
 ## Tests, figures and documentation
 
