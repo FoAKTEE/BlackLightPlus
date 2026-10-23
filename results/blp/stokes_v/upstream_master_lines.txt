@@ -1,0 +1,9 @@
+680:              mm_2[1][2] = s * lambda_1 * alpha_s[3] + lambda_2 * rho_s[3];
+681:              mm_2[1][2] = s * lambda_1 * alpha_s[1] + lambda_2 * rho_s[1];
+685:              mm_2[2][1] = -mm_2[1][2];
+687:              mm_2[3][2] = -mm_2[2][3];
+696:              mm_3[1][2] = -(s * lambda_2 * alpha_s[3] - lambda_1 * rho_s[3]);
+697:              mm_3[1][2] = -(s * lambda_2 * alpha_s[1] - lambda_1 * rho_s[1]);
+701:              mm_3[2][1] = -mm_3[1][2];
+703:              mm_3[3][2] = -mm_3[2][3];
+upstream fetched 2026-10-23 from https://raw.githubusercontent.com/c-white/blacklight/master/src/radiation_integrator/polarized.cpp; mirror ref-code/c-white-blacklight @ a7c7215
