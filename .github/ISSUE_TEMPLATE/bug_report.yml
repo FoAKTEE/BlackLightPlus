@@ -1,0 +1,58 @@
+name: Bug report
+description: Something behaves incorrectly, crashes, or gives a wrong image or spectrum.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A rendering discrepancy is much easier to chase
+        with the configuration and the CPU/GPU comparison filled in below.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you expect, and what did you get instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Reproducer
+      description: >-
+        The smallest script that shows the problem, including the `RunConfig`.
+        If it needs simulation data, describe the snapshot (code, resolution,
+        spin) and say whether it can be shared.
+      render: julia
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Where does it reproduce?
+      options:
+        - CPU only
+        - GPU only
+        - Both CPU and GPU
+        - Not yet checked
+    validations:
+      required: true
+
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions
+      description: >-
+        Output of `versioninfo()`, and `CUDA.versioninfo()` if a GPU is
+        involved. Also the BlackLightPlus commit.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Stack traces, images, or notes that might help.
