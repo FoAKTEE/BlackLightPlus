@@ -15,26 +15,29 @@
 The trajectory of two holes on a circular orbit in the x-y plane about their
 centre of mass: hole 1 at `r₁ = +M₂ d/M`, hole 2 at `r₂ = -M₁ d/M` along
 `(cos(ωt + φ), sin(ωt + φ), 0)`, with `d` the separation, `M = M₁ + M₂`, `ω`
-the angular frequency (Keplerian, `√(M/d³)`, by default) and `φ` the phase at
-`t = 0`; the velocities are the time derivatives. `orbit(t)` returns the
-`NTuple{2}` of `(s_A, v_A)` pairs (`SVector{3}` each) and is generic in `t`.
+the angular frequency (Keplerian, `√(M/d³)`, by default) and `φ` the phase at the
+time origin `t0` (the camera's `t = 0` by default; set it to the simulation time of
+the observation when the fluid is a `SnapshotSeries`); the velocities are the time
+derivatives. `orbit(t)` returns the `NTuple{2}` of `(s_A, v_A)` pairs (`SVector{3}`
+each) and is generic in `t`.
 """
 struct CircularOrbit{T}
     r::SVector{2,T}
     omega::T
     phase::T
+    t0::T
 end
 
-function CircularOrbit(masses, separation; omega = nothing, phase = 0.0)
+function CircularOrbit(masses, separation; omega = nothing, phase = 0.0, t0 = 0.0)
     m1, m2 = float(masses[1]), float(masses[2])
     M = m1 + m2
     d = float(separation)
     ω = omega === nothing ? sqrt(M / (d * d * d)) : float(omega)
-    return CircularOrbit(SVector(m2 / M * d, -m1 / M * d), ω, float(phase))
+    return CircularOrbit(SVector(m2 / M * d, -m1 / M * d), ω, float(phase), float(t0))
 end
 
 @inline function (o::CircularOrbit)(t)
-    φ = o.omega * t + o.phase
+    φ = o.omega * (t - o.t0) + o.phase
     c = cos(φ); s = sin(φ)
     return ntuple(A -> (@inline; r = o.r[A];
                         (SVector(r * c, r * s, zero(c)),
@@ -42,7 +45,7 @@ end
 end
 
 _lane_trajectory(o::CircularOrbit, ::Type{T}) where {T} =
-    CircularOrbit{T}(SVector{2,T}(o.r), T(o.omega), T(o.phase))
+    CircularOrbit{T}(SVector{2,T}(o.r), T(o.omega), T(o.phase), T(o.t0))
 _lane_trajectory(f, ::Type) = f
 
 """
@@ -113,8 +116,10 @@ end
     return r, f, SVector(one(r), ls[1], ls[2], ls[3])
 end
 
-@inline function _moving_hole(st::BoostedSuperposedKerrSchild, x::SVector{4}, sv, A::Int)
-    s, v = sv
+# The trajectory's centre and velocity are read in the number type of the position, so a
+# Float64 closure serves a Float32 lane and a Dual position keeps its partials.
+@inline function _moving_hole(st::BoostedSuperposedKerrSchild, x::SVector{4,V}, sv, A::Int) where {V}
+    s = SVector{3,V}(sv[1]); v = SVector{3,V}(sv[2])
     d = SVector(x[2], x[3], x[4]) - s
     return _moving_ks_term(st.mass[A], st.spin[A], d, v, st.boost)
 end

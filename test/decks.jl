@@ -32,7 +32,7 @@ table of a `Mahakala` checkout beside this repository. Tests that need it skip w
 absent.
 """
 const HOTCROSS_DAT = get(ENV, "BLP_REF_GPUMONTY",
-                         normpath(joinpath(@__DIR__, "..", "..", "..", "Mahakala", "ref-code",
+                         normpath(joinpath(@__DIR__, "..", "..", "Mahakala", "ref-code",
                                            "gpumonty", "table", "hotcross.dat")))
 
 "Bit pattern of every number in `x`; equal patterns mean bitwise-identical output, NaN and -0.0 included. A `ForwardDiff.Dual` contributes its value and then its partials."

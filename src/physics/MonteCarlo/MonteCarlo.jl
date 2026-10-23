@@ -12,7 +12,7 @@ using ..Numerics: CL, ME, MP, HPL, SIGMA_THOMSON, MCRng, MCStreamLayout, mc_unif
                   sample_direction, chi_square, child_rng, loglinear_at, bessel_k2,
                   position, momentum, raystate
 using ..Spacetime: Minkowski, MarchStep, HORIZON_EPS_SAMPLED, metric_and_inverse,
-                   inverse_metric, ks_radius, horizon_radius, rk4_step
+                   inverse_metric, proxy_distance, horizon_floor, rk4_step
 using ..Matter: PlasmaState, PlasmaProvider, EmissionZone, UniformSphere, sample, emission_zone
 using ..Transfer: thermal_synchrotron, TransferParams
 import ..Transfer: march_control, max_steps, geodesic_step

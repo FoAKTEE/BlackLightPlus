@@ -39,6 +39,7 @@ export inverse_metric_gradient, metric_gradient, christoffel,
 # termination and the adaptive tracer
 export ESCAPE_RADIUS, ADM_ESCAPE_RADIUS, HORIZON_EPS, HORIZON_EPS_SAMPLED, CAPTURE_REDSHIFT,
        march_captured, march_escaped, march_stop, normal_frame_energy, ks_radius_energy,
+       proxy_distance, horizon_floor,
        MarchBudget, MarchStep, march_control, trace_geodesic
 # camera
 export PlaneParallelCamera, CameraFrame, camera_ray, npixels, pixel_centres, pixel_coords

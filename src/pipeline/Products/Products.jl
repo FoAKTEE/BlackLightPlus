@@ -11,7 +11,7 @@ import Adapt
 using ForwardDiff: Dual, value, partials
 using ..Numerics: position, momentum, MCRng, MCStreamLayout, mc_uniform, primary_rng, ME, CL
 using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step,
-                   inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, ks_radius
+                   inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, intensity, sample
 using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, IntJnuTable, Opacities, Bias, FlatMarch,

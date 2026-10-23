@@ -171,3 +171,53 @@ end
     stop = !isfinite(R) || march_escaped(R, r_prev, b.escape, b.R_em)
     return MarchStep{T}(stop, max(R, one(T)) / b.C, R)
 end
+
+"""
+    proxy_distance(st, x::SVector{4}) -> (d, r)
+
+The distance `d` above the spacetime's horizon proxy at the event `x` and the radius
+`r` that escape rules compare against, the pair every march that is not the
+fixed-control march reads (the Monte Carlo march): `KerrSchildCartesian`
+`(r_ks - r_h, r_ks)`; `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`
+`(min_A (r_A - r_h,A), |x|)` with `r_A` the per-hole radius at the ray's time (`-Inf`
+when one is not finite); `ADMGrid` `(α - alpha_min, |x|)` with the lapse from `g^{tt}`
+where it is negative and 1 elsewhere; `Minkowski` and any other spacetime `(|x|, |x|)`,
+no horizon.
+"""
+@inline function proxy_distance(st::KerrSchildCartesian, x::SVector{4})
+    r = ks_radius(st, x)
+    return r - st.r_h, r
+end
+@inline function proxy_distance(st::Union{SuperposedKerrSchild{N},BoostedSuperposedKerrSchild{N}},
+                                x::SVector{4}) where {N}
+    T = eltype(x)
+    dmin = T(Inf)
+    @inbounds for A in 1:N
+        dA = ks_radius(st, x, A) - horizon_radius(st, A)
+        isfinite(dA) || (dmin = T(-Inf); break)
+        dmin = min(dmin, dA)
+    end
+    return dmin, sqrt(x[2] * x[2] + x[3] * x[3] + x[4] * x[4])
+end
+@inline function proxy_distance(st::ADMGrid, x::SVector{4})
+    R = sqrt(x[2] * x[2] + x[3] * x[3] + x[4] * x[4])
+    gtt = inverse_metric(st, x)[1, 1]
+    α = gtt < zero(gtt) ? one(gtt) / sqrt(-gtt) : one(gtt)
+    return α - st.alpha_min, R
+end
+@inline function proxy_distance(st::Spacetime, x::SVector{4})
+    R = sqrt(x[2] * x[2] + x[3] * x[3] + x[4] * x[4])
+    return R, R
+end
+
+"""
+    horizon_floor(st) -> Real
+
+The scalar horizon proxy of a march on `st`: the Kerr outer horizon radius, the
+smallest per-hole horizon radius of a binary, the lapse floor of an ADM grid, and 0
+for `Minkowski` or any spacetime without a horizon.
+"""
+@inline horizon_floor(st::KerrSchildCartesian) = st.r_h
+@inline horizon_floor(st::Union{SuperposedKerrSchild,BoostedSuperposedKerrSchild}) = minimum(st.r_h)
+@inline horizon_floor(st::ADMGrid) = st.alpha_min
+@inline horizon_floor(::Spacetime) = 0.0

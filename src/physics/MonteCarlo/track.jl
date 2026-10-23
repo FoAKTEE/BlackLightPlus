@@ -39,14 +39,17 @@ FlatMarch(s::UniformSphere; step_frac::Real = SPHERE_STEP_FRAC, nmax::Integer = 
     CurvedMarch{S,T}(st, r_h, C, escape, R_em, nmax)
     CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS)
 
-Geodesic march for Monte Carlo transport on the stationary spacetime `st` with horizon
-radius `r_h` (`horizon_radius(st)` in the keyword form): at Kerr–Schild radius `r` the
-affine step is `h = (r − r_h)/(C (|k| + 10⁻³⁰⁰))`, `|k|` the spatial norm of
-`k^μ = g^{μν} p_ν`, so the coordinate advance is about `(r − r_h)/C` whatever the photon
-energy (grmonty `stepsize`); the state advances by `rk4_step`. The photon is captured
-at `r < r_h + HORIZON_EPS_SAMPLED` and escapes at `r > escape`, or at `r > R_em` while
-outbound: beyond the emission-confinement radius `R_em` it meets no more plasma. At
-most `nmax` steps; the `R` of its decisions is `r`.
+Geodesic march for Monte Carlo transport on the spacetime `st`, whose horizon proxy
+`r_h` is `horizon_floor(st)` in the keyword form: with `(d, r) = proxy_distance(st, x)`
+(the distance above the horizon proxy and the escape radius: Kerr–Schild radius and
+`r - r_h` on Kerr, the coordinate radius and the nearest hole's `r_A - r_h,A` on a
+binary, at the ray's time when the metric moves) the affine step is
+`h = d/(C (|k| + 10⁻³⁰⁰))`, `|k|` the spatial norm of `k^μ = g^{μν} p_ν`, so the
+coordinate advance is about `d/C` whatever the photon energy (grmonty `stepsize`); the
+state advances by `rk4_step`. The photon is captured at `d < HORIZON_EPS_SAMPLED` (or a
+non-finite `d`) and escapes at `r > escape`, or at `r > R_em` while outbound: beyond the
+emission-confinement radius `R_em` it meets no more plasma. At most `nmax` steps; the
+`R` of its decisions is `r`.
 """
 struct CurvedMarch{S,T}
     st::S
@@ -58,7 +61,7 @@ struct CurvedMarch{S,T}
 end
 CurvedMarch(st; C::Real = 80.0, escape::Real = 1.0e3, R_em::Real = 100.0,
             nmax::Integer = CURVED_MAX_STEPS) =
-    CurvedMarch(st, Float64(horizon_radius(st)), Float64(C), Float64(escape),
+    CurvedMarch(st, Float64(horizon_floor(st)), Float64(C), Float64(escape),
                 Float64(R_em), Int(nmax))
 
 @inline max_steps(c::FlatMarch) = c.nmax + 1
@@ -83,11 +86,12 @@ end
 
 @inline function march_control(c::CurvedMarch, y::SVector{8}, r_prev, it)
     x = position(y)
-    r = ks_radius(c.st, x)
-    stop = r < c.r_h + HORIZON_EPS_SAMPLED || r > c.escape || (r > c.R_em && r > r_prev)
+    d, r = proxy_distance(c.st, x)
+    captured = !(d >= HORIZON_EPS_SAMPLED)
+    stop = captured || r > c.escape || (r > c.R_em && r > r_prev)
     kcon = inverse_metric(c.st, x) * momentum(y)
     ks = sqrt(kcon[2] * kcon[2] + kcon[3] * kcon[3] + kcon[4] * kcon[4])
-    return MarchStep(stop, (r - c.r_h) / (c.C * (ks + 1.0e-300)), r)
+    return MarchStep(stop, d / (c.C * (ks + 1.0e-300)), r)
 end
 
 @inline geodesic_step(c::CurvedMarch, y::SVector{8}, h, it) = rk4_step(c.st, y, h)
@@ -99,7 +103,10 @@ Whether the stopping decision `step` of the control `ctl` is an escape (the phot
 recorded) rather than a capture or the step limit.
 """
 @inline escaped(c::FlatMarch, s::MarchStep) = s.R > c.R * c.R
-@inline escaped(c::CurvedMarch, s::MarchStep) = !(s.R < c.r_h + HORIZON_EPS_SAMPLED)
+# A curved march stops captured, past `escape`, or outbound past `R_em`; a capture happens
+# inside the emission radius, so the stop is an escape when the radius has passed the
+# smaller of the two.
+@inline escaped(c::CurvedMarch, s::MarchStep) = s.R > min(c.R_em, c.escape)
 
 """
     escape_direction(ctl, sph::Superphoton) -> SVector{3}

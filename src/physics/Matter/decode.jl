@@ -63,8 +63,10 @@ element type `Tg`: the promotion of both with the unit and electron-model types,
 
 The plasma state of the primitives `prim` at a point whose metric pair is
 `g = (gcov, gcon)`. The sample is `vacuum` when the density or the ideal-gas
-pressure `(γ − 1) e_int` is not positive, when `b² ≤ 0`, or when any decoded
-quantity falls outside `cuts`. Otherwise: `n_e = ρ dens_unit / (μ m_p) / (1 + 1/(n_e/n_i))`,
+pressure `(γ − 1) e_int` is not positive, when the metric has no normal observer
+(`g^{tt} ≥ 0`: the slice is not spacelike there, as it is not deep inside a hole of a
+superposed metric), when `b² ≤ 0`, or when any decoded quantity falls outside
+`cuts`. Otherwise: `n_e = ρ dens_unit / (μ m_p) / (1 + 1/(n_e/n_i))`,
 `B = √b² B_unit`, `Θ_e` from `electron_theta`, `σ = b²/ρ` and `β⁻¹ = b²/(2 p_gas)`
 in code units, and the four-vectors of `primitive_four_vectors`.
 """
@@ -74,6 +76,7 @@ in code units, and the four-vectors of `primitive_four_vectors`.
     T = state_type(Tp, eltype(gcov), units, electrons)
     rho = prim.rho
     pgas = pgas_from_eint(prim.eint, electrons.gamma)
+    gcon[1, 1] < 0 || return vacuum(T)
     fv = primitive_four_vectors(prim.uu, prim.bb, gcov, gcon)
     (rho <= 0.0 || pgas <= 0.0) && return vacuum(T)
     b_sq = fv.b_sq

@@ -136,7 +136,29 @@ end
         @test o2.omega == 0.01 && o2.r == SVector(10.0, -10.0)
         o32 = lane(BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], o2), Float32)
         @test o32 isa BoostedSuperposedKerrSchild{2,Float32} && o32.trajectory isa CircularOrbit{Float32}
+        @test o32.trajectory.t0 == 0.0f0
         @test eltype(metric(o32, SVector{4,Float32}(1, 3, 2, 1))) == Float32
+        # the time origin shifts the phase: the orbit at t is the t0 = 0 orbit at t - t0
+        ot = CircularOrbit((0.25, 0.75), 10.0; phase = 0.3, t0 = 1234.5)
+        for t in (0.0, 1234.5, -77.0)
+            @test all(ot(t)[A][1] ≈ o(t - 1234.5)[A][1] for A in 1:2)
+            @test all(ot(t)[A][2] ≈ o(t - 1234.5)[A][2] for A in 1:2)
+        end
+        @test lane(BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], ot), Float32).trajectory.t0 == 1234.5f0
+        # a Float64 closure trajectory in a Float32 lane: the metric stays in the lane's type
+        v = SVector(0.05, 0.1, 0.0)
+        st64 = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.2), (0.0, 0.0, 0.0)],
+                                           t -> ((SVector(4.0, 0.0, 0.0) + v * t, v), (SVector(-4.0, 0.0, 0.0) - v * t, -v)))
+        st32 = lane(st64, Float32)
+        @test st32.trajectory === st64.trajectory
+        x32 = SVector{4,Float32}(-3.0, 1.0, 4.0, 2.0)
+        g32 = metric(st32, x32)
+        @test eltype(g32) == Float32 && isapprox(g32, metric(st64, SVector{4,Float64}(x32)); rtol = 1e-5)
+        @test eltype(inverse_metric(st32, x32)) == Float32
+        @test ks_radius(st32, x32, 1) isa Float32
+        # a Dual position keeps its partials through the trajectory, the time column included
+        dg = ForwardDiff.jacobian(xx -> vec(metric(st64, xx)), SVector{4,Float64}(x32))
+        @test size(dg) == (16, 4) && all(isfinite, dg) && any(!=(0), dg[:, 1])
     end
 
     @testset "rays captured by a moving hole, escape, and the march" begin

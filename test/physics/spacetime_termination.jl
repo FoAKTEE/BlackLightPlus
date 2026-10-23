@@ -2,10 +2,11 @@
 # binary, ADM and horizonless controls, the redshift cut on a near-horizon deck and the
 # affine length it omits, Δλ ≈ α_h / (κ E_c).
 using Test, BlackLightPlus, StaticArrays, LinearAlgebra
-using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, Minkowski, MarchBudget, MarchStep,
+using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, BoostedSuperposedKerrSchild,
+                     CircularOrbit, Minkowski, MarchBudget, MarchStep,
                      march_control, march_captured, march_escaped, march_stop, normal_frame_energy,
                      ks_radius_energy, ks_radius, horizon_radius, rk4_step, PlaneParallelCamera,
-                     HORIZON_EPS_SAMPLED, CAPTURE_REDSHIFT, lane
+                     HORIZON_EPS_SAMPLED, CAPTURE_REDSHIFT, lane, proxy_distance, horizon_floor
 const Decks = Main.Decks
 
 @testset "march termination" begin
@@ -49,6 +50,33 @@ const Decks = Main.Decks
         @test mf.stop && mf.h == 1200.0 / 80.0
         @test !march_control(Minkowski(), SVector(0.0, 0.5, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0), Inf, b).stop
         @test march_control(Minkowski(), SVector(0.0, 0.5, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0), Inf, b).h == 1 / 80
+    end
+
+    @testset "horizon proxy of the Monte Carlo march" begin
+        a = 0.9; st = KerrSchildCartesian(a)
+        x = SVector(0.0, 1.2, 0.8, 0.3)
+        @test proxy_distance(st, x) == (ks_radius(st, x) - st.r_h, ks_radius(st, x))
+        @test horizon_floor(st) == horizon_radius(st)
+        bin = SuperposedKerrSchild([0.5, 0.5], [0.0, 0.0], [(3.0, 0.0, 0.0), (-3.0, 0.0, 0.0)])
+        xb = SVector(0.0, 3.5, 1.0, 0.2)
+        db, Rb = proxy_distance(bin, xb)
+        @test db == min(ks_radius(bin, xb, 1) - horizon_radius(bin, 1), ks_radius(bin, xb, 2) - horizon_radius(bin, 2))
+        @test Rb == sqrt(3.5^2 + 1.0 + 0.04) && horizon_floor(bin) == minimum(horizon_radius(bin))
+        # the moving binary reads the holes at the event's time
+        orbit = CircularOrbit((0.5, 0.5), 6.0)
+        mov = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], orbit)
+        t = -40.0
+        s1 = orbit(t)[1][1]
+        d0, _ = proxy_distance(mov, SVector(t, s1[1], s1[2], s1[3] + 2.5))
+        @test d0 ≈ 2.5 - horizon_radius(mov, 1) atol = 1e-12       # transverse offset: r' = |x'|
+        @test proxy_distance(mov, SVector(0.0, s1[1], s1[2], s1[3] + 2.5))[1] > d0      # the hole has moved
+        @test proxy_distance(mov, SVector(t, s1[1], s1[2], s1[3]))[1] == -horizon_radius(mov, 1)   # at the centre: r' = 0
+        @test horizon_floor(mov) == minimum(mov.r_h)
+        # no horizon: the coordinate radius twice
+        @test proxy_distance(Minkowski(), SVector(0.0, 3.0, 4.0, 0.0)) == (5.0, 5.0) && horizon_floor(Minkowski()) == 0.0
+        # Float32 positions keep the lane
+        @test proxy_distance(lane(st, Float32), SVector{4,Float32}(x)) isa Tuple{Float32,Float32}
+        @test proxy_distance(lane(mov, Float32), SVector{4,Float32}(t, s1[1], s1[2], s1[3] + 2.5)) isa Tuple{Float32,Float32}
     end
 
     @testset "near-horizon deck: the redshift cut stops every plunging ray" begin

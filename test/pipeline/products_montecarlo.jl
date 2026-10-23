@@ -9,7 +9,8 @@ using BlackLightPlus.Plans: RunConfig, Plan, prepare, hotcross_table
 using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
                     MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render
-using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian
+using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
+                     inverse_metric
 using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Superphoton, GenerationTables, Opacities, Bias,
                       FlatMarch, CurvedMarch, generate
@@ -251,5 +252,20 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test_throws ArgumentError mc_spectrum(p, 100; scattering = true, table = THOMSON,
                                                capacity = 0, backend = :cpu)
         @test_throws ArgumentError analytic_nuLnu(pt, 1.0e11)
+    end
+
+    @testset "moving binary: zones with a normal observer, the march at the holes' times" begin
+        orbit = CircularOrbit((0.5, 0.5), 8.0)
+        mov = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], orbit)
+        pb = prepare(RunConfig(m_bh_cgs = DK.TORUS_MBH, mass_scale_cgs = DK.TORUS_DENS * L_TORUS^3,
+                               frequency_hz = 2.3e11); spacetime = mov, matter = snap)
+        zb = emission_zones(pb)
+        @test length(zb) > 100 && all(z -> inverse_metric(mov, z.x)[1, 1] < 0.0, zb)   # no cell without a normal observer
+        gb = mc_spectrum(pb, 1_500; seed = 0xC0FFEE, C = 32.0, backend = :cpu)
+        @test gb.n_zones == length(zb) && gb.n_gen > 1000 && gb.n_recorded > 0
+        @test 0.0 < gb.escaped_power < gb.emitted_power
+        @test same(gb, mc_spectrum(pb, 1_500; seed = 0xC0FFEE, C = 32.0, backend = :host_pool))
+        gs = mc_spectrum(pb, 1_000; scattering = true, table = THOMSON, seed = 0xC0FFEE, C = 32.0, backend = :cpu)
+        @test gs.scattering && gs.n_recorded > 0 && all(isfinite, gs.total.sumw)
     end
 end

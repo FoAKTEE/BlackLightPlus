@@ -140,7 +140,7 @@ function emission_zones(blocks::FluidBlocks, st, params; stride::Integer = 1,
             xc = SVector(0.0, blocks.x_left[1, mb] + (i - 1) * d1,
                          blocks.x_left[2, mb] + (j - 1) * d2, blocks.x_left[3, mb] + (k - 1) * d3)
             locate(blocks, xc[2], xc[3], xc[4]) == mb || continue
-            ks_radius(st, xc) <= rmax || continue
+            proxy_distance(st, xc)[2] <= rmax || continue
             state, g = sample(blocks, st, xc, params)
             (state.valid && state.n_e > 0.0 && state.theta_e > 0.0) || continue
             detg = det(g[1])
@@ -315,7 +315,7 @@ function mc_run(provider, plan, exec, bands, o, t0)
     offset = zone_offsets(Nsz, o.seed)
     N = offset[end]
     st = plan.spacetime
-    R_em = max(o.march.R_em, maximum(z -> 1.2 * ks_radius(st, z.x), zones))
+    R_em = max(o.march.R_em, maximum(z -> 1.2 * proxy_distance(st, z.x)[2], zones))
     ctl = CurvedMarch(st; C = o.march.C, escape = o.march.escape, R_em = R_em)
     transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, provider, o),
                             Val(o.absorption), Val(o.scattering))

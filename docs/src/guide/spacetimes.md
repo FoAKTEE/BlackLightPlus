@@ -93,10 +93,44 @@ sol = trace_geodesic(st, vcat(x0, k / k[1]); save_everystep = true)
 The observer time is $t = 0$ at the camera; a backward-traced ray runs to earlier times
 and meets the holes where they were then. Freezing the metric at one time is not an
 option for a moving hole: the frozen boosted horizon is not a null surface and rays
-stall on it. Polarized renders transport the camera frame with the time-dependent connection (both metric gradients, the time column included, at every step). `boost = false` carries the static terms along the trajectory without the
-boost, for comparison. `figures/dynrays/` traces an orbiting binary's ray fan and the
-snapshot trajectories of Bohn et al. 2015 in this spacetime; the products of a plan
-(`render`, `shadow`, `trace`) accept the type as well.
+stall on it. Polarized renders transport the camera frame with the time-dependent
+connection (both metric gradients, the time column included, at every step).
+`boost = false` carries the static terms along the trajectory without the boost, for
+comparison. `figures/dynrays/` traces an orbiting binary's ray fan and the snapshot
+trajectories of Bohn et al. 2015 in this spacetime.
+
+### Products on a moving metric
+
+Every product of a plan accepts the type: `render` (fast light, or slow light over a
+`SeriesProvider` or `FrameWindow`), `render_amr`, `trace` and the two-phase render along
+its trajectories, `shadow`, `variants`, `sensitivity` and `mc_spectrum`. The exception is
+`MixedLanes`, whose rescue set is the neighbourhood of the Kerr critical curve; a
+`Lanes{Float32,Float64,Float64}` plan marches the geodesics in `Float32` on any
+spacetime.
+
+The two clocks of slow light are one clock. The camera's $t = 0$ is the observation
+epoch `t_obs` of the series, and a ray's emission time is $t_{\rm obs} + x^0$; the
+holes are read at the same $x^0$. `CircularOrbit(…; t0)` sets the time at which the
+orbit has its `phase`, so a binary phased to the fluid's clock takes `t0 = t_obs`:
+
+```julia
+series = SnapshotSeries(paths, times; t_obs = times[end])
+orbit = CircularOrbit((0.5, 0.5), 8.0; phase = 0.0, t0 = times[end])
+st = BoostedSuperposedKerrSchild([0.5, 0.5], [(0, 0, 0), (0, 0, 0)], orbit)
+plan = prepare(cfg; spacetime = st, matter = SeriesProvider(series), mode = IQUV())
+```
+
+The Monte Carlo march reads the spacetime through `proxy_distance(st, x)`, the
+distance above the nearest hole's horizon at the ray's time and the coordinate radius
+its escape rules compare against, so a superphoton ends on whichever hole it meets.
+Fluid cells deep inside a hole, where the superposed metric has no normal observer
+($g^{tt} \ge 0$), decode to vacuum and emit nothing; the cells outside the horizons are
+read as on Kerr.
+
+On a GPU the type is a plain bits value (`isbits`), so `backend = :gpu` runs the same
+kernels: the metric and its gradients at every step from the trajectory, the per-hole
+capture, and the parallel transport. Slow light on a device goes through a `FrameWindow`
+([Imaging GRMHD data](@ref)); `SeriesProvider` is a host provider.
 
 ## Numerical relativity
 

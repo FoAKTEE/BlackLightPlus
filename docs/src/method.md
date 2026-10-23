@@ -354,7 +354,11 @@ optically thin synchrotron sphere matches its closed form to a few percent
 per bin, and GRMHD spectra show the gravitationally redshifted synchrotron
 bump. On GPU, multi-order scattering is layered rather than recursive: the host
 relaunches once per scattering generation, and a launch whose child buffer
-overflows is rerun at the exact size, so no child is dropped.
+overflows is rerun at the exact size, so no child is dropped. The march reads any
+spacetime through `proxy_distance`: the distance above the horizon proxy sets the
+step (grmonty's `stepsize`) and the capture, the radius the escape, so the same
+tracker runs on Kerr, on a binary at rest or in motion (the nearest hole at the
+photon's time) and on an ADM grid.
 
 **Streams keyed by ancestry.** Randomness is the counter-based
 Philox4x32-10 generator [Salmon2011](@citep). Each photon's stream is named by

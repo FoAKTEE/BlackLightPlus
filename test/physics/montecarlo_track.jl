@@ -5,9 +5,10 @@
 # Compton tail with scattering, identically under every executor.
 using Test, BlackLightPlus
 using StaticArrays
-using LinearAlgebra: dot
+using LinearAlgebra: dot, norm
 using BlackLightPlus.Numerics: MCRng, primary_rng, MCStreamLayout, HPL, ME, CL
-using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, ETA, inverse_metric, null_covariant,
+using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
+                     ETA, inverse_metric, null_covariant, proxy_distance, horizon_floor,
                      horizon_radius, ks_radius
 using BlackLightPlus.Matter: UniformSphere, sample
 using BlackLightPlus.MonteCarlo: Superphoton, FlatMarch, CurvedMarch, Opacities, Bias, NullSink, VectorSink,
@@ -106,6 +107,41 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
     st = KerrSchildCartesian(DK.TORUS_A)
     params = DK.torus_params()
     zones = DK.torus_zones(blocks, st, params)
+
+    @testset "curved control on the moving binary" begin
+        orbit = CircularOrbit((0.5, 0.5), 8.0)
+        st = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], orbit)
+        ctl = CurvedMarch(st; C = 40.0, escape = 200.0, R_em = 30.0)
+        @test ctl.r_h == horizon_floor(st) == minimum(st.r_h)
+        s1 = orbit(0.0)[1][1]
+        x = SVector(0.0, s1[1], s1[2] + 3.0, s1[3])               # 3 M beside hole 1, at its t = 0 position
+        y = vcat(x, null_covariant(st, x, SVector(0.0, -1.0, 0.0))[1])
+        p0 = SVector(y[5], y[6], y[7], y[8])
+        d = march_control(ctl, y, Inf, 1)
+        kx = inverse_metric(st, x) * p0
+        @test !d.stop && d.R == norm(x[SVector(2, 3, 4)]) && d.h ≈ proxy_distance(st, x)[1] / (40.0 * norm(kx[SVector(2, 3, 4)]))
+        # a point deep inside hole 2 is a capture, not an escape
+        s2 = orbit(0.0)[2][1]
+        yc = vcat(SVector(0.0, s2[1], s2[2], s2[3] + 0.5), p0)
+        dc = march_control(ctl, yc, Inf, 1)
+        @test dc.stop && !escaped(ctl, dc)
+        # beyond R_em and outbound: an escape
+        yo = vcat(SVector(0.0, 31.0, 0.0, 0.0), p0)
+        do_ = march_control(ctl, yo, 30.5, 1)
+        @test do_.stop && escaped(ctl, do_)
+        # inbound beyond R_em: the march goes on
+        @test !march_control(ctl, yo, 31.5, 1).stop
+        pin, _ = null_covariant(st, x, SVector(0.0, -1.0, 0.0))
+        pout, _ = null_covariant(st, x, SVector(0.0, 1.0, 0.0))
+        plasma = Opacities()
+        rin = track!(ctl, st, UniformSphere(R = 0.5), plasma, Superphoton(x, pin, 1.0),
+                     MCRng(1, 1), NullSink(); absorb = Val(false))
+        rout = track!(ctl, st, UniformSphere(R = 0.5), plasma, Superphoton(x, pout, 1.0),
+                      MCRng(1, 1), NullSink(); absorb = Val(false))
+        @test !rin.recorded && proxy_distance(st, rin.sph.x)[1] < 1e-2
+        @test rin.sph.x[1] > 0.0                                    # forward in time: the hole is read where it is then
+        @test rout.recorded && 30.0 < norm(rout.sph.x[SVector(2, 3, 4)]) < 32.0
+    end
 
     @testset "torus: seeds are null and start inside emitting zones" begin
         @test length(zones) > 100
