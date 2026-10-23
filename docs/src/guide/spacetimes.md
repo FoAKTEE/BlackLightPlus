@@ -93,7 +93,7 @@ sol = trace_geodesic(st, vcat(x0, k / k[1]); save_everystep = true)
 The observer time is $t = 0$ at the camera; a backward-traced ray runs to earlier times
 and meets the holes where they were then. Freezing the metric at one time is not an
 option for a moving hole: the frozen boosted horizon is not a null surface and rays
-stall on it. `boost = false` carries the static terms along the trajectory without the
+stall on it. Polarized renders transport the camera frame with the time-dependent connection (both metric gradients, the time column included, at every step). `boost = false` carries the static terms along the trajectory without the
 boost, for comparison. `figures/dynrays/` traces an orbiting binary's ray fan and the
 snapshot trajectories of Bohn et al. 2015 in this spacetime; the products of a plan
 (`render`, `shadow`, `trace`) accept the type as well.

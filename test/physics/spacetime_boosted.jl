@@ -8,9 +8,9 @@ import ForwardDiff
 using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, BoostedSuperposedKerrSchild,
                      CircularOrbit, Spacetime, StationarySpacetime, ETA, metric, inverse_metric,
                      metric_and_inverse, lower_index, raise_index, raise_and_norm,
-                     inverse_metric_gradient, christoffel, geodesic_rhs, nullify_covariant,
-                     null_error, trace_geodesic, ks_radius, horizon_radius, lane, MarchBudget,
-                     march_control
+                     inverse_metric_gradient, christoffel, geodesic_rhs, geodesic_transport_rhs,
+                     nullify_covariant, null_error, trace_geodesic, ks_radius, horizon_radius, lane,
+                     MarchBudget, march_control
 
 at_rest(centers) = t -> ntuple(A -> (SVector{3,Float64}(centers[A]...), zero(SVector{3,Float64})),
                                length(centers))
@@ -174,5 +174,46 @@ end
         @test any(fates)
         uf = trace_geodesic(st, ray(st, (60.0, dc)); escape = 2dc, reltol = 1e-10, abstol = 1e-12).u[end]
         @test sqrt(uf[2]^2 + uf[3]^2 + uf[4]^2) > 1.9dc
+    end
+
+    @testset "parallel transport on the moving metric" begin
+        # the general transport equals the stationary one on Kerr
+        kerr = KerrSchildCartesian(0.9)
+        x0 = SVector(0.0, 9.0, 4.0, 2.0)
+        k0 = nullify_covariant(kerr, x0, SVector(-1.0, 0.1, 0.05))
+        y = vcat(x0, k0 / k0[1])
+        vs = (SVector(0.0, 0.3, -1.0, 0.2), SVector(1.0, 0.0, 0.0, 0.0))
+        dy_s, dv_s = geodesic_transport_rhs(kerr, y, vs)
+        dy_g, dv_g = invoke(geodesic_transport_rhs,
+                            Tuple{Spacetime,SVector{8,Float64},NTuple{2,SVector{4,Float64}}}, kerr, y, vs)
+        @test maximum(abs.(dy_s - dy_g)) < 1e-12
+        @test all(maximum(abs.(dv_s[i] - dv_g[i])) < 1e-12 for i in 1:2)
+        # on a hole in motion the transported products g(k, V), g(V, W) and g(V, V) stay constant
+        v = SVector(0.12, 0.05, 0.0)
+        hole = BoostedSuperposedKerrSchild([1.0], [(0.0, 0.0, 0.2)], uniform(zero(v), v))
+        xh = SVector(0.0, -8.0, 30.0, 3.0)                # passes 5.8 M from the hole
+        kh = nullify_covariant(hole, xh, SVector(0.0, 1.0, 0.0))
+        yh = vcat(xh, kh / kh[1])
+        g0 = metric(hole, xh)
+        kcon = inverse_metric(hole, xh) * SVector(yh[5], yh[6], yh[7], yh[8])
+        V = SVector(0.0, 1.0, 0.0, 0.3); W = SVector(0.2, 0.0, 1.0, -0.1)
+        prods(yy, vv) = (gg = metric(hole, SVector(yy[1], yy[2], yy[3], yy[4]));
+                         kk = inverse_metric(hole, SVector(yy[1], yy[2], yy[3], yy[4])) * SVector(yy[5], yy[6], yy[7], yy[8]);
+                         (dot(kk, gg * vv[1]), dot(vv[1], gg * vv[2]), dot(vv[1], gg * vv[1])))
+        p0 = prods(yh, (V, W))
+        state = (yh, (V, W)); h = 0.02
+        for _ in 1:1500                                # 30 M of affine parameter past the hole
+            f = (s) -> geodesic_transport_rhs(hole, s[1], s[2])
+            k1 = f(state); s2 = (state[1] + (h / 2) * k1[1], state[2] .+ (h / 2) .* k1[2])
+            k2 = f(s2);    s3 = (state[1] + (h / 2) * k2[1], state[2] .+ (h / 2) .* k2[2])
+            k3 = f(s3);    s4 = (state[1] + h * k3[1], state[2] .+ h .* k3[2])
+            k4 = f(s4)
+            state = (state[1] + (h / 6) * (k1[1] + 2k2[1] + 2k3[1] + k4[1]),
+                     state[2] .+ (h / 6) .* (k1[2] .+ 2 .* k2[2] .+ 2 .* k3[2] .+ k4[2]))
+        end
+        p1 = prods(state...)
+        @test abs(null_error(hole, state[1])) < 1e-9
+        @test all(abs.(p1 .- p0) .< 1e-9 .* max.(1.0, abs.(p0)))
+        @test state[1][5] != yh[5]                     # p_t drifted: the metric is time dependent
     end
 end

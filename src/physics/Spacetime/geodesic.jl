@@ -106,16 +106,19 @@ end
 end
 
 """
-    geodesic_transport_rhs(st::StationarySpacetime, y::RayState, vs::NTuple{M,SVector{4}})
+    geodesic_transport_rhs(st::Spacetime, y::RayState, vs::NTuple{M,SVector{4}})
         -> (dy, dvs::NTuple{M,SVector{4}})
 
 The geodesic right-hand side with the parallel transport
 `dV^μ/dλ = -Γ^μ_{αβ} k^α V^β` of `M` vectors along the ray (`k^μ = dx^μ/dλ`),
-from `2Γ^μ_{αβ} k^α V^β = g^{μλ}[(k·∂)g_{λβ} V^β + (V·∂)g_{λα} k^α - k^α V^β ∂_λ g_{αβ}]`
-with `∂_t g ≡ 0`. One `metric_and_inverse` at the spatially seeded position
-gives `g^{ab}` with `∂_c g^{ab}` (the geodesic, equal to `geodesic_rhs` up to
-round-off) and `∂_c g_{ab}` (the transport); no Christoffel symbol is formed.
-Runs in the number type of the state.
+from `2Γ^μ_{αβ} k^α V^β = g^{μλ}[(k·∂)g_{λβ} V^β + (V·∂)g_{λα} k^α - k^α V^β ∂_λ g_{αβ}]`;
+no Christoffel symbol is formed. On a `StationarySpacetime` (`∂_t g ≡ 0`) one
+`metric_and_inverse` at the spatially seeded position gives `g^{ab}` with
+`∂_c g^{ab}` (the geodesic, equal to `geodesic_rhs` up to round-off) and
+`∂_c g_{ab}` (the transport). On a general spacetime the four columns of both
+gradients come from [`inverse_metric_gradient`](@ref) and
+[`metric_gradient`](@ref), the time column included, so the transported frame
+follows a time-dependent metric. Runs in the number type of the state.
 """
 @inline function geodesic_transport_rhs(st::StationarySpacetime, y::SVector{8,T},
                                         vs::NTuple{M,SVector{4,T}}) where {T,M}
@@ -140,6 +143,35 @@ Runs in the number type of the state.
         t1 = k[2] .* (dg2 * v) .+ k[3] .* (dg3 * v) .+ k[4] .* (dg4 * v)   # (k·∂)g V
         t2 = v[2] .* q2 .+ v[3] .* q3 .+ v[4] .* q4
         t3 = SVector(zero(T), dot(q2, v), dot(q3, v), dot(q4, v))
+        return -(T(0.5) .* (gcon * (t1 .+ t2 .- t3)))
+    end
+    return dy, map(_transport, vs)
+end
+
+@inline function geodesic_transport_rhs(st::Spacetime, y::SVector{8,T},
+                                        vs::NTuple{M,SVector{4,T}}) where {T,M}
+    x = position(y)
+    p = momentum(y)
+    gcon = inverse_metric(st, x)
+    dgcon = inverse_metric_gradient(st, x)              # dgcon[a, b, c] = ∂_c g^{ab}
+    dgcov = metric_gradient(st, x)                      # dgcov[a, b, c] = ∂_c g_{ab}
+    k = gcon * p
+    dp1 = zero(T); dp2 = zero(T); dp3 = zero(T); dp4 = zero(T)
+    @inbounds for μ in 1:4, ν in 1:4
+        pp = p[μ] * p[ν]
+        dp1 -= pp * dgcon[μ, ν, 1]; dp2 -= pp * dgcon[μ, ν, 2]
+        dp3 -= pp * dgcon[μ, ν, 3]; dp4 -= pp * dgcon[μ, ν, 4]
+    end
+    dy = SVector(k[1], k[2], k[3], k[4], dp1 / 2, dp2 / 2, dp3 / 2, dp4 / 2)
+    dg1 = SMatrix{4,4,T}(ntuple(i -> dgcov[i], Val(16)))
+    dg2 = SMatrix{4,4,T}(ntuple(i -> dgcov[16 + i], Val(16)))
+    dg3 = SMatrix{4,4,T}(ntuple(i -> dgcov[32 + i], Val(16)))
+    dg4 = SMatrix{4,4,T}(ntuple(i -> dgcov[48 + i], Val(16)))
+    q1 = dg1 * k; q2 = dg2 * k; q3 = dg3 * k; q4 = dg4 * k        # ∂_c g_{ab} k^b
+    @inline function _transport(v)
+        t1 = k[1] .* (dg1 * v) .+ k[2] .* (dg2 * v) .+ k[3] .* (dg3 * v) .+ k[4] .* (dg4 * v)
+        t2 = v[1] .* q1 .+ v[2] .* q2 .+ v[3] .* q3 .+ v[4] .* q4
+        t3 = SVector(dot(q1, v), dot(q2, v), dot(q3, v), dot(q4, v))
         return -(T(0.5) .* (gcon * (t1 .+ t2 .- t3)))
     end
     return dy, map(_transport, vs)
