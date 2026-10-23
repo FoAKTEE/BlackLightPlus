@@ -1,0 +1,40 @@
+Third-party notices for BlackLightPlus (MIT licensed; see LICENSE)
+
+
+PORTED CODE (MIT-licensed sources; original notices preserved in file headers)
+
+- src/geodesics/lensing_bands.jl and src/outputs/interferometry.jl are ported
+  from AART (https://github.com/iAART/aart), used under the MIT License.
+  The upstream copyright notice reads:
+
+      Copyright 2024 Alejandro Cardenas-Avendano, Hengrui Zhu & Alex Lupsasca
+
+  The corresponding method paper is Cárdenas-Avendaño, Lupsasca & Zhu 2023,
+  PRD 107, 043030; its author order and accented spellings differ from the
+  copyright line above, which is reproduced verbatim.
+
+
+ALGORITHM-LEVEL REIMPLEMENTATIONS (no source code copied)
+
+- The Monte Carlo module follows the grmonty scheme (Dolence et al. 2009,
+  ApJS 184, 387). Samplers in src/montecarlo/ are clean-room reimplementations
+  of published algorithms also used by gpumonty/grmonty, which are distributed
+  under the GPL; no GPL source was copied or consulted.
+
+- The polarized-transfer stiffness diagnostic in src/gpu_pol.jl re-derives the
+  transfer-matrix eigenvalue analysis used by RAPTOR (Bronzwaer et al. 2018,
+  A&A 613, A2), which is distributed under the GPL; no GPL source was copied
+  or consulted.
+
+
+CONVENTIONS AND VALIDATION TARGETS (no code relationship)
+
+Conventions are followed, and outputs compared against, the published codes
+below. No code from any of them is reused.
+
+- Blacklight — White 2022, ApJS 262, 28
+- ipole — Mościbrodzka & Gammie 2018, MNRAS 475, 43
+- AthenaK — Stone et al. 2026, ApJS 283, 27; numerical-relativity solver
+  described in Zhu et al. 2025, ApJS 278, 50
+
+Full bibliographic entries with DOIs are in docs/references.bib.

@@ -1,0 +1,23 @@
+# generated outputs of the figure generators and the benchmarks
+out/
+figures/out/
+figures/*/out/
+bench/results/
+*.npy
+*.npz
+*.png
+*.gif
+*.pdf
+
+# environment
+Manifest.toml
+LocalPreferences.toml
+.CondaPkg/
+docs/build/
+docs/Manifest.toml
+
+# editors / OS
+*.cov
+.vscode/
+.DS_Store
+__pycache__/
