@@ -195,7 +195,7 @@ for a plan without parameters). Binning:
 which takes inclination bands only), `n_ebins` log-frequency bins over
 `[spec_nu_min, spec_nu_max]`.
 
-Scattering runs as a cascade over chunks of primaries ([`foreach_cascade!`](@ref)):
+Scattering runs as a cascade over chunks of primaries ([`Execution.foreach_cascade!`](@ref)):
 within a chunk, each layer's children are tracked by the next layer, up to `max_scatt`
 layers, and stay on the worker that runs the chunk. On devices a layer starts with a
 child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries);
