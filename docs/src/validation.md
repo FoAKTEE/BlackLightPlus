@@ -60,10 +60,19 @@ ${\rm NMSE}$ $7.9\times10^{-4}$ (the Mahakala setup, $256^2$, $R_{\rm high} = 10
 $5.7\times10^{-3}$ (the KPolaris setup, $i = 60^\circ$, 230 GHz), with the flux within 0.35%;
 the residual is unchanged under step refinement and under sub-pixel shifts or rescaling
 of either image, so it is a sampling and plasma-decode difference between the codes, not
-integration or registration. $Q$ and $U$ agree where Faraday effects are weak (NMSE 0.04 at
-1 THz) and diverge with the Faraday depth. Stokes $V$ differs by a factor 2–7 at every
-frequency; the package's $V$ agrees with RAPTOR, so the circular-polarization coefficient
-or convention of one of the two codes is an open item.
+integration or registration. Against the released Blacklight, $Q$ and $U$ agreed only where Faraday effects are weak
+and Stokes $V$ differed by a factor 2–7 at every frequency. The cause is in Blacklight: its
+unsplit polarized coupling (`polarized.cpp`, the path taken when absorption and rotation
+coexist) writes the $(U,V)$ entries of the Landi Degl'Innocenti matrices $M_2$ and $M_3$
+into the $(Q,U)$ slot, so the $U \leftrightarrow V$ coupling of Faraday conversion is lost;
+upstream master carries the same lines. Both codes evaluate the same coefficient fits,
+thresholds, pitch-angle sign and transfer matrix, and the package's segment operator
+equals $\exp(-K\,ds)$ to $1.6\times10^{-10}$ on 4000 random admissible coefficient sets.
+With the two indices corrected in Blacklight and nothing else, the images agree: at
+230 GHz NMSE$(V)$ falls from 52 to 0.041 (correlation 0.13 to 0.98) and NMSE$(Q,U)$ from
+0.37/0.31 to 0.012/0.011, at 1 THz NMSE$(V)$ from 4.6 to 0.076, with $I$ unchanged. The
+patch, the builds and the statistics are under `results/blp/stokes_v/` on the `blp`
+branch.
 
 ## Published figures
 

@@ -95,8 +95,9 @@ The measured record is in the documentation (`docs/src/validation.md`,
 - Against RAPTOR: the Gold et al. (2020) test problems T1–T5 agree to NMSE 2.5e-13 in
   intensity, and the images of a binary GRMHD snapshot agree in flux to 5.2e-4.
 - Against Blacklight (C++): intensity images of one torus snapshot agree to NMSE 7.9e-4 to
-  5.7e-3; Stokes V differs by a factor of 2 to 7, an open item recorded in the validation
-  page.
+  5.7e-3. The released Blacklight disagrees in Stokes V by a factor of 2 to 7 because its
+  polarized coupling misplaces two matrix entries; with those corrected, V agrees to
+  NMSE 0.04 (validation page).
 - Speed, on the machine named in the verification record: one A100 traces 1.24e6 Stokes-I
   rays per second against 1.69e5 on 128 CPU threads; two A100s give results bitwise equal
   to one.
