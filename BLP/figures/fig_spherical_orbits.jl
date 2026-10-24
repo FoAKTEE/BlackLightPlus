@@ -10,14 +10,20 @@
 # with the adaptive Vern7 solve (`trace_geodesic`, reltol 1e-12, abstol 1e-14) over the same
 # span. The orbits are unstable: |r - r0| grows by e every 1.5-2.2 M from the truncation and
 # round-off seed, and the record holds the lambda at which it first exceeds each of DEPART.
+# The convergence sweep repeats the RK4 march from the same initial state at the steps
+# CONV_STEPS = 1/4 ... 1/1024 M over the same span, up to the first |r - r0| > 1e-2 M, and
+# records max |g^{mu nu} p_mu p_nu| on the sphere and the departure lambda; its 1/1024 row
+# reproduces the reference march.
 # Writes to BLP/figures/out/spherical_orbits/:
-#   traj_<L>.npy   [lambda x y z r-r0] every SUB-th RK4 step (start and final state included)
-#   diag_<L>.npy   [lambda, r - r0, g^{mu nu} p_mu p_nu, L_z - Phi] every DSUB-th RK4 step
-#   vern7_<L>.npy  [lambda, r - r0, g^{mu nu} p_mu p_nu] at every accepted Vern7 step
-#   record.json    orbit parameters, initial-data residuals, departure lambdas, code SHA,
-#                  Julia threads and wall time
+#   traj_<L>.npy       [lambda x y z r-r0] every SUB-th RK4 step (start and final state included)
+#   diag_<L>.npy       [lambda, r - r0, g^{mu nu} p_mu p_nu, L_z - Phi] every DSUB-th RK4 step
+#   vern7_<L>.npy      [lambda, r - r0, g^{mu nu} p_mu p_nu] at every accepted Vern7 step
+#   convergence.npy    [orbit index 1-4, dlambda, max |g^{mu nu} p_mu p_nu| on the sphere,
+#                      departure lambda] for every orbit and step of CONV_STEPS
+#   record.json        orbit parameters, initial-data residuals, departure lambdas, the
+#                      convergence sweep, code SHA, Julia threads and wall time
 # Run from the repository root: julia -t 32 --project=BLP BLP/figures/fig_spherical_orbits.jl
-# (plot: paper/scripts/plot_spherical_orbits.py with BLP_FIG_REPO=<repository>/BLP)
+# (plot: paper/scripts/plot_spherical_orbits.py and paper/scripts/plot_spherical_convergence.py)
 using LinearAlgebra
 using Printf
 using StaticArrays
@@ -42,6 +48,8 @@ const DSUB = 16
 const CAPTURE_EPS = 1e-3
 const ESCAPE_R = 50.0
 const DEPART = (1e-6, 1e-3, 1e-2, 1e-1)
+const ON_SPHERE = 1e-2
+const CONV_STEPS = [2.0^-k for k in 2:10]
 const ORBITS = (("A", 1.8, "1.8", 2^16), ("C", 1 + sqrt(2), "1+sqrt(2)", 2^16),
                 ("E", 3.0, "3", 2^17), ("F", 1 + 2 * sqrt(2), "1+2sqrt(2)", 2^17))
 
@@ -86,11 +94,24 @@ function march_rk4(st, y0, r0, Φ, nstep)
             break
         end
     end
-    on = λs .< first_exceed(λs, drs, 1e-2)          # still on the sphere (|r - r0| <= 1e-2 M)
+    on = λs .< first_exceed(λs, drs, ON_SPHERE)     # still on the sphere (|r - r0| <= 1e-2 M)
     stats = Dict{String,Any}("steps" => n, "lambda_end" => λ, "end" => stop,
         "depart_lambda" => Dict(string(t) => first_exceed(λs, drs, t) for t in DEPART),
         "max_abs_null_on_sphere" => maximum(abs, kks[on]))
     return reduce(vcat, [collect(t)' for t in traj]), reduce(vcat, [collect(t)' for t in diag]), stats
+end
+
+# max |g^{mu nu} p_mu p_nu| over the RK4 states at step h before the first |r - r0| > ON_SPHERE,
+# and the lambda of that first state (Inf if the orbit holds its sphere over the span)
+function sweep_rk4(st, y0, r0, h, span)
+    y = y0
+    m = abs(null_error(st, y0))
+    for n in 1:round(Int, span / h)
+        y = rk4_step(st, y, h)
+        abs(ks_radius(st, pos(y)) - r0) > ON_SPHERE && return m, n * h
+        m = max(m, abs(null_error(st, y)))
+    end
+    return m, Inf
 end
 
 function march_vern7(st, y0, r0, nstep)
@@ -123,11 +144,17 @@ function main()
     mkpath(OUT)
     st = KerrSchildCartesian(SPIN)
     orbits = Dict{String,Any}[]
-    for (lab, r0, r0_str, nstep) in ORBITS
+    conv = Matrix{Float64}(undef, 0, 4)
+    for (io, (lab, r0, r0_str, nstep)) in enumerate(ORBITS)
         y0, Φ, Q = initial_state(st, r0)
         k0 = inverse_metric(st, pos(y0)) * SVector(y0[5], y0[6], y0[7], y0[8])
         traj, diag, rk = march_rk4(st, y0, r0, Φ, nstep)
         vd, vr = march_vern7(st, y0, r0, nstep)
+        sw = [sweep_rk4(st, y0, r0, h, nstep * H) for h in CONV_STEPS]
+        conv = vcat(conv, hcat(fill(Float64(io), length(sw)), CONV_STEPS, first.(sw), last.(sw)))
+        kref = findfirst(==(H), CONV_STEPS)
+        sw[kref] == (rk["max_abs_null_on_sphere"], rk["depart_lambda"][string(ON_SPHERE)]) ||
+            error("orbit $lab: the sweep at dlambda = $H does not reproduce the reference march")
         write_npy(joinpath(OUT, "traj_$(lab).npy"), traj)
         write_npy(joinpath(OUT, "diag_$(lab).npy"), diag)
         write_npy(joinpath(OUT, "vern7_$(lab).npy"), vd)
@@ -138,16 +165,22 @@ function main()
                 dep(rk), rk["end"], rk["lambda_end"], rk["steps"], rk["max_abs_null_on_sphere"])
         @printf("   Vern7: |dr| > 1e-6/1e-3/1e-2/1e-1 at lambda %s; %s at lambda %.2f (%d steps)\n",
                 dep(vr), vr["end"], vr["lambda_end"], vr["steps"])
+        @printf("   sweep dlambda = 1/4 ... 1/1024: max|kk| on sphere %s; |dr| > 1e-2 at lambda %s\n",
+                join([@sprintf("%.1e", m) for (m, _) in sw], " "),
+                join([@sprintf("%.2f", λd) for (_, λd) in sw], " "))
         push!(orbits, Dict{String,Any}(
             "label" => lab, "r0" => r0, "r0_exact" => r0_str, "Phi" => Φ, "Q" => Q,
             "nstep" => nstep, "equatorial_radius_cks" => sqrt(r0^2 + SPIN^2),
             "initial_state" => collect(y0), "initial_null_error" => null_error(st, y0),
-            "initial_dxdlambda" => k0[2], "rk4" => rk, "vern7" => vr))
+            "initial_dxdlambda" => k0[2], "rk4" => rk, "vern7" => vr,
+            "convergence" => Dict{String,Any}("step" => CONV_STEPS,
+                "max_abs_null_on_sphere" => first.(sw), "depart_lambda" => last.(sw))))
     end
+    write_npy(joinpath(OUT, "convergence.npy"), conv)
     wall = time() - t0
     rec = Dict{String,Any}(
         "spin" => SPIN, "step" => H, "capture_eps" => CAPTURE_EPS, "escape_r" => ESCAPE_R,
-        "traj_every" => SUB, "diag_every" => DSUB,
+        "traj_every" => SUB, "diag_every" => DSUB, "on_sphere" => ON_SPHERE,
         "integrator" => "BLP.Spacetime.rk4_step (fixed step); cross-check trace_geodesic Vern7 reltol 1e-12 abstol 1e-14",
         "reference" => "GRay2 arXiv:1706.07062 Table 1 (A, C, E, F); Mahakala arXiv:2304.03804 Fig. 6",
         "git_sha" => GIT_SHA, "threads" => Threads.nthreads(), "wall_seconds" => wall,
