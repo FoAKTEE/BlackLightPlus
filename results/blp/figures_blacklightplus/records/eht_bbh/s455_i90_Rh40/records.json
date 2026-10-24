@@ -1,59 +1,24 @@
 {
-  "B_unit_G": 190.5384627,
-  "Ne_unit_cc": 1920814.777,
-  "backend": "CPU: camera_rays -> trace_rays_sampled(::SuperposedKerrSchild) -> Radiation.polarized_march (threaded over rays)",
+  "B_unit_G": 190.4696873,
+  "Ne_unit_cc": 1919428.381,
+  "backend": "cpu: render(plan; backend = :cpu), fused polarized march on Julia threads; ray classes and march lengths from shadow(plan); Stokes I ladders from variants (every pixel) and the Stokes I imaging program over a CoordList (pixel sub-lattices)",
   "calibration": {
     "inclination_deg": 17,
-    "ladders": [
-      {
-        "flux_Jy": [
-          3.038177657e-14,
-          1.337258104e-10,
-          1.60439513e-07,
-          7.245402554e-05,
-          0.01536225235,
-          1.670745035,
-          30.16077016,
-          260.3140731,
-          543.1577385
-        ],
-        "mass_scale": [
-          3e+23,
-          3e+24,
-          3e+25,
-          3e+26,
-          3e+27,
-          3e+28,
-          3e+29,
-          3e+30,
-          3e+31
-        ],
-        "stride": 4
-      },
-      {
-        "flux_Jy": [
-          0.4278475477,
-          0.6740017877,
-          1.049276252,
-          1.609826813,
-          2.425959456
-        ],
-        "mass_scale": [
-          1.471164921e+28,
-          1.852086904e+28,
-          2.331639268e+28,
-          2.935359926e+28,
-          3.695399204e+28
-        ],
-        "stride": 1
-      }
-    ],
+    "ladders": [{
+  "flux_Jy": [2.345283153e-14, 1.168328991e-10, 1.518089637e-07, 7.083179584e-05, 0.01518878693, 1.681516404, 30.12195212, 260.3738353, 543.6511864],
+  "mass_scale": [3e+23, 3e+24, 3e+25, 3e+26, 3e+27, 3e+28, 3e+29, 3e+30, 3e+31],
+  "stride": 4
+}, {
+  "flux_Jy": [0.4272628088, 0.6725333024, 1.046239678, 1.604309327, 2.416914409],
+  "mass_scale": [1.467944327e+28, 1.848032416e+28, 2.32653497e+28, 2.928933996e+28, 3.687309437e+28],
+  "stride": 1
+}],
     "monotonic": true,
     "own": false,
     "polarized_secant": null,
-    "slope_dlnF_dlnms": 1.922287951,
+    "slope_dlnF_dlnms": 1.919173916,
     "target_Jy": 1,
-    "wall_s": 9.146500111
+    "wall_s": 32.70477104
   },
   "camera": {
     "C": 80,
@@ -64,146 +29,37 @@
     "max_steps": 4000,
     "observer_azimuth": "simulation +x axis (phi_o = 0)",
     "orientation": "beta (north, up) = projected +z (orbital L); alpha = +y = west (right); east = -alpha",
-    "px_M": 0.1166666667,
-    "px_uas": 0.8911253723,
-    "res": 480
+    "px_M": 0.05833333333,
+    "px_uas": 0.4455626861,
+    "res": 960
   },
-  "dens_unit_gcc": 3.214504544e-18,
+  "dens_unit_gcc": 3.212184394e-18,
   "diagnostics": {
-    "frac_flux_outside_fov": 0.001334574419,
-    "frac_flux_within_r2": 0.2559541609,
-    "unpol_flux_stride2_Jy": 2.280290482,
-    "unpol_flux_stride2_mask_r2_Jy": 1.696640645,
-    "wide_flux_Jy": 2.167891976,
+    "frac_flux_outside_fov": 0.001333801129,
+    "frac_flux_within_r2": 0.2664786013,
+    "unpol_flux_stride2_Jy": 2.294408568,
+    "unpol_flux_stride2_mask_r2_Jy": 1.682997782,
+    "wide_flux_Jy": 2.165053979,
     "wide_fov_M": 224,
-    "wide_inner_flux_Jy": 2.164998763,
+    "wide_inner_flux_Jy": 2.162166227,
     "wide_res": 96
   },
-  "dir": "/data/haiyangw/claude/BlackLightPlus/figures/out/eht_bbh/s455_i90_Rh40",
-  "flux_Jy": 2.165980936,
-  "frequency_hz": 230000000000.0,
-  "git_sha": "bb85b213b9e757fb8ce4e314b4c451626e387c5b",
+  "dir": "/data/haiyangw/claude/BlackLightPlus/figures/paper/out/eht_bbh/s455_i90_Rh40",
+  "flux_Jy": 2.164963979,
+  "frequency_hz": 2.3e+11,
+  "git_sha": "044b689d1818275c5eccaa46da823172a43a0930",
   "host_cpus": 144,
   "julia": "1.12.6",
-  "mass_scale_g": 2.274019497e+28,
+  "mass_scale_g": 2.272378166e+28,
   "mdot_proxy": {
-    "code": [
-      0.1800613908,
-      0.1831127843
-    ],
-    "eddington_ratio_eta0.1": [
-      3.508619576e-06,
-      3.568078069e-06
-    ],
-    "g_per_s": [
-      6.394532128e+22,
-      6.502896468e+22
-    ],
-    "msun_per_yr": [
-      0.001014830936,
-      0.001032028673
-    ],
+    "code": [0.1800613908, 0.1831127843],
+    "eddington_ratio_eta0.1": [3.506087141e-06, 3.565502719e-06],
+    "g_per_s": [6.389916713e+22, 6.498202838e+22],
+    "msun_per_yr": [0.001014098456, 0.00103128378],
     "radius_M": 5
   },
-  "mean_samples": 909.9446701,
+  "mean_samples": 909.9304601,
   "metric": "static SuperposedKerrSchild (no puncture boost), masses [0.5, 0.5], a_used [0.0, 0.0], centres at phi0",
-  "metrics": {
-    "Tb_peak_blurred_K": 13276081251.746553,
-    "Tb_peak_native_K": 108259596552.62549,
-    "beta2_amp": 0.007326033461783335,
-    "beta2_arg_deg": -29.126843591431783,
-    "blur_fwhm_uas": 20.0,
-    "definition": "blurred 20 uas; beta_2 about the image centre over the full FOV, phi east of north",
-    "evpa_net_deg": -73.91204043611089,
-    "flux_blurred_Jy": 2.165910535451149,
-    "flux_native_Jy": 2.165980936,
-    "m_net": 0.011101428940138259,
-    "mabs_avg": 0.0319606670461146,
-    "native": {
-      "beta2_amp": 0.006224952116482429,
-      "beta2_arg_deg": -27.987654537305048,
-      "m_net": 0.011101465433890272,
-      "mabs_avg": 0.5582545042516561,
-      "v_net": -0.0003946448083834915
-    },
-    "rings": {
-      "centre_separation_M": 7.094124807,
-      "centres_M": [
-        [
-          -2.730364191,
-          5.124473982e-16
-        ],
-        [
-          4.363760616,
-          9.207072472e-16
-        ]
-      ],
-      "cut_half_length_M": 3.5470624035,
-      "cuts_pa_deg": [
-        0,
-        30,
-        60,
-        90,
-        120,
-        150
-      ],
-      "fc_disc_uas": 5.0,
-      "hole1": {
-        "blur10": {
-          "depression": true,
-          "diameter_M": 5.920833333333313,
-          "diameter_cut_spread_uas": 1.831088574503261,
-          "diameter_uas": 45.22461264507068,
-          "f_C": 0.07541221993288849,
-          "min_peak_offset_M": 2.672062403500003
-        },
-        "blur20": {
-          "depression": true,
-          "diameter_M": 5.366666666666648,
-          "diameter_cut_spread_uas": 7.44088203638473,
-          "diameter_uas": 40.99176712656652,
-          "f_C": 0.3440528751507115,
-          "min_peak_offset_M": 0.04706240350001245
-        },
-        "native": {
-          "depression": true,
-          "diameter_M": 5.804166666666646,
-          "diameter_cut_spread_uas": 0.9275126944066001,
-          "diameter_uas": 44.33348727275401,
-          "f_C": 0.030287733629354593,
-          "min_peak_offset_M": 2.7887290701666694
-        }
-      },
-      "hole2": {
-        "blur10": {
-          "depression": true,
-          "diameter_M": 6.1541666666666455,
-          "diameter_cut_spread_uas": 9.008805447209962,
-          "diameter_uas": 47.00686338970401,
-          "f_C": 0.005112691516419849,
-          "min_peak_offset_M": 0.011270929833320675
-        },
-        "blur20": {
-          "depression": true,
-          "diameter_M": 4.637499999999984,
-          "diameter_cut_spread_uas": 12.159907386051382,
-          "diameter_uas": 35.42223354958738,
-          "f_C": 0.2850115727972553,
-          "min_peak_offset_M": 0.011270929833320675
-        },
-        "native": {
-          "depression": true,
-          "diameter_M": 5.891666666666646,
-          "diameter_cut_spread_uas": 15.735506751027367,
-          "diameter_uas": 45.001831301991515,
-          "f_C": 2.1419548560551064e-12,
-          "min_peak_offset_M": 0.18627092983332005
-        }
-      },
-      "resolved_pair": false
-    },
-    "v_net": -0.00039471014429479225
-  },
   "name": "s455_i90_Rh40",
   "plasma": {
     "R_high": 40,
@@ -216,129 +72,53 @@
     "ne_ni": 1,
     "sigma_cut": 1
   },
-  "pol_wall_s": 10.78072405,
-  "projected_holes_M": [
-    [
-      -2.761245515,
-      0
-    ],
-    [
-      2.761245515,
-      0
-    ]
-  ],
-  "ray_classes_cap1_cap2_esc_nmax_nonfinite": [
-    1858,
-    2512,
-    226030,
-    0,
-    0
-  ],
+  "pol_wall_s": 34.12715101,
+  "projected_holes_M": [[-2.761245515, 0], [2.761245515, 0]],
+  "ray_classes_cap1_cap2_esc_nmax_nonfinite": [7426, 10064, 904110, 0, 0],
   "scaling": {
     "D_Mpc": 16.8,
-    "L_unit_cm": 1919670598000000.0,
-    "M_sun": 13000000000.0,
+    "L_unit_cm": 1.919670598e+15,
+    "M_sun": 1.3e+10,
     "m_hole_Msun": 6500000000,
     "t_g_hours": 17.78703295,
     "theta_g_uas": 7.638217477
   },
   "shadow_check": {
     "hole1": {
-      "area_M2": 25.28944444,
-      "centroid_M": [
-        -2.730364191,
-        5.124473982e-16
-      ],
-      "npix": 1858,
-      "offset_M": 0.03088132367,
-      "projected_M": [
-        -2.761245515,
-        0
-      ]
+      "area_M2": 25.26902778,
+      "centroid_M": [-2.719915387, 1.186470499e-15],
+      "npix": 7426,
+      "offset_M": 0.04133012718,
+      "projected_M": [-2.761245515, 0]
     },
     "hole2": {
-      "area_M2": 34.19111111,
-      "centroid_M": [
-        4.363760616,
-        9.207072472e-16
-      ],
-      "npix": 2512,
-      "offset_M": 1.602515101,
-      "projected_M": [
-        2.761245515,
-        0
-      ]
+      "area_M2": 34.24555556,
+      "centroid_M": [4.369180578, 8.560543195e-16],
+      "npix": 10064,
+      "offset_M": 1.607935063,
+      "projected_M": [2.761245515, 0]
     }
   },
   "snapshot": {
     "Omega": 0.008,
-    "a_header": [
-      0,
-      0
-    ],
-    "a_used": [
-      0,
-      0
-    ],
-    "centers": [
-      [
-        12.1912068,
-        -2.761245515,
-        0
-      ],
-      [
-        -12.1912068,
-        2.761245515,
-        0
-      ]
-    ],
+    "a_header": [0, 0],
+    "a_used": [0, 0],
+    "centers": [[12.1912068, -2.761245515, 0], [-12.1912068, 2.761245515, 0]],
     "dfloor": 1e-10,
-    "excise_rad": [
-      4,
-      4
-    ],
+    "excise_rad": [4, 4],
     "file": "/data2/haiyangw/aurora/cbd_rel/zoom_in_mad/SANE_stage2_horizon_zero_spin/torus.mhd_w_bcc.00455.bin",
     "gamma": 1.444444444,
-    "load_s": 3.847575903,
-    "masses": [
-      0.5,
-      0.5
-    ],
-    "mdot_code_r5": [
-      0.1800613908,
-      0.1831127843
-    ],
+    "load_s": 5.269026041,
+    "masses": [0.5, 0.5],
+    "mdot_code_r5": [0.1800613908, 0.1831127843],
     "nmb": 512,
     "period_M": 785.3981634,
     "phi0_rad": -0.2227368026,
-    "puncture_velocity": [
-      [
-        0.02208996412,
-        0.09752965439,
-        0
-      ],
-      [
-        -0.02208996412,
-        -0.09752965439,
-        0
-      ]
-    ],
+    "puncture_velocity": [[0.02208996412, 0.09752965439, 0], [-0.02208996412, -0.09752965439, 0]],
     "q": 1,
     "sep_M": 25,
-    "spin_dirs_th_ph": [
-      [
-        0,
-        0
-      ],
-      [
-        0,
-        0
-      ]
-    ],
-    "spin_mapping": [
-      "a = 0",
-      "a = 0"
-    ],
+    "spin_dirs_th_ph": [[0, 0], [0, 0]],
+    "spin_mapping": ["a = 0", "a = 0"],
     "tag": "s455",
     "time_M": 453146.8982,
     "time_days": 335839.1171,
@@ -346,18 +126,18 @@
     "time_source": "tlim (dump written at the run stop time; header time rounds it)"
   },
   "stats_native": {
-    "Imax_cgs": 0.001759518951,
+    "Imax_cgs": 0.00169226019,
     "finite": true,
-    "flux_Jy": 2.165980936,
-    "flux_Q_Jy": -0.02035249497,
-    "flux_U_Jy": -0.01280488282,
-    "flux_V_Jy": -0.0008547931313,
-    "m_net_native": 0.01110146543,
-    "mabs_avg_native": 0.5582545043,
+    "flux_Jy": 2.164963979,
+    "flux_Q_Jy": 0.005435303811,
+    "flux_U_Jy": 0.003143920003,
+    "flux_V_Jy": -0.0001710369842,
+    "m_net_native": 0.002900313021,
+    "mabs_avg_native": 0.5581024318,
     "nonfinite_pixels": 0,
-    "v_net_native": -0.0003946448084
+    "v_net_native": -7.900223089e-05
   },
   "threads": 64,
-  "trace_wall_s": 23.54637313,
-  "when": "2026-09-25T20:14:34.693"
+  "trace_wall_s": 9.528331397,
+  "when": "2026-10-24T13:35:42.130"
 }
