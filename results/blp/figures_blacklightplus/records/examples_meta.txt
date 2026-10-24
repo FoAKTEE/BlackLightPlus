@@ -1,0 +1,4 @@
+git=bb85b213b9e757fb8ce4e314b4c451626e387c5b
+analytic_disk: a=0.94 tracer=analytic inc=17 dist=1e4 fov=20 res=256 bands=0,1,2 source=EquatorialDisk
+analytic_disk_I.npy axes: [beta, alpha] (axis 0 = beta, axis 1 = alpha)
+torus: PolishDoughnut a=0.94 r_center=9 n_e=5e5 theta_e=40 beta=8 inc=60.0 dist=1000.0 fov=28.96 res=128 nu=2.3e11

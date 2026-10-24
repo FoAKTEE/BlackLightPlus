@@ -1,0 +1,363 @@
+{
+  "B_unit_G": 0.01896505017,
+  "Ne_unit_cc": 0.01902953457,
+  "backend": "CPU: camera_rays -> trace_rays_sampled(::SuperposedKerrSchild) -> Radiation.polarized_march (threaded over rays)",
+  "calibration": {
+    "inclination_deg": 17,
+    "ladders": [
+      {
+        "flux_Jy": [
+          7.684654254e-06,
+          0.0002592673863,
+          0.008637547987,
+          0.2880468545,
+          9.731076258,
+          259.0831894,
+          1593.413422,
+          271.6364484,
+          101.8361182
+        ],
+        "mass_scale": [
+          1e+17,
+          1e+18,
+          1e+19,
+          1e+20,
+          1e+21,
+          1e+22,
+          1e+23,
+          1e+24,
+          1e+25
+        ],
+        "stride": 4
+      },
+      {
+        "flux_Jy": [
+          0.4964342231,
+          0.7055797773,
+          1.003016079,
+          1.426066577,
+          2.027810593
+        ],
+        "mass_scale": [
+          1.424272301e+20,
+          1.793052593e+20,
+          2.257319475e+20,
+          2.841796849e+20,
+          3.577610268e+20
+        ],
+        "stride": 1
+      }
+    ],
+    "monotonic": true,
+    "own": false,
+    "polarized_secant": null,
+    "slope_dlnF_dlnms": 1.527617701,
+    "target_Jy": 1,
+    "wall_s": 7.861700058
+  },
+  "camera": {
+    "C": 80,
+    "distance_M": 1000,
+    "fov_M": 56,
+    "fov_uas": 427.7401787,
+    "inclination_deg": 90,
+    "max_steps": 4000,
+    "observer_azimuth": "simulation +x axis (phi_o = 0)",
+    "orientation": "beta (north, up) = projected +z (orbital L); alpha = +y = west (right); east = -alpha",
+    "px_M": 0.1166666667,
+    "px_uas": 0.8911253723,
+    "res": 480
+  },
+  "dens_unit_gcc": 3.184613428e-26,
+  "diagnostics": {
+    "frac_flux_outside_fov": 0.4627527845,
+    "frac_flux_within_r2": 0.03905333524,
+    "unpol_flux_stride2_Jy": 0.6952210178,
+    "unpol_flux_stride2_mask_r2_Jy": 0.6680703183,
+    "wide_flux_Jy": 1.279700124,
+    "wide_fov_M": 224,
+    "wide_inner_flux_Jy": 0.6875153281,
+    "wide_res": 96
+  },
+  "dir": "/data/haiyangw/claude/BlackLightPlus/figures/out/eht_bbh/s093_i90_Rh40",
+  "flux_Jy": 0.6949638398,
+  "frequency_hz": 230000000000.0,
+  "git_sha": "bb85b213b9e757fb8ce4e314b4c451626e387c5b",
+  "host_cpus": 144,
+  "julia": "1.12.6",
+  "mass_scale_g": 2.252873787e+20,
+  "mdot_proxy": {
+    "code": [
+      1975125.889,
+      2093403.35
+    ],
+    "eddington_ratio_eta0.1": [
+      3.812880038e-07,
+      4.041208658e-07
+    ],
+    "g_per_s": [
+      6.949053146e+21,
+      7.365186803e+21
+    ],
+    "msun_per_yr": [
+      0.0001102835042,
+      0.0001168876669
+    ],
+    "radius_M": 5
+  },
+  "mean_samples": 877.4252865,
+  "metric": "static SuperposedKerrSchild (no puncture boost), masses [0.5, 0.5], a_used [0.4, 0.4], centres at phi0",
+  "metrics": {
+    "Tb_peak_blurred_K": 898928772.4674041,
+    "Tb_peak_native_K": 6340578382.158748,
+    "beta2_amp": 0.019557033118954615,
+    "beta2_arg_deg": 130.76735475476792,
+    "blur_fwhm_uas": 20.0,
+    "definition": "blurred 20 uas; beta_2 about the image centre over the full FOV, phi east of north",
+    "evpa_net_deg": -26.327038407631616,
+    "flux_blurred_Jy": 0.6854073687856018,
+    "flux_native_Jy": 0.6949638398,
+    "m_net": 0.03526766424800135,
+    "mabs_avg": 0.2998488227048681,
+    "native": {
+      "beta2_amp": 0.01907355560500093,
+      "beta2_arg_deg": 134.75683806029065,
+      "m_net": 0.03632870995587372,
+      "mabs_avg": 0.41385586626387977,
+      "v_net": -0.00020137343163794796
+    },
+    "rings": {
+      "centre_separation_M": 15.421786069,
+      "centres_M": [
+        [
+          9.566168091,
+          5.856121449e-16
+        ],
+        [
+          -5.855617978,
+          5.109520796e-16
+        ]
+      ],
+      "cut_half_length_M": 7.7108930345,
+      "cuts_pa_deg": [
+        0,
+        30,
+        60,
+        90,
+        120,
+        150
+      ],
+      "fc_disc_uas": 5.0,
+      "hole1": {
+        "blur10": {
+          "depression": false,
+          "diameter_M": 1.63333333333334,
+          "diameter_cut_spread_uas": 13.758238575240878,
+          "diameter_uas": 12.475755212433384,
+          "f_C": 0.9928103330779675,
+          "min_peak_offset_M": 0.01089303449996848
+        },
+        "blur20": {
+          "depression": false,
+          "diameter_M": 1.370833333333339,
+          "diameter_cut_spread_uas": 4.2321940609368776,
+          "diameter_uas": 10.470723124720877,
+          "f_C": 1.007414871480182,
+          "min_peak_offset_M": 0.01089303449996848
+        },
+        "native": {
+          "depression": false,
+          "diameter_M": 3.091666666666679,
+          "diameter_cut_spread_uas": 10.041374609600137,
+          "diameter_uas": 23.614822366391763,
+          "f_C": 0.7759828866851209,
+          "min_peak_offset_M": 0.16410696550003223
+        }
+      },
+      "hole2": {
+        "blur10": {
+          "depression": false,
+          "diameter_M": 3.237500000000013,
+          "diameter_cut_spread_uas": 20.56585415151486,
+          "diameter_uas": 24.728729081787602,
+          "f_C": 1.0682152872907358,
+          "min_peak_offset_M": 0.01089303449996848
+        },
+        "blur20": {
+          "depression": false,
+          "diameter_M": 2.6541666666666774,
+          "diameter_cut_spread_uas": 7.7116534130836145,
+          "diameter_uas": 20.27310222020425,
+          "f_C": 0.9444038729094266,
+          "min_peak_offset_M": 0.01089303449996848
+        },
+        "native": {
+          "depression": true,
+          "diameter_M": 5.541666666666689,
+          "diameter_cut_spread_uas": 16.8623550305288,
+          "diameter_uas": 42.32845518504184,
+          "f_C": 0.9338306088593509,
+          "min_peak_offset_M": 0.1858930344999692
+        }
+      },
+      "resolved_pair": true
+    },
+    "v_net": -0.00019983280817826524
+  },
+  "name": "s093_i90_Rh40",
+  "plasma": {
+    "R_high": 40,
+    "R_low": 1,
+    "Te_split": "total pressure (use_p)",
+    "beta_crit": 1,
+    "edf": "thermal",
+    "gamma": 1.444444444,
+    "mu": 0.5,
+    "ne_ni": 1,
+    "sigma_cut": 1
+  },
+  "pol_wall_s": 11.23635888,
+  "projected_holes_M": [
+    [
+      6.895778839,
+      0
+    ],
+    [
+      -6.895778839,
+      0
+    ]
+  ],
+  "ray_classes_cap1_cap2_esc_nmax_nonfinite": [
+    1638,
+    1780,
+    226982,
+    0,
+    0
+  ],
+  "scaling": {
+    "D_Mpc": 16.8,
+    "L_unit_cm": 1919670598000000.0,
+    "M_sun": 13000000000.0,
+    "m_hole_Msun": 6500000000,
+    "t_g_hours": 17.78703295,
+    "theta_g_uas": 7.638217477
+  },
+  "shadow_check": {
+    "hole1": {
+      "area_M2": 22.295,
+      "centroid_M": [
+        9.566168091,
+        5.856121449e-16
+      ],
+      "npix": 1638,
+      "offset_M": 2.670389253,
+      "projected_M": [
+        6.895778839,
+        0
+      ]
+    },
+    "hole2": {
+      "area_M2": 24.22777778,
+      "centroid_M": [
+        -5.855617978,
+        5.109520796e-16
+      ],
+      "npix": 1780,
+      "offset_M": 1.040160861,
+      "projected_M": [
+        -6.895778839,
+        0
+      ]
+    }
+  },
+  "snapshot": {
+    "Omega": 0.008,
+    "a_header": [
+      0.8,
+      0.8
+    ],
+    "a_used": [
+      0.4,
+      0.4
+    ],
+    "centers": [
+      [
+        -10.42584453,
+        6.895778839,
+        0
+      ],
+      [
+        10.42584453,
+        -6.895778839,
+        0
+      ]
+    ],
+    "dfloor": 10,
+    "excise_rad": [
+      0.78,
+      0.78
+    ],
+    "file": "/data2/haiyangw/aurora/cbd_rel/torus.mhd_w_bcc.00093.bin",
+    "gamma": 1.444444444,
+    "load_s": 21.14033008,
+    "masses": [
+      0.5,
+      0.5
+    ],
+    "mdot_code_r5": [
+      1975125.889,
+      2093403.35
+    ],
+    "nmb": 4096,
+    "period_M": 785.3981634,
+    "phi0_rad": 2.557236714,
+    "puncture_velocity": [
+      [
+        -0.05516623071,
+        -0.08340675626,
+        0
+      ],
+      [
+        0.05516623071,
+        0.08340675626,
+        0
+      ]
+    ],
+    "q": 1,
+    "sep_M": 25,
+    "spin_dirs_th_ph": [
+      [
+        0,
+        0
+      ],
+      [
+        0,
+        0
+      ]
+    ],
+    "spin_mapping": [
+      "a = 0.8 > m = 0.5 (superextremal in the simulation metric): imaged as chi = 0.8, a_used = 0.4",
+      "a = 0.8 > m = 0.5 (superextremal in the simulation metric): imaged as chi = 0.8, a_used = 0.4"
+    ],
+    "tag": "s093",
+    "time_M": 622355,
+    "time_days": 461243.7038,
+    "time_header_M": 622355,
+    "time_source": "header time (6 significant digits: +-0.5 M)"
+  },
+  "stats_native": {
+    "Imax_cgs": 0.0001030519989,
+    "finite": true,
+    "flux_Jy": 0.6949638398,
+    "flux_Q_Jy": 0.01471399548,
+    "flux_U_Jy": -0.0205162473,
+    "flux_V_Jy": -0.0001399472533,
+    "m_net_native": 0.03632870996,
+    "mabs_avg_native": 0.4138558663,
+    "nonfinite_pixels": 0,
+    "v_net_native": -0.0002013734316
+  },
+  "threads": 64,
+  "trace_wall_s": 4.960318089,
+  "when": "2026-09-25T20:16:01.237"
+}

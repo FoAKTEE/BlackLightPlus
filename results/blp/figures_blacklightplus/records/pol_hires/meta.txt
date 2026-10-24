@@ -1,0 +1,3 @@
+60
+res=384 backend=cpu-polarized-march LP=0.5179
+git=bb85b213b9e757fb8ce4e314b4c451626e387c5b
