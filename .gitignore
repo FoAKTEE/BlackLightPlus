@@ -25,9 +25,9 @@ __pycache__/
 
 # local working directories of this clone: mirrors, the manuscript repository, the
 # workflow files and the previous layout's leftovers (all kept on the blp branch)
-ref-code/
-ref-paper/
-paper/
+/ref-code/
+/ref-paper/
+/paper/
 Chandra/
 progress/
 results/
