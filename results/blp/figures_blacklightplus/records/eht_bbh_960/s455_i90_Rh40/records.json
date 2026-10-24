@@ -1,0 +1,143 @@
+{
+  "B_unit_G": 190.4696873,
+  "Ne_unit_cc": 1919428.381,
+  "backend": "cpu: render(plan; backend = :cpu), fused polarized march on Julia threads; ray classes and march lengths from shadow(plan); Stokes I ladders from variants (every pixel) and the Stokes I imaging program over a CoordList (pixel sub-lattices)",
+  "calibration": {
+    "inclination_deg": 17,
+    "ladders": [{
+  "flux_Jy": [2.345283153e-14, 1.168328991e-10, 1.518089637e-07, 7.083179584e-05, 0.01518878693, 1.681516404, 30.12195212, 260.3738353, 543.6511864],
+  "mass_scale": [3e+23, 3e+24, 3e+25, 3e+26, 3e+27, 3e+28, 3e+29, 3e+30, 3e+31],
+  "stride": 4
+}, {
+  "flux_Jy": [0.4272628088, 0.6725333024, 1.046239678, 1.604309327, 2.416914409],
+  "mass_scale": [1.467944327e+28, 1.848032416e+28, 2.32653497e+28, 2.928933996e+28, 3.687309437e+28],
+  "stride": 1
+}],
+    "monotonic": true,
+    "own": false,
+    "polarized_secant": null,
+    "slope_dlnF_dlnms": 1.919173916,
+    "target_Jy": 1,
+    "wall_s": 32.70477104
+  },
+  "camera": {
+    "C": 80,
+    "distance_M": 1000,
+    "fov_M": 56,
+    "fov_uas": 427.7401787,
+    "inclination_deg": 90,
+    "max_steps": 4000,
+    "observer_azimuth": "simulation +x axis (phi_o = 0)",
+    "orientation": "beta (north, up) = projected +z (orbital L); alpha = +y = west (right); east = -alpha",
+    "px_M": 0.05833333333,
+    "px_uas": 0.4455626861,
+    "res": 960
+  },
+  "dens_unit_gcc": 3.212184394e-18,
+  "diagnostics": {
+    "frac_flux_outside_fov": 0.001333801129,
+    "frac_flux_within_r2": 0.2664786013,
+    "unpol_flux_stride2_Jy": 2.294408568,
+    "unpol_flux_stride2_mask_r2_Jy": 1.682997782,
+    "wide_flux_Jy": 2.165053979,
+    "wide_fov_M": 224,
+    "wide_inner_flux_Jy": 2.162166227,
+    "wide_res": 96
+  },
+  "dir": "/data/haiyangw/claude/BlackLightPlus/figures/paper/out/eht_bbh/s455_i90_Rh40",
+  "flux_Jy": 2.164963979,
+  "frequency_hz": 2.3e+11,
+  "git_sha": "044b689d1818275c5eccaa46da823172a43a0930",
+  "host_cpus": 144,
+  "julia": "1.12.6",
+  "mass_scale_g": 2.272378166e+28,
+  "mdot_proxy": {
+    "code": [0.1800613908, 0.1831127843],
+    "eddington_ratio_eta0.1": [3.506087141e-06, 3.565502719e-06],
+    "g_per_s": [6.389916713e+22, 6.498202838e+22],
+    "msun_per_yr": [0.001014098456, 0.00103128378],
+    "radius_M": 5
+  },
+  "mean_samples": 909.9304601,
+  "metric": "static SuperposedKerrSchild (no puncture boost), masses [0.5, 0.5], a_used [0.0, 0.0], centres at phi0",
+  "name": "s455_i90_Rh40",
+  "plasma": {
+    "R_high": 40,
+    "R_low": 1,
+    "Te_split": "total pressure (use_p)",
+    "beta_crit": 1,
+    "edf": "thermal",
+    "gamma": 1.444444444,
+    "mu": 0.5,
+    "ne_ni": 1,
+    "sigma_cut": 1
+  },
+  "pol_wall_s": 34.12715101,
+  "projected_holes_M": [[-2.761245515, 0], [2.761245515, 0]],
+  "ray_classes_cap1_cap2_esc_nmax_nonfinite": [7426, 10064, 904110, 0, 0],
+  "scaling": {
+    "D_Mpc": 16.8,
+    "L_unit_cm": 1.919670598e+15,
+    "M_sun": 1.3e+10,
+    "m_hole_Msun": 6500000000,
+    "t_g_hours": 17.78703295,
+    "theta_g_uas": 7.638217477
+  },
+  "shadow_check": {
+    "hole1": {
+      "area_M2": 25.26902778,
+      "centroid_M": [-2.719915387, 1.186470499e-15],
+      "npix": 7426,
+      "offset_M": 0.04133012718,
+      "projected_M": [-2.761245515, 0]
+    },
+    "hole2": {
+      "area_M2": 34.24555556,
+      "centroid_M": [4.369180578, 8.560543195e-16],
+      "npix": 10064,
+      "offset_M": 1.607935063,
+      "projected_M": [2.761245515, 0]
+    }
+  },
+  "snapshot": {
+    "Omega": 0.008,
+    "a_header": [0, 0],
+    "a_used": [0, 0],
+    "centers": [[12.1912068, -2.761245515, 0], [-12.1912068, 2.761245515, 0]],
+    "dfloor": 1e-10,
+    "excise_rad": [4, 4],
+    "file": "/data2/haiyangw/aurora/cbd_rel/zoom_in_mad/SANE_stage2_horizon_zero_spin/torus.mhd_w_bcc.00455.bin",
+    "gamma": 1.444444444,
+    "load_s": 5.269026041,
+    "masses": [0.5, 0.5],
+    "mdot_code_r5": [0.1800613908, 0.1831127843],
+    "nmb": 512,
+    "period_M": 785.3981634,
+    "phi0_rad": -0.2227368026,
+    "puncture_velocity": [[0.02208996412, 0.09752965439, 0], [-0.02208996412, -0.09752965439, 0]],
+    "q": 1,
+    "sep_M": 25,
+    "spin_dirs_th_ph": [[0, 0], [0, 0]],
+    "spin_mapping": ["a = 0", "a = 0"],
+    "tag": "s455",
+    "time_M": 453146.8982,
+    "time_days": 335839.1171,
+    "time_header_M": 453147,
+    "time_source": "tlim (dump written at the run stop time; header time rounds it)"
+  },
+  "stats_native": {
+    "Imax_cgs": 0.00169226019,
+    "finite": true,
+    "flux_Jy": 2.164963979,
+    "flux_Q_Jy": 0.005435303811,
+    "flux_U_Jy": 0.003143920003,
+    "flux_V_Jy": -0.0001710369842,
+    "m_net_native": 0.002900313021,
+    "mabs_avg_native": 0.5581024318,
+    "nonfinite_pixels": 0,
+    "v_net_native": -7.900223089e-05
+  },
+  "threads": 64,
+  "trace_wall_s": 9.528331397,
+  "when": "2026-10-24T13:35:42.130"
+}
