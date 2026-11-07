@@ -7,6 +7,19 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `segment(::IQUV)` is exact in every case of the constant-coefficient transfer equation.
+  At the dichroism-cone boundary |α_P| = α_I without rotation (or with ρ ∥ α) it takes the
+  limit of the Landi Degl'Innocenti solution, in which the mode polarized against α̂ is
+  unabsorbed and gathers its emission linearly, where it returned the total-absorption
+  operator and dropped α_P; within a relative gap of 1e-6 of the poles of the closed form,
+  and for a thick segment whose slowest mode is still shallow, the eigenmode integrals are
+  evaluated through φ(z) = (1 - e^-z)/z. A segment with Faraday rotation and no absorption
+  rotates its emission integral, where it added j ds unrotated (first order in the step);
+  nilpotent coupling (|α_P| = |ρ_P|, α ⊥ ρ) takes its cubic exponential; a segment is
+  saturated only when its slowest mode is deeper than `dtau_max`. The projection of the
+  coefficients onto the physical cone stays the default; `segment(...; project = false)`
+  solves the equation for coefficients outside the cone too (the one-zone tests of Prather
+  et al. 2023).
 - The closed-form Kerr tracer gives no image of order n >= 1 to a ray whose four real radial
   roots all lie inside the outer horizon (Gralla-Lupsasca region II): its Mino-time budget
   ends at the horizon, where it counted a turning point at r4 and returned spurious n = 1, 2

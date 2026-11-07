@@ -1,8 +1,10 @@
 # Segment operators of constant-coefficient transfer: the physical limits of the
 # polarized coupling (Landi Degl'Innocenti 1985; ipole, blacklight StokesCoupleNoSplit),
-# agreement with dense matrix exponentials, the degenerate and saturated branches,
-# Stokes admissibility and the order independence it buys, the unpolarized operator,
-# and derivatives through the coupling.
+# agreement with dense matrix exponentials, the exact limits (dichroism-cone boundary,
+# nilpotent coupling, rotation without absorption, thick segments with a shallow mode)
+# against 256-bit solutions, the unprojected solver on the problems of Prather et al.
+# (2023), Stokes admissibility and the order independence it buys, the unpolarized
+# operator, and derivatives through the coupling.
 using Test, BlackLightPlus, StaticArrays, LinearAlgebra, ForwardDiff
 using BlackLightPlus.Transfer: StokesI, IQUV, segment, couple, stokes_admissible, POL_DELTA_TAU_MAX,
                     thermal_synchrotron_polarized
@@ -21,6 +23,41 @@ function thermal(n_e, theta_e, B, nu, sin_th)
     return SVector(c[1], c[2], 0.0, c[3]), SVector(c[4], c[5], 0.0, c[6]), SVector(0.0, c[7], 0.0, c[8])
 end
 forward(segs) = foldl((S, s) -> stokes_couple(S, s...), segs; init = ZERO4)
+
+# exp(A) in BigFloat by scaling and squaring of the Taylor series
+function bigexp(A::Matrix{BigFloat})
+    sq = max(0, ceil(Int, log2(Float64(maximum(sum(abs.(A), dims = 2))))) + 2)
+    B = A ./ BigFloat(2)^sq
+    E = Matrix{BigFloat}(I, size(A)...); t = copy(E)
+    for k in 1:300
+        t = t * B ./ k; E += t
+        maximum(abs.(t)) < BigFloat(10)^-75 && break
+    end
+    for _ in 1:sq
+        E = E * E
+    end
+    return E
+end
+# exact (M, b) = (e^{-K ds}, ∫₀^ds e^{-K s} ds j) from exp(ds [-K j; 0 0]) at 256 bits
+function exact_segment(j, α, ρ, ds)
+    setprecision(BigFloat, 256) do
+        a = BigFloat.(collect(α)); r = BigFloat.(collect(ρ))
+        K = [a[1] a[2] a[3] a[4]; a[2] a[1] r[4] -r[3]; a[3] -r[4] a[1] r[2]; a[4] r[3] -r[2] a[1]]
+        A = zeros(BigFloat, 5, 5); A[1:4, 1:4] = -K; A[1:4, 5] = BigFloat.(collect(j))
+        E = bigexp(A .* BigFloat(ds))
+        SMatrix{4,4}(Float64.(E[1:4, 1:4])), SVector{4}(Float64.(E[1:4, 5]))
+    end
+end
+close_to(x, y; rtol) = maximum(abs.(x .- y)) <= rtol * max(maximum(abs.(y)), 1e-300)
+# S(L) of n equal unprojected segments, S(0) = 0, without the admissibility clamp
+function chain_unprojected(j, α, ρ, L, n)
+    M, b = segment(IQUV(), j, α, ρ, L / n; project = false)
+    S = ZERO4
+    for _ in 1:n
+        S = M * S + b
+    end
+    return S
+end
 function reverse_chain(segs)
     S = ZERO4; G = one(SMatrix{4,4,Float64})
     for s in Iterators.reverse(segs)
@@ -105,15 +142,77 @@ end
         end
     end
 
-    @testset "α_P > α_I is rescaled onto the cone" begin
+    @testset "α_P > α_I is projected onto the cone boundary" begin
+        # the mode polarized against α̂ is unabsorbed at |α_P| = α_I: I - Q carries its
+        # initial value and gathers j_I - j_Q linearly, I + Q relaxes to (j_I + j_Q)/2α_I
         S = SVector(2.0, 0.3, 0.0, 0.1); j = SVector(0.5, 0.0, 0.0, 0.0); α = SVector(1.0, 1.5, 0.0, 0.0)
-        ceiling = max(S[1], j[1] / α[1])
-        for ds in (1.0, 5.0, 20.0, 100.0)
+        αb = SVector(1.0, 1.0, 0.0, 0.0)
+        for ds in (1.0, 5.0, 20.0, 100.0, 1e4)
+            M, b = segment(IQUV(), j, α, ZERO4, ds)
+            @test (M, b) == segment(IQUV(), j, αb, ZERO4, ds; project = false)
             out = stokes_couple(S, j, α, ZERO4, ds)
-            @test all(isfinite, out) && 0.0 <= out[1] <= ceiling * (1 + 1e-9)
-            @test norm(out[2:4]) <= out[1] * (1 + 1e-9)
+            @test all(isfinite, out) && norm(out[2:4]) <= out[1] * (1 + 1e-9)
+            @test out[1] - out[2] ≈ (S[1] - S[2]) + j[1] * ds rtol = 1e-12
+            @test isapprox(out[1] + out[2], (S[1] + S[2]) * exp(-2ds) + j[1] / 2 * (1 - exp(-2ds));
+                           atol = 1e-12 * out[1])
         end
-        @test stokes_couple(S, j, α, ZERO4, 1e4)[1] ≈ j[1] / α[1] rtol = 1e-6
+    end
+
+    @testset "exact limits against the 256-bit solution" begin
+        z = ZERO4
+        cases = [  # (j, α, ρ): name
+            (SVector(2.0, 1.0, 0.0, 0.0), SVector(1.0, 1.0, 0.0, 0.0), z),          # |α_P| = α_I, ρ = 0
+            (SVector(2.0, 0.3, 0.0, -0.5), SVector(1.0, 0.6, 0.0, -0.8), z),        # same, along Q and V
+            (SVector(1.0, 0.5, 0.0, 0.2), SVector(1.0, 1.0, 0.0, 0.0), SVector(0.0, 3.0, 0.0, 0.0)),  # α ∥ ρ
+            (SVector(1.0, 0.5, 0.0, 0.2), SVector(1.0, 0.5, 0.0, 0.0), SVector(0.0, 0.0, 0.0, 0.5)),  # nilpotent N
+            (SVector(0.2, 0.1, 0.1, 0.1), z, SVector(0.0, 10.0, 0.0, -4.0)),        # rotation, no absorption
+            (SVector(0.2, 0.1, 0.1, 0.1), z, SVector(0.0, 1e-3, 0.0, -4e-4)),       # slow rotation
+            (SVector(1.0, 0.3, 0.0, 0.0), SVector(0.0, 0.5, 0.0, 0.0), z),          # α_I = 0 < |α_P| (unprojected)
+            (SVector(2.0, 1.0, 0.0, 0.0), SVector(1.0, 1.2, 0.0, 0.0), z),          # |α_P| > α_I (unprojected)
+        ]
+        for (j, α, ρ) in cases, ds in (1e-3, 0.3, 3.0, 30.0)
+            M, b = segment(IQUV(), j, α, ρ, ds; project = false)
+            Me, be = exact_segment(j, α, ρ, ds)
+            @test close_to(b, be; rtol = 1e-12)
+            @test maximum(abs.(M .- Me)) <= 1e-12 * max(maximum(abs.(Me)), 1.0)
+        end
+        # the boundary is never saturated: the unabsorbed mode keeps its emission
+        j = SVector(2.0, 1.0, 0.0, 0.0); α = SVector(1.0, 1.0, 0.0, 0.0)
+        M, b = segment(IQUV(), j, α, z, 300.0)
+        Me, be = exact_segment(j, α, z, 300.0)
+        @test close_to(b, be; rtol = 1e-14)
+        @test b[1] - b[2] ≈ 300.0 rtol = 1e-14
+        @test M[1, 1] ≈ 0.5 && M[1, 2] ≈ -0.5
+        # a thick segment with a shallow slow mode is integrated, not saturated
+        α = SVector(1.0, 0.999, 0.0, 0.0); ρ = SVector(0.0, 0.0, 0.0, 0.02)
+        M, b = segment(IQUV(), j, α, ρ, 200.0)
+        Me, be = exact_segment(j, α, ρ, 200.0)
+        @test close_to(b, be; rtol = 1e-12)
+        @test maximum(abs.(M .- Me)) <= 1e-12 * maximum(abs.(Me))
+        # rotation without absorption: one segment equals any chain of segments
+        j = SVector(0.2, 0.1, 0.1, 0.1); ρ = SVector(0.0, 10.0, 0.0, -4.0)
+        @test chain_unprojected(j, z, ρ, 3.0, 1) ≈ chain_unprojected(j, z, ρ, 3.0, 300) rtol = 1e-12
+    end
+
+    @testset "unprojected solver on the problems of Prather et al. (2023)" begin
+        # S(3) from the closed forms: I ± Q decay at α_I ± α_Q in the first problem;
+        # P = λ j_∥ + sin(ρλ)/ρ j_⊥ + (1 - cos ρλ)/ρ ρ̂ × j_⊥ in the second
+        jE = SVector(2.0, 1.0, 0.0, 0.0); αE = SVector(1.0, 1.2, 0.0, 0.0)
+        plus = 3.0 / 2.2 * -expm1(-6.6); minus = 1.0 / -0.2 * -expm1(0.6)
+        exactE = SVector((plus + minus) / 2, (plus - minus) / 2, 0.0, 0.0)
+        jR = SVector(0.0, 0.1, 0.1, 0.1); ρR = SVector(0.0, 10.0, 0.0, -4.0)
+        r = SVector(10.0, 0.0, -4.0); ρn = sqrt(116.0); rh = r ./ ρn; jp = SVector(0.1, 0.1, 0.1)
+        jpar = dot(rh, jp) .* rh; jperp = jp .- jpar
+        P = 3.0 .* jpar .+ sin(3ρn) / ρn .* jperp .+ (1 - cos(3ρn)) / ρn .* cross(rh, jperp)
+        exactR = SVector(0.0, P...)
+        for n in (1, 30, 300)
+            @test chain_unprojected(jE, αE, ZERO4, 3.0, n) ≈ exactE rtol = 1e-12
+            @test chain_unprojected(jR, ZERO4, ρR, 3.0, n) ≈ exactR rtol = 1e-12
+        end
+        # production projects both onto the physical cone
+        @test segment(IQUV(), jE, αE, ZERO4, 0.01) ==
+              segment(IQUV(), jE, SVector(1.0, 1.0, 0.0, 0.0), ZERO4, 0.01; project = false)
+        @test couple(IQUV(), ZERO4, jR, ZERO4, ρR, 0.01) == ZERO4
     end
 
     @testset "emission at small pitch angle is admissible" begin

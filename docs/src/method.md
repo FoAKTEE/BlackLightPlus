@@ -216,13 +216,53 @@ affine operator $\mathcal I\mapsto A\mathcal I+B$ with $A=e^{-\Delta\tau}$,
 $B=(j/\alpha)\,e^{-\Delta\tau}\,\mathrm{expm1}(\Delta\tau)$, and saturation
 to the source function when thick.
 
-**Polarized transport** applies the analytic constant-coefficient Stokes
-coupling of [LandiDeglInnocenti1985](@citet) per segment in the fluid tetrad
-(Gram–Schmidt frame anchored to $u^\mu$, $k^\mu$, $b^\mu$), as an affine
-operator $S\mapsto MS+b$ (`segment`). The coupling handles all
-branches — emission-only, pure absorption, pure Faraday rotation, and the full
-absorption+rotation eigenstructure — and matches matrix-exponential oracles to
-$10^{-9}$–$10^{-16}$. Instead of transporting the coherency tensor
+**Polarized transport** applies the exact solution of the transfer equation
+with constant coefficients per segment in the fluid tetrad (Gram–Schmidt frame
+anchored to $u^\mu$, $k^\mu$, $b^\mu$), as the affine operator
+$S\mapsto MS+b$, $M=e^{-\mathbf K\Delta s}$, $b=\int_0^{\Delta s}e^{-\mathbf K s}\,ds\;j$
+(`segment`). With $\mathbf K=\alpha_I\mathbf 1+\mathbf N$, the eigenvalues of
+$\mathbf N$ are $\pm\lambda_1$ and $\pm i\lambda_2$,
+$\lambda_{1,2}^2=\big[(\alpha_P^2-\rho_P^2)^2/4+(\boldsymbol\alpha\cdot\boldsymbol\rho)^2\big]^{1/2}\pm(\alpha_P^2-\rho_P^2)/2$,
+and [LandiDeglInnocenti1985](@citet)
+
+```math
+e^{-\mathbf K s}=e^{-\alpha_I s}\Big[\tfrac12(\cosh\lambda_1 s+\cos\lambda_2 s)\,\mathbf M_1
+-\sin\lambda_2 s\,\mathbf M_2-\sinh\lambda_1 s\,\mathbf M_3
++\tfrac12(\cosh\lambda_1 s-\cos\lambda_2 s)\,\mathbf M_4\Big],
+```
+
+so $b$ needs the four integrals $C_1\pm S_1=\Delta s\,\varphi\big((\alpha_I\mp\lambda_1)\Delta s\big)$
+of $e^{-\alpha_I s}(\cosh,\sinh)\lambda_1 s$ and
+$C_2+iS_2=\Delta s\,\varphi\big((\alpha_I-i\lambda_2)\Delta s\big)$ of
+$e^{-\alpha_I s}(\cos,\sin)\lambda_2 s$, with $\varphi(z)=(1-e^{-z})/z$:
+$b=\big[\tfrac12(C_1+C_2)\mathbf M_1-S_2\mathbf M_2-S_1\mathbf M_3+\tfrac12(C_1-C_2)\mathbf M_4\big]j$.
+Their usual closed forms carry $1/(\alpha_I^2-\lambda_1^2)$ and
+$1/(\alpha_I^2+\lambda_2^2)$; within a relative gap of $10^{-6}$ of those poles
+the segment evaluates $\varphi$, which is regular at $z=0$. The cases:
+
+- *emission only* ($\alpha_I=\alpha_P=\rho_P=0$): $M=\mathbf 1$, $b=j\,\Delta s$;
+- *total absorption* ($\alpha_P=\rho_P=0$): $M=e^{-\alpha_I\Delta s}\mathbf 1$,
+  $b=(1-e^{-\alpha_I\Delta s})\,j/\alpha_I$;
+- *Faraday rotation and conversion without absorption* ($\alpha_I=\alpha_P=0$):
+  $e^{-\mathbf N s}$ rotates $(Q,U,V)$ about $\hat{\boldsymbol\rho}$ through
+  $\theta=\rho_P s$, $e^{-\mathbf N s}=\cos\theta\,\mathbf 1+(1-\cos\theta)\,\hat{\boldsymbol\rho}\hat{\boldsymbol\rho}^{\mathsf T}+\sin\theta\,[\hat{\boldsymbol\rho}\times]$,
+  and integrating each term over the segment ($\theta=\rho_P\Delta s$) gives
+  $b_I=j_I\Delta s$ and
+  $\boldsymbol b_P=\frac{\sin\theta}{\rho_P}\boldsymbol j_P+\frac{\theta-\sin\theta}{\rho_P}\hat{\boldsymbol\rho}(\hat{\boldsymbol\rho}\cdot\boldsymbol j_P)+\frac{1-\cos\theta}{\rho_P}\hat{\boldsymbol\rho}\times\boldsymbol j_P$;
+- *the dichroism-cone boundary* $|\alpha_P|=\alpha_I$ with $\rho=0$ (or
+  $\boldsymbol\rho\parallel\boldsymbol\alpha$): $\lambda_1=\alpha_I$, the mode polarized
+  against $\hat{\boldsymbol\alpha}$ is unabsorbed and gathers its emission linearly,
+  $C_1-S_1=\Delta s$; the $\varphi$ form is this limit of the general solution;
+- *nilpotent coupling* ($\lambda_1=\lambda_2=0$, i.e. $|\alpha_P|=|\rho_P|$ and
+  $\boldsymbol\alpha\perp\boldsymbol\rho$): $\mathbf N^4=0$, so
+  $e^{-\mathbf K s}=e^{-\alpha_I s}(\mathbf 1-s\mathbf N+s^2\mathbf N^2/2-s^3\mathbf N^3/6)$
+  and $b=\sum_k(-\mathbf N)^k g_k\,j$, $g_k=\int_0^{\Delta s}s^k e^{-\alpha_I s}\,ds/k!$.
+
+A segment is saturated ($M=0$, $b=\mathbf K^{-1}j$) when its slowest mode, at the
+rate $\alpha_I-\lambda_1$, is deeper than 100; a deeper segment with a shallower
+slow mode takes the $\varphi$ form, whose decay factors stay finite. Every case
+matches the 256-bit solution $\exp\!\big(\Delta s\,[\,-\mathbf K\ \ j;\ 0\ \ 0\,]\big)$
+to rounding error (`test/physics/transfer_segments.jl`). Instead of transporting the coherency tensor
 $N^{\mu\nu}$ [MoscibrodzkaGammie2018](@citep), the camera polarization frame
 (its vertical leg and 4-velocity) is parallel-transported along the ray with the
 same fourth-order Runge–Kutta step as the geodesic, and each segment operator is
@@ -248,12 +288,15 @@ In the fluid frame $e_{(2)}$ is the projection of $b^\mu$, the basis of the
 rule applied at the camera gives the IEEE/IAU output of [Conventions](@ref method-conventions)
 with no relabelling.
 
-**Admissibility.** Every segment operator enforces the physical cone on its
-coefficients before it is formed: when $|\alpha_P|=(\alpha_Q^2+\alpha_V^2)^{1/2}$
-exceeds $\alpha_I$ the polarized absorptivities are rescaled onto
-$|\alpha_P|=\alpha_I$, and when $|j_P|$ exceeds $j_I$ the polarized
-emissivities are rescaled onto $|j_P|=j_I$, keeping $j_I$ and the polarization
-direction. The thermal fits of [Marszewski2021](@citet) give $|j_P|>j_I$ at small
+**Admissibility.** In production every segment operator projects its
+coefficients onto the physical cone before it is formed: when
+$|\alpha_P|=(\alpha_Q^2+\alpha_V^2)^{1/2}$ exceeds $\alpha_I$ the polarized
+absorptivities are rescaled onto $|\alpha_P|=\alpha_I$ (onto $\alpha_P=0$ when
+$\alpha_I=0$), and when $|j_P|$ exceeds $j_I$ the polarized emissivities are
+rescaled onto $|j_P|=j_I$, keeping $j_I$ and the polarization direction.
+`segment(...; project = false)` solves the transfer equation for the coefficients as
+given, outside the cone too; the one-zone tests of [Prather2023](@citet), whose
+coefficients lie outside it, run through that path. The thermal fits of [Marszewski2021](@citet) give $|j_P|>j_I$ at small
 pitch angles; without the rescale the observed Stokes vector would depend on
 whether such an emitter lies in front of or behind brighter gas, because the
 accumulated vector is clamped to $|P|\le I$ (`stokes_admissible`) only on
@@ -395,19 +438,21 @@ KernelAbstractions CPU backend reproduces the threaded run bit for bit.
 Three deliberate, oracle-verified departures from Blacklight
 [White2022](@citep) and ipole [MoscibrodzkaGammie2018](@citep):
 
-1. **The dedicated $\rho=0$ coupling branch is removed.** The references'
-   absorption-without-rotation branch disagrees with an exact
-   matrix-exponential/RK4 oracle at the $\sim20\%$ level on emitting slabs.
-   BlackLightPlus routes $\rho_p=0$ through the full analytic branch, which
-   reduces exactly to that limit and matches the oracle to $10^{-9}$.
+1. **No dedicated $\rho=0$ coupling branch.** Blacklight's
+   absorption-without-rotation step, which it also applies to both halves of its
+   split step, damps the emission terms of $I$ at the polarized rate and carries a
+   sign error in one polarized term (reported to the developers together with the
+   misplaced $(U,V)$ entries of its $\mathbf M_2$, $\mathbf M_3$). BlackLightPlus
+   routes $\rho_P=0$ through the general solution above, whose limit it is.
 2. **Transported camera frame instead of the coherency tensor.** ipole
    parallel-transports the coherency tensor $N^{\mu\nu}$ between segments;
    BlackLightPlus transports the camera readout frame and applies the exact
    segment operator rotated into it ([Radiative transfer](@ref)). Against a
    Strang-split coherency transport at equal step density the EVPA error is
    five to eight times smaller.
-3. **Degenerate-coupling fallback** is the total-absorption solution
-   (admissibility-clamped), not the removed defective branch.
+3. **Degenerate eigenstructures take their exact limits** (the dichroism-cone
+   boundary, nilpotent coupling, rotation without absorption) in place of an
+   approximate fallback.
 
 The images are cross-validated against RAPTOR [Bronzwaer2018](@citep) on
 analytic scenes and binary-black-hole GRMHD snapshots, and against Blacklight
