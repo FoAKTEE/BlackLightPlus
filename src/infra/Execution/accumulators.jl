@@ -159,31 +159,39 @@ its direction selects. Photons with `E ≤ 0` or outside the frequency grid are 
 Atomic; device-safe.
 """
 @inline function record!(b::ExactBins, E::Float64, w::Float64, dir::SVector{3,Float64})
-    E > 0.0 || return nothing
-    nu = E * ME * CL * CL / HPL
-    v = floor((log(nu) - b.lnu_min) / b.dlnu)
-    (v >= 0.0 && v < b.n_ebins) || return nothing
-    ie = unsafe_trunc(Int, v) + 1
-    record_rows!(b, b.bands, ie, E, w, dir)
+    ie = energy_bin(b, E)
+    ie == 0 && return nothing
+    record_rows!(b, b.bands, 0, ie, E, w, dir)
     return nothing
 end
 
-@inline function record_rows!(b::ExactBins, r::PolarBands, ie::Int, E, w, d)
+# The frequency bin of energy `E` on the grid of `b` (0: off the grid or E ≤ 0).
+@inline function energy_bin(b::ExactBins, E::Float64)
+    E > 0.0 || return 0
+    nu = E * ME * CL * CL / HPL
+    v = floor((log(nu) - b.lnu_min) / b.dlnu)
+    (v >= 0.0 && v < b.n_ebins) || return 0
+    return unsafe_trunc(Int, v) + 1
+end
+
+# The rows of rule `r` that direction `d` selects, each shifted by `off`.
+@inline function record_rows!(b::ExactBins, r::PolarBands, off::Int, ie::Int, E, w, d)
     ps = sqrt(d[1] * d[1] + d[2] * d[2] + d[3] * d[3])
     mu = ps > 0.0 ? abs(d[3]) / ps : 0.0
     thf = acos(clamp(mu, 0.0, 1.0))
     ith = clamp(unsafe_trunc(Int, floor(thf / r.dth)) + 1, 1, r.n)
-    add_cell!(b, ith, ie, E, w)
+    add_cell!(b, off + ith, ie, E, w)
     return nothing
 end
 
-@inline function record_rows!(b::ExactBins, r::InclinationBands{N}, ie::Int, E, w, d) where {N}
+@inline function record_rows!(b::ExactBins, r::InclinationBands{N}, off::Int, ie::Int, E, w,
+                              d) where {N}
     ksp = sqrt(d[1] * d[1] + d[2] * d[2] + d[3] * d[3])
     ksp <= 0.0 && return nothing
     th = acos(clamp(d[3] / ksp, -1.0, 1.0))
-    add_cell!(b, N + 1, ie, E, w)
+    add_cell!(b, off + N + 1, ie, E, w)
     for k in 1:N
-        (th >= r.lo[k] && th <= r.hi[k]) && add_cell!(b, k, ie, E, w)
+        (th >= r.lo[k] && th <= r.hi[k]) && add_cell!(b, off + k, ie, E, w)
     end
     return nothing
 end

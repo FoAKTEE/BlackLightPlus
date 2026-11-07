@@ -25,6 +25,7 @@ include("ray_sources.jl")
 include("schedule.jl")
 include("worklist.jl")
 include("accumulators.jl")
+include("timebins.jl")
 include("children.jl")
 include("cascade.jl")
 
@@ -43,7 +44,8 @@ export RaySource, ray, HostRays, CameraRays, PixelGrid, BlockGrid, CoordList, im
 export cost_order, rescue_pixels, mixed_partition, march_sort_order, queue_items,
        curve_inclination, ImageBlock, stream_blocks!
 # Monte Carlo accumulators
-export Bands, PolarBands, InclinationBands, ExactBins, record!, gather!, Spectrum, band,
+export Bands, PolarBands, InclinationBands, SectorBands, sector_row, TimedBands, arrival_bin,
+       nrows, solid_angles, ExactBins, record!, gather!, Spectrum, band,
        nu_centers, nuLnu, nuLnu_total, nuLnu_solid, nuLnu_sigma, total_power, total_weight,
        mean_energy,
        ExactScalars, add!, add_limbs!, scalar, addends

@@ -2,7 +2,8 @@
 # exact merging, the child buffer's slots, overflow and genealogy streams, and the
 # executor contract: a program that writes through atomics gives the same limbs, the
 # same scalars and the same child set under threads of any chunking and on a pool of
-# 1, 2, 3 or 5 devices; the thin and scattering sphere runs are identical everywhere.
+# 1, 2, 3 or 5 devices; the thin and scattering sphere runs are identical everywhere. The
+# azimuth sectors and the arrival-time bins keep the rows of the rules they extend.
 using Test, BlackLightPlus, Random
 using StaticArrays
 using BlackLightPlus.Numerics: MCRng, MCStreamLayout, child_rng, stream_id, primary_rng, ME, CL, HPL,
@@ -12,7 +13,8 @@ using BlackLightPlus.MonteCarlo: Superphoton, HotcrossTable, NW, NT
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, foreach_item!, ExactBins, ExactScalars,
                      ChildBuffer, PolarBands, InclinationBands, Spectrum, band, gather!,
                      nu_centers, nuLnu, nuLnu_total, nuLnu_solid, nuLnu_sigma, total_power, total_weight,
-                     mean_energy, add!, add_limbs!, scalar, addends, capacity, overflow, children
+                     mean_energy, add!, add_limbs!, scalar, addends, capacity, overflow, children,
+                     SectorBands, sector_row, TimedBands, arrival_bin, nrows, solid_angles
 import BlackLightPlus.Execution
 
 const DK = Main.Decks
@@ -80,6 +82,49 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
         si = Spectrum(ib)
         @test si.total_row == 4 && si.dOmega[4] ≈ 4π
         @test si.dOmega[1] ≈ 2π * (cos(deg2rad(7.0)) - cos(deg2rad(27.0)))
+    end
+
+    @testset "azimuth sectors and arrival-time bins" begin
+        ib = InclinationBands((30.0, 90.0), 15.0)
+        sb = SectorBands(ib, 6)
+        @test nrows(sb) == 3 + 12 && sector_row(sb, 2, 6) == 15 && sector_row(sb, 1, 1) == 4
+        dO = solid_angles(sb)
+        @test dO[1:3] == solid_angles(ib) && sum(dO[sector_row(sb, 2, j)] for j in 1:6) ≈ dO[2]
+        a = ExactBins(ib; nu_min = 1.0e8, nu_max = 1.0e16, n_ebins = 30)
+        b = ExactBins(sb; nu_min = 1.0e8, nu_max = 1.0e16, n_ebins = 30)
+        rng = Xoshiro(11)
+        for _ in 1:3000
+            E = energy_at(10.0^(8 + 8 * rand(rng))); w = rand(rng)
+            d = SVector(randn(rng), randn(rng), randn(rng))
+            Execution.record!(a, E, w, d); Execution.record!(b, E, w, d)
+        end
+        @test b.count[1:3, :] == a.count && b.sumwE[:, 1:3, :] == a.sumwE    # the band rows, bitwise
+        @test sum(b.count[sector_row(sb, 2, j), :] for j in 1:6) == a.count[2, :]
+        # azimuth φ = atan(d², d¹) ∈ [0, 2π): sector j covers [(j − 1)π/3, jπ/3)
+        c = ExactBins(sb; nu_min = 1.0e8, nu_max = 1.0e16, n_ebins = 30)
+        E = energy_at(1.0e12)
+        for (φ, j) in ((0.1, 1), (1.2, 2), (π + 0.1, 4), (-0.2, 6))
+            Execution.record!(c, E, 1.0, SVector(cos(φ), sin(φ), 0.0))
+            @test sum(c.count[sector_row(sb, 2, j), :]) >= 1
+        end
+        @test sum(c.count[4:9, :]) == 0 && sum(c.count[10:15, :]) == 4
+        @test_throws ArgumentError SectorBands(ib, 0)
+
+        tb = TimedBands(PolarBands(3), -10.0, 20.0, 6)
+        @test nrows(tb) == 8 * 3 && tb.dt == 5.0 && solid_angles(tb) == repeat(solid_angles(PolarBands(3)), 8)
+        @test arrival_bin(tb, -10.5) == 0 && arrival_bin(tb, -10.0) == 1 && arrival_bin(tb, -5.0) == 2
+        @test arrival_bin(tb, 19.99) == 6 && arrival_bin(tb, 20.0) == 7 && arrival_bin(tb, NaN) == 0
+        t = ExactBins(tb; nu_min = 1.0e8, nu_max = 1.0e16, n_ebins = 30)
+        p = ExactBins(PolarBands(3); nu_min = 1.0e8, nu_max = 1.0e16, n_ebins = 30)
+        for _ in 1:2000
+            E = energy_at(10.0^(8 + 8 * rand(rng))); w = rand(rng)
+            d = SVector(randn(rng), randn(rng), randn(rng))
+            Execution.record!(t, E, w, d, -15.0 + 40.0 * rand(rng)); Execution.record!(p, E, w, d)
+        end
+        @test sum(t.count[3k .+ (1:3), :] for k in 0:7) == p.count       # every photon has a bin
+        st = Spectrum(t); sp = Spectrum(p)
+        @test sum(st.sumwE[3k .+ (1:3), :] for k in 0:7) ≈ sp.sumwE rtol = 1e-13
+        @test_throws ArgumentError TimedBands(PolarBands(3), 1.0, 1.0, 4)
     end
 
     @testset "spectrum accessors" begin
