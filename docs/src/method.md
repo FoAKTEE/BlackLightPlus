@@ -165,6 +165,93 @@ above $\epsilon_h$; the redshift cut is what captures those rays
 `BoostedSuperposedKerrSchild` applies the same rule to each hole's rest-frame
 radius at the ray's time.
 
+### The precise march
+
+The precise mode (`Plans.precise`, guide [Precise ray tracing](@ref)) keeps the
+fixed-control structure of the march, whose step $h$ is a function of the state
+alone, and replaces the parts whose errors set the floor of the production march
+against the closed form.
+
+**Ninth-order step.** `Verner9` is the ninth-order solution of Verner's 9(8) pair
+[Verner2010](@citep): fifteen stages, local error $O(h^{10})$, so at the control step
+$h=d/C$ the image error falls as $C^{-9}$. The embedded eighth-order weights are not
+used: an accept/reject decision would make the step sequence a discontinuous function
+of the initial state, while with $h=h(y)$ two backends whose arithmetic differs in the
+last bit take the same steps and end within that rounding times the ray's condition
+number. On a long march the rounding of the state update $y\leftarrow y+\Delta y$
+accumulates once per step; `march_step_compensated` carries the state as the
+unevaluated sum $y+y_{\rm lo}$, with $y_{\rm lo}$ the two-sum error of each update, so
+the update rounds once per ray.
+
+**Winding near a spinning horizon.** A ray traced backward toward a black hole of spin
+$a$ approaches the past horizon, where its Kerr–Schild azimuth turns by
+$d\phi=2a\,dr/\Delta$, $\Delta=(r-r_+)(r-r_-)$. A step of radial extent
+$(r-r_+)/C$ turns it by $2|a|/((r-r_-)C)$, up to $7/C$ radians at $a=0.99$, and the
+ninth-order step loses its accuracy there. With `winding` the step distance is
+$d\,w$, $w=(1+q^4)^{-1/4}$, $q=2|a|/(r-r_-)$ (`winding_factor`, $r_-=a^2/r_+$), which
+bounds the turn per step by about $1/C$ and leaves the step unchanged where
+$r-r_-\gg2|a|$; a binary takes the smallest $d_A w_A$ over its holes.
+
+**Surface crossings at full order.** An emission surface $s(x)=0$ (the equator $z=0$
+for a thin disk, `EquatorialPlane`) is met inside the step whose end has the other
+sign of $s$. The crossing is the root in $c\in(0,h)$ of $s(\Phi_c(y))$, with
+$\Phi_c$ the integrator's own step of length $c$, found by Newton's iteration with
+$ds/dc=\nabla s\cdot dx/d\lambda$ at $\Phi_c(y)$ and a bisection fallback inside the
+bracket (`surface_crossing`). Since $\Phi_c$ is the method applied over $c\le h$, the
+crossing state carries the local error of the step, $O(h^{p+1})$; the root of the
+linear interpolant of $s$ between the step's ends would carry $O(h^2)$. The iteration
+converges in about one step per crossing from the secant start, so a crossing costs one
+or two partial steps.
+
+**Camera at infinity.** A plane-parallel ray started at distance $d$ with no
+transverse momentum is not the ray an observer at infinity receives at the same screen
+point: the far zone bends the latter by $\delta p_\perp\sim Mb/d^2$ and displaces it by
+$\delta w\sim Mb/d$ at the plane, so its conserved quantities carry an error
+$O(M/d)$; at large $d$ the transverse offset $b$ is rounded against $d$, which leaves
+$\epsilon d/b$. The camera at infinity (`infinity_ray`) integrates the far zone in
+$u=1/s$, $s=x\cdot\hat n$, with the position $x=\hat n s+w$ and the momentum
+$p=(1,-\hat n+\delta p)$:
+
+$$\frac{dw}{du}=-\frac{v_\perp}{u^2v_s},\qquad
+\frac{d\,\delta p}{du}=-\frac{F}{u^2v_s},\qquad
+\frac{d\tau}{du}=-\frac{v^t-v_s}{u^2v_s},$$
+
+$v=g^{\mu\nu}p_\nu$, $v_s=v\cdot\hat n$, $v_\perp=v-\hat n v_s$, $F=dp/d\lambda$,
+$\tau=t-s$. A metric with $g-\eta=O(M/r)$ gives $v_\perp=O(u^2)$, $F_\perp=O(u^3)$ and
+$F_\parallel=O(u^2)$, so $w$ and $\delta p$ are regular at $u=0$, where the ray from
+infinity has $w=(-\beta\cos i,\alpha,\beta\sin i)$ and $\delta p=0$; the Shapiro
+term $A/u$ of $d\tau/du$ is common to all screen points and is integrated apart. The
+offset $v_c=(g^{\mu\nu}-\eta^{\mu\nu})p_\nu$ (`raise_index_offset`) enters
+$v_\perp=(\delta p+v_c)_\perp$; Kerr–Schild spacetimes form it from their terms,
+$v_c=-f\,(l\cdot p)\,l$ for one black hole and the Woodbury correction for a
+superposition, so every term carries rounding of itself and never of $s$. The general
+solution also holds the mode $w\propto1/u$ of a ray at another angle, which an error
+of $\delta p_\perp$ excites with weight $1/u$ at the plane; the march therefore starts
+at $u_0=10^{-8}$ from the leading behaviour, $\delta p_\perp\propto u^2$ (trapezoid)
+and $w-w(0)\propto u$ (midpoint, with corrector passes), an error $O(u_0^2)$, and
+takes `Verner9` steps $u\to2u$ to $u=1/d$. Each step $[u,2u]$ has the same relative
+structure, so its truncation is a fixed fraction of the bending in that step, below
+$10^{-15}\,M$ in total. On Kerr the started ray carries Bardeen's
+$\lambda=-\alpha\sin i$ and $\eta=(\alpha^2-a^2)\cos^2i+\beta^2$ to $3\times10^{-14}$
+relative (`test/physics/spacetime_integrators.jl`).
+
+**Capture.** In Kerr–Schild coordinates every ray that falls in approaches the past
+horizon with $E_n\propto1/(r-r_+)$ (the [March termination](@ref) rule), so the
+redshift cut alone captures and the precise mode sets $\epsilon_h=0$. A thin disk's
+observed intensity is $f(r)\,g^3$ with $g\le2\gamma/E_c$ beyond the cut, $\gamma$ the
+Lorentz factor of the gas relative to the normal observer, so the omitted intensity
+relative to the image maximum is at most $(2\gamma/E_c)^3 f_{\max}/I_{\max}$; at
+$E_c=10^6$ this is below $10^{-15}$. A higher cut costs $C\ln10/w$ steps per decade on
+captured rays only. On a superposed binary the horizons are approximate: $d$ stalls above
+zero while $E_n$ grows, and a march continued beyond $E_n\approx10^2$ loses the ray, so
+`march_control` keeps the cut there at most at `CAPTURE_REDSHIFT` whatever the budget.
+
+A volumetric render samples its plasma once per step, so its accuracy is set by $C$ and
+not by the integrator (a torus image's flux converges as $C^{-2}$ with either); the
+precise mode serves
+the products whose accuracy is that of the geodesics: surface images
+(`render_crossings`), trajectories, shadows and capture maps.
+
 ## Analytic Kerr fast path and lensing bands
 
 For sources on surfaces in Kerr, an exact closed-form tracer (no ODE) inverts

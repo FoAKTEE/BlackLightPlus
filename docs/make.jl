@@ -32,6 +32,7 @@ makedocs(;
             "Imaging GRMHD data" => "guide/grmhd.md",
             "Spacetimes and binaries" => "guide/spacetimes.md",
             "Closed-form Kerr images" => "guide/closed_form.md",
+            "Precise ray tracing" => "guide/precise.md",
             "GPU rendering" => "guide/gpu.md",
             "Monte Carlo spectra" => "guide/montecarlo.md",
         ],
