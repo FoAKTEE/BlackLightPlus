@@ -7,12 +7,20 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
-- Photon rings of high order: the landing time and azimuth of the closed-form tracer use
-  the angular Mino time G_θ for the radial I_0 (equal by the geodesic equation) and the
-  factored radial potential in √R/(r − r3), exactly zero at the turning point, so successive
-  orders up to 7 step by the photon-shell time lapse τ to 1e-6 where the turning-point term
-  had left errors up to 5e-4 at n = 7 (radii and intensities are unchanged; times and
-  azimuths change at the rounding level elsewhere). `Spacetime.photon_shell_exponents(a, r̃)`
+- Closed-form movies and light curves of time-dependent equatorial sources:
+  `Matter.EquatorialSpot` (a profile f(t, x, y), by default the orbiting `GaussianSpot` of
+  AART's flare model, times g^p of the g-disk flow) evaluated at the emission time of every
+  landing, and `Products.analytic_movie(plan, spot; times, bands, ro, slow)`, which lands
+  every pixel and order once and paints each frame in one pass (fast light with
+  `slow = false`). Against AART's `flare_model` at D = 1e4 the frames agree to NMSE 1e-17 (n = 0)
+  and 1e-14 (n = 1, 2) away from the pixels where AART takes the radial sign of the turning
+  point seen from infinity, and against Krang's slow-light emission coordinates at infinity
+  to NMSE 3e-18 (n = 0); light curves over one orbit to 1e-9.
+- Photon rings of high order: the case-II time antiderivative takes √R/(r − r3) from the
+  factored radial potential, exactly zero at the turning point, so successive orders up to 7
+  step by the photon-shell time lapse τ to 1e-5 where the rounding residue of the expanded
+  potential had left errors up to 5e-4 at n = 7 (radii, azimuths and intensities are
+  unchanged; times change at the rounding level elsewhere). `Spacetime.photon_shell_exponents(a, r̃)`
   (γ, δ, τ of P2 Eqs. 68–72) and `Spacetime.critical_point(a, θo, r̃)`; `lensing_band` finds
   the edges of bands of any order (logarithmic search toward the critical curve, where it
   fell back to fixed scales from n = 5 on).

@@ -94,6 +94,7 @@ package's own numerical march. NMSE is the normalized mean squared error of
 | cone landings against the traced crossings of the same rays (ordinary and vortical, cases II–IV) | radius within $10^{-4}$, the polar sign of every crossing equal |
 | landing radius at orders 0–6 along screen rays through 9 critical points, two scenes | within $\varepsilon\,|\partial\ln r_s/\partial\ln s|$ of Krang ($3\times10^{-10}$ at $n=0$, $10^{-6}$ at $n=6$, where $d_6\sim10^{-7}\,M$) |
 | photon-ring exponents against the landings of orders 6 and 7 | $\gamma$, $\delta$, $\tau$ to $10^{-6}$–$10^{-5}$, the differences falling as $e^{-\gamma n}$ |
+| orbiting hot spot, 25 frames over one orbit, orders 0–2, $240^2$ | against AART's `flare_model` at $D=10^4$: NMSE $10^{-17}$ ($n=0$), $10^{-14}$ ($n=1,2$) outside the 81 pixels of AART's turning-point sign; against Krang's slow-light coordinates at infinity: NMSE $3\times10^{-18}$, $10^{-16}$, $2\times10^{-15}$; light curves to $10^{-9}$ |
 | EVPA against the package's polarized march (transported camera frame) | falls as $C^{-4}$ to the camera floor: $2\times10^{-5}$ rad at $d=10^5\,M$, median $10^{-8}$ rad at $d=10^9\,M$ |
 
 Three reference-code findings shape these comparisons. Krang's polarized synchrotron
@@ -102,8 +103,10 @@ material weights its Stokes $I$ by $|\hat k\times B|^{2(1+\sigma)}$ where its in
 give the emission polar sign of a cone in the far hemisphere outside the observer's cone the
 wrong sign. Both are corrected in the comparison and reported upstream. AART flips the
 radial sign of emission at the turning point seen from infinity while its radial integrals
-start at the finite observer distance, which tilts the EVPA by up to $4\times10^{-5}$ rad on
-a thin ring at $D=10^5$; the comparison uses $D=10^{15}$.
+start at the finite observer distance, which tilts the EVPA by up to $4\times10^{-5}$ rad
+and the emission time by up to $4\times10^{-2}\,M$ on a thin ring at $D=10^4$–$10^5$; the
+polarization comparison uses $D=10^{15}$ and the movie comparison separates those pixels;
+the fix is reported upstream.
 
 ## Published figures
 

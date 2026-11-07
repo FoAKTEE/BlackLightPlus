@@ -16,7 +16,7 @@ using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, r
                    surface_prep, surface_landing, image_crossings
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
                 sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
-                polarized_emission
+                polarized_emission, EquatorialSpot, spot_amplitude
 using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
                     CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
@@ -43,12 +43,13 @@ include("trace.jl")
 include("sensitivity.jl")
 include("analytic.jl")
 include("analytic_surfaces.jl")
+include("analytic_movie.jl")
 include("amr.jl")
 include("montecarlo.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
-       SurfaceProgram, surface_outputs,
+       SurfaceProgram, surface_outputs, SpotProgram, FrameProgram,
        StoredPathProgram, AdaptiveTraceProgram, TRACE_WINDOW, imaging_program, shadow_program,
        trace_outputs
 # Monte Carlo programs
@@ -56,7 +57,7 @@ export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER
        mc_ledger, ledger_sum, ledger_count
 # products and results
 export Image, Trajectories, render, render_amr, render_analytic, photon_ring_layers, trace,
-       shadow, sensitivity, variants
+       shadow, sensitivity, variants, analytic_movie
 export mc_spectrum, ScatterResult, GRMHDSpectrumResult, emission_zones, analytic_nuLnu,
        incl_nuLnu
 

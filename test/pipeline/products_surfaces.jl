@@ -15,6 +15,11 @@ plan(; a = 0.94, res = 16, inc = 17.0) =
 cone(a, θs) = SynchrotronSurface(a; theta_s = θs, b = (0.3, 0.4, 0.8), beta = 0.6, phi_v = -1.7,
                                  sigma = 0.73)
 const SFIELDS = (:I, :Q, :U, :Ib, :Qb, :Ub, :rs, :ts, :phis, :redshift_sign)
+# the pool backend (the GPU under `BLP_TEST_DEVICES=cuda`): bitwise on one hardware, to
+# 1e-9 of the largest value across hardware
+agree(a, b) = Decks.CROSS_HARDWARE ?
+              all(isnan.(a) .== isnan.(b)) && maximum(abs.(filter(!isnan, a .- b)); init = 0.0) <=
+              1.0e-9 * maximum(abs.(filter(!isnan, b)); init = 0.0) : Decks.bits(a) == Decks.bits(b)
 
 @testset "exact-Kerr surfaces" begin
     a = 0.94
@@ -43,6 +48,8 @@ const SFIELDS = (:I, :Q, :U, :Ib, :Qb, :Ub, :rs, :ts, :phis, :redshift_sign)
         rr = render_analytic(p, mats; bands = (0, 1), ro = Inf, backend = exec)
         @test all(Decks.bits(getfield(rr, f)) == Decks.bits(getfield(r, f)) for f in SFIELDS)
     end
+    rp = render_analytic(p, mats; bands = (0, 1), ro = Inf, backend = Decks.POOL_BACKEND)
+    @test all(agree(getfield(rp, f)[b], getfield(r, f)[b]) for f in SFIELDS[4:end] for b in 1:2)
     # the program writes quantity q of band b to output (q - 1) K + b
     prog = SurfaceProgram(p.pixels, p.theta_o, a, Inf, mats, (0, 1))
     outs = surface_outputs(2, 256)

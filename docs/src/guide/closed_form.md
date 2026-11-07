@@ -62,6 +62,21 @@ l = band_landing(pixel_prep(1.00001α0, 1.00001β0, θo, a; ro = Inf), 4)   # or
 
 `lensing_band(a, θo, n)` returns the inner and outer edges of band `n` for any order.
 
+## Movies and light curves
+
+```julia
+using BlackLightPlus.Matter: EquatorialSpot
+using BlackLightPlus.Products: analytic_movie
+
+spot = EquatorialSpot(EquatorialDisk(0.94); r_c = 8.0, omega = 0.05, width = 0.5)
+mov = analytic_movie(plan, spot; times = range(0, 125; length = 50), ro = Inf)
+mov.frames[:, :, 10]          # the image at times[10]
+mov.lightcurve                # the flux of every frame (M² × intensity)
+```
+
+The landings of every pixel and order are computed once; each frame paints the spot at the
+emission time of each landing. `slow = false` ignores the light travel time (fast light).
+
 ## The observer at infinity
 
 `ro = Inf` places the observer at infinity: radii and azimuths are the limits of a far

@@ -242,11 +242,11 @@ observer-minus-source difference.
 @inline _radial_obs_parts(ro, roots, a, λ, η, is_case2::Bool) =
     _radial_obs_parts(ro, roots, a, λ, η, is_case2 ? 2 : 3)
 
-# Definite integrals from the observer parts `obs = (po, pt)` and the source antiderivative;
-# with `τ`, the radial Mino time I0 is replaced by the angular one (the geodesic equation
-# I_r = G_θ, exact) in every term proportional to it (`_radial_tau`).
-@inline function _radial_from_parts(rs::T, roots, a, λ, η, is_case2::Bool, νr, obs;
-                                    τ = nothing) where {T}
+# Definite integrals from the observer parts `obs = (po, pt)` and the source antiderivative.
+# Every term is evaluated at the inverted radius rs, so the time and azimuth are those of
+# the point of the geodesic at rs, consistent with the radius whatever the conditioning
+# of the inversion.
+@inline function _radial_from_parts(rs::T, roots, a, λ, η, is_case2::Bool, νr, obs) where {T}
     po, pt = obs
     r1, r2, r3, r4 = roots
     if is_case2
@@ -265,8 +265,6 @@ observer-minus-source difference.
         I0 = I0o - I0s; I1 = I1o - I1s; I2 = I2o - I2s
         Ip = Ipo - Ips; Im = Imo - Ims
     end
-    τ === nothing ||
-        ((I0, I1, I2, Ip, Im) = _radial_tau((I0, I1, I2, Ip, Im), is_case2 ? 2 : 3, roots, a, τ))
     return _radial_combine(I0, I1, I2, Ip, Im, a, λ)
 end
 
@@ -403,7 +401,7 @@ mirror. ForwardDiff-generic.
     # sn/cn are periodic: a Gθ beyond the Mino budget aliases to a ghost radius.
     valid = isfinite(rs) && rs > prep.rph && Gθ <= prep.τtot
     I_r, I_φ, I_t = _radial_from_parts(rs, prep.roots, prep.a, prep.λ, prep.η,
-                                       prep.is_case2, νr, (prep.po, prep.pt); τ = Gθ)
+                                       prep.is_case2, νr, (prep.po, prep.pt))
     φs = -prep.sφ * (I_φ + prep.λ * Gφ) - T(π) / 2     # P3 Eq. 11 (sφ: a < 0 mirror)
     ts = -(I_t + prep.a * prep.a * Gt)                 # P3 Eq. 12
     return _landing(rs, φs, ts, νr, valid, prep.sφ * prep.λ, prep.η, θeq, νθ)

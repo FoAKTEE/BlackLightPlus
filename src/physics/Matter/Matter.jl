@@ -24,6 +24,7 @@ include("sources/page_thorne.jl")
 include("sources/hotspot.jl")
 include("sources/gdisk.jl")
 include("sources/polarized_surfaces.jl")
+include("sources/equatorial_spot.jl")
 include("zones.jl")
 
 export PlasmaPrimitives, PlasmaState, vacuum
@@ -36,6 +37,7 @@ export EquatorialDisk, intensity, gfactor_circular, gfactor_plunge, gfactor_disk
        johnson_su_profile, equatorial_disk_intensity, disk_velocity
 export SynchrotronSurface, PolarizedDisk, surface_angle, material_spin, rest_photon,
        polarized_emission
+export GaussianSpot, EquatorialSpot, spot_amplitude
 export EmissionZone, ZoneSite, UniformSphere, emission_zone
 
 end # module

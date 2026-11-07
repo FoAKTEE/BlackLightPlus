@@ -247,14 +247,24 @@ $\tilde\chi=1-\Delta(\tilde r)/(\tilde r(\tilde r-1)^2)$, complete integrals of 
 $k=\tilde u_+/\tilde u_-$ (`photon_shell_exponents`; `critical_point` gives the screen point of
 $\tilde r$). The landings of orders 0–7 reproduce them: along the screen ray through a critical
 point, $\ln(d_{n-1}/d_n)-\gamma$, the azimuth step minus $2\pi-\delta$ and the time step minus
-$\tau$ fall as $e^{-\gamma n}$ to $10^{-6}$ at $n=7$. Two choices keep the high orders accurate:
-the radial Mino time $I_0$ in $I_\phi$ and $I_t$ is the angular one $G_\theta$ (equal by the
-geodesic equation, without the conditioning of the sn inversion near the critical curve), and
-$\sqrt{R}/(r-r_3)$ is evaluated from the factored potential, exactly zero at the turning point.
-What remains is the conditioning of the near-double roots $r_3\approx r_4$; the landing
+$\tau$ fall as $e^{-\gamma n}$ to $10^{-6}$–$10^{-5}$ at $n=7$. The case-II time keeps that accuracy
+because $\sqrt{R}/(r-r_3)$ is evaluated from the factored potential, exactly zero at the
+turning point (the expanded polynomial leaves a residue there that $\sqrt{\cdot}$ lifts to
+$\sim\sqrt\varepsilon$ and $1/(r_4-r_3)$ amplifies near the critical curve); every term is
+evaluated at the inverted radius, so time and azimuth belong to the point of the geodesic at
+that radius. What remains is the conditioning of the near-double roots $r_3\approx r_4$; the landing
 radius agrees with Krang's to within $\varepsilon\,|\partial\ln r_s/\partial\ln s|$ along the
 screen ray at every order. `lensing_band` finds the band edges of any order by a logarithmic
 search toward the critical curve.
+
+### Time-dependent sources
+
+The landing time $t_s$ (zero at the observation, or the retarded time for an observer at
+infinity) makes a source $f(t,x,y)$ on the equator observable at time $t_{\rm obs}$ as
+$I=f(t_s+t_{\rm obs},r_s\cos\phi_s,r_s\sin\phi_s)\,g^p$. `analytic_movie` computes the
+landings of every pixel and order once and each frame as one pass over them; the default
+`EquatorialSpot` profile is the Gaussian of AART's flare model on a circular orbit,
+$f=\exp(-|x-x_c(t)|^2/w^2)$, $x_c=r_c(\cos(\Omega t+\phi_0),\sin(\Omega t+\phi_0))$.
 
 ### Polarization by the Walker–Penrose constant
 
