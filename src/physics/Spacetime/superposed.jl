@@ -97,6 +97,15 @@ end
     return _eta_apply(p) - U * ((inv(K) * F) * (U' * p))
 end
 
+# (g⁻¹ - η) p = -U K⁻¹ F Uᵀ p, the Woodbury correction alone.
+@inline function _superposed_raise_offset(terms::NTuple{N}, p::SVector{4}) where {N}
+    L = hcat(map(t -> t[2], terms)...)
+    U = hcat(map(t -> (l = t[2]; SVector(-l[1], l[2], l[3], l[4])), terms)...)
+    F = Diagonal(SVector(map(first, terms)))
+    K = one(SMatrix{N,N,eltype(F)}) + F * (U' * L)
+    return -(U * ((inv(K) * F) * (U' * p)))
+end
+
 # (g⁻¹ p, g⁻¹(p, p)) by the Woodbury form from one assembly of K.
 @inline function _superposed_raise_and_norm(terms::NTuple{N}, p::SVector{4}) where {N}
     L = hcat(map(t -> t[2], terms)...)
@@ -118,6 +127,8 @@ end
     _superposed_lower(_hole_terms(st, x), v)
 @inline raise_index(st::SuperposedKerrSchild, x::SVector{4}, p::SVector{4}) =
     _superposed_raise(_hole_terms(st, x), p)
+@inline raise_index_offset(st::SuperposedKerrSchild, x::SVector{4}, p::SVector{4}) =
+    _superposed_raise_offset(_hole_terms(st, x), p)
 
 @inline metric(st::SuperposedKerrSchild, x::SVector{4}) = _superposed_gcov(_hole_terms(st, x))
 @inline inverse_metric(st::SuperposedKerrSchild, x::SVector{4}) =

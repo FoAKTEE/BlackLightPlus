@@ -54,7 +54,8 @@ outbound ray, the march budget on both lanes, the horizon proxy, the observer
 inclination, the Kerr critical curve with the cost-ordered queue (identity order on
 other spacetimes) unless `queue` is given and, for `MixedLanes`, the rescue set. Throws
 `ArgumentError` for a spacetime that is not `Float64`, a geodesic lane the spacetime does
-not have, transfer or accumulator lanes other than `Float64`, `MixedLanes` off Kerr, or a
+not have, transfer or accumulator lanes other than `Float64`, `MixedLanes` off Kerr, a
+camera at infinity on a time-dependent spacetime, an unknown integrator, or a
 `queue` that is not a permutation of the pixel indices ([`queue_items`](@ref)).
 """
 function prepare(cfg::RunConfig; spacetime, matter, mode::TransferMode = IQUV(),
@@ -82,11 +83,16 @@ prepare(sphere::UniformSphere) =
 # The plan of `cfg` on `spacetime` through `matter` with the parameter set `params` and
 # the caller's pixel queue order (`nothing`: the derived one).
 function plan_of(cfg::RunConfig, spacetime, matter, mode, lanes, tile::Int, params, order)
+    cfg.camera.infinity && !(spacetime isa StationarySpacetime) &&
+        throw(ArgumentError("the camera at infinity needs a stationary spacetime; " *
+                            "$(nameof(typeof(spacetime))) depends on time"))
     cam = PlaneParallelCamera(cfg.camera.inclination_deg, cfg.camera.distance,
-                              cfg.camera.fov, cfg.camera.resolution)
+                              cfg.camera.fov, cfg.camera.resolution, cfg.camera.infinity)
     escape = cfg.escape_factor * cfg.camera.distance
     R_em = matter === nothing ? Inf : Float64(domain_radius(matter))
-    budget = MarchBudget{Float64}(cfg.C, escape, R_em, cfg.max_steps)
+    budget = MarchBudget{Float64}(cfg.C, escape, R_em, cfg.max_steps,
+                                  march_integrator(cfg.integrator), cfg.capture_redshift,
+                                  cfg.horizon_eps, cfg.winding)
     stg, bg = geodesic_lane(spacetime, budget, lanes)
     curve = scheduling_curve(spacetime, cam)
     queue = order !== nothing ? collect(Int, queue_items(order, npixels(cam))) :

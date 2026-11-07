@@ -20,9 +20,11 @@ include("boosted_superposed.jl")
 include("adm_grid.jl")
 include("metric_ops.jl")
 include("geodesic.jl")
+include("integrators.jl")
 include("termination.jl")
 include("adaptive.jl")
 include("camera.jl")
+include("far_zone.jl")
 include("kerr_orbits.jl")
 include("analytic_kerr.jl")
 include("analytic_radial.jl")
@@ -38,14 +40,19 @@ export Spacetime, StationarySpacetime, ETA, metric, inverse_metric, metric_and_i
 # derivatives and geodesics
 export inverse_metric_gradient, metric_gradient, christoffel,
        geodesic_rhs, geodesic_transport_rhs, rk4_step, null_error, energy,
-       angular_momentum_z, null_covariant, nullify_covariant
+       angular_momentum_z, null_covariant, nullify_covariant, raise_index_offset
+# integrators and emission surfaces
+export MarchIntegrator, ClassicalRK4, Verner9, integrator_stages, march_integrator, erk_step,
+       erk_increment, march_step, march_step_compensated, transport_step, EquatorialPlane,
+       surface_value, surface_crossing
 # termination and the adaptive tracer
 export ESCAPE_RADIUS, ADM_ESCAPE_RADIUS, HORIZON_EPS, HORIZON_EPS_SAMPLED, CAPTURE_REDSHIFT,
        march_captured, march_escaped, march_stop, normal_frame_energy, ks_radius_energy,
        proxy_distance, horizon_floor, PLUNGE_MARGIN, plunge_radius,
-       MarchBudget, MarchStep, march_control, trace_geodesic
+       MarchBudget, MarchStep, march_control, winding_factor, trace_geodesic
 # camera
-export PlaneParallelCamera, CameraFrame, camera_ray, npixels, pixel_centres, pixel_coords
+export PlaneParallelCamera, CameraFrame, camera_ray, npixels, pixel_centres, pixel_coords,
+       infinity_ray, FAR_U0, FAR_RATIO
 # exact Kerr
 export kerr_horizon, kerr_delta, kerr_radial_potential, isco_radius, isco_prograde,
        photon_orbit_radius, marginally_bound_radius, keplerian_omega,

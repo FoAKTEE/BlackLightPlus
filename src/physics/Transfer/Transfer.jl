@@ -12,7 +12,7 @@ import Adapt
 using ..Numerics: CL, EE, ME, HPL, SQRT2, Units, primal, bessel_k0, bessel_k1, harmonic_bridge,
                   hypergeometric_2f1
 using ..Spacetime: KerrSchildCartesian, MarchBudget, MarchStep, metric_and_inverse, rk4_step,
-                   geodesic_transport_rhs
+                   geodesic_transport_rhs, ClassicalRK4, march_step, transport_step
 import ..Spacetime: march_control
 using ..Matter: PlasmaState, ElectronModel, PlasmaCuts, GridProvider, sample, primitives, decode
 
@@ -38,6 +38,6 @@ export fluid_tetrad, fluid_tetrad_checked, normal_observer, qu_rotation, rotate_
 export POL_DELTA_TAU_MAX, segment, couple, stokes_admissible
 # march controls and the marches
 export SpacetimeMarch, StoredPath, march_control, max_steps, geodesic_step, next_state,
-       transfer_spacetime, geodesic_spacetime, renorm_e1, march
+       step_integrator, transfer_spacetime, geodesic_spacetime, renorm_e1, march
 
 end # module

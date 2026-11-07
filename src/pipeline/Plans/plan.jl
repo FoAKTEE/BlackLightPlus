@@ -22,8 +22,9 @@ hand. Fields:
   coordinates are centimetres);
 - `camera::PlaneParallelCamera`, `frame::CameraFrame{Float64}` and `pixels`, the
   `PixelGrid` of the camera's pixel centres;
-- `budget::MarchBudget{Float64}` (`C`, `escape`, `R_em`, `max_steps`) and
-  `geodesic_budget`, the same budget on the geodesic lane;
+- `budget::MarchBudget{Float64}` (`C`, `escape`, `R_em`, `max_steps`, the integrator,
+  the redshift cut and the horizon backstop) and `geodesic_budget`, the same budget on
+  the geodesic lane;
 - `horizon`, the spacetime's horizon proxy (`horizon_radius(spacetime)`: the Kerr outer
   horizon, the per-hole radii of a binary, the lapse floor of an ADM grid; `NaN` when
   the spacetime has none);
@@ -39,7 +40,7 @@ hand. Fields:
 - `hotcross`, the memo of [`hotcross_table`](@ref): empty until a Monte Carlo
   scattering run of the plan first needs the table, then the process-wide table.
 """
-struct Plan{S,Sg,P,M,T,Bg,H,L}
+struct Plan{S,Sg,P,M,T,B,Bg,H,L}
     config::RunConfig
     spacetime::S
     geodesic_spacetime::Sg
@@ -49,7 +50,7 @@ struct Plan{S,Sg,P,M,T,Bg,H,L}
     camera::PlaneParallelCamera
     frame::CameraFrame{Float64}
     pixels::PixelGrid{Vector{Float64}}
-    budget::MarchBudget{Float64}
+    budget::B
     geodesic_budget::Bg
     horizon::H
     escape::Float64

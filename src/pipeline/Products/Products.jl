@@ -11,12 +11,13 @@ import Adapt
 using ForwardDiff: Dual, value, partials
 using ..Numerics: position, momentum, MCRng, MCStreamLayout, widest_layout, mc_uniform, primary_rng,
                   ME, CL
-using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step,
+using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step, march_step,
                    inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance,
-                   surface_prep, surface_landing, image_crossings
+                   surface_prep, surface_landing, image_crossings, ks_radius, raise_index,
+                   surface_crossing, EquatorialPlane, ClassicalRK4, march_step_compensated
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
                 sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
-                polarized_emission, EquatorialSpot, spot_amplitude
+                polarized_emission, EquatorialSpot, spot_amplitude, equatorial_disk_intensity
 using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
                     CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
@@ -44,20 +45,22 @@ include("sensitivity.jl")
 include("analytic.jl")
 include("analytic_surfaces.jl")
 include("analytic_movie.jl")
+include("crossings.jl")
 include("amr.jl")
 include("montecarlo.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
-       SurfaceProgram, surface_outputs, SpotProgram, FrameProgram,
+       SurfaceProgram, surface_outputs, SpotProgram, FrameProgram, CrossingProgram,
+       crossing_outputs,
        StoredPathProgram, AdaptiveTraceProgram, TRACE_WINDOW, imaging_program, shadow_program,
        trace_outputs
 # Monte Carlo programs
 export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER_STRIPES,
        mc_ledger, ledger_sum, ledger_count
 # products and results
-export Image, Trajectories, render, render_amr, render_analytic, photon_ring_layers, trace,
-       shadow, sensitivity, variants, analytic_movie
+export Image, Trajectories, render, render_amr, render_analytic, render_crossings,
+       photon_ring_layers, trace, shadow, sensitivity, variants, analytic_movie
 export mc_spectrum, ScatterResult, GRMHDSpectrumResult, emission_zones, analytic_nuLnu,
        incl_nuLnu
 

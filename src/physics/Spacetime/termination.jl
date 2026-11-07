@@ -26,15 +26,16 @@ const HORIZON_EPS_SAMPLED = 1e-3
 const CAPTURE_REDSHIFT = 1.0e2
 
 """
-    march_captured(d, E_n, eps = HORIZON_EPS_SAMPLED) -> Bool
+    march_captured(d, E_n, eps = HORIZON_EPS_SAMPLED, E_c = CAPTURE_REDSHIFT) -> Bool
 
 Capture half of the termination rule: `d` is the distance above the horizon
 proxy, `E_n` the normal-frame photon energy. True when `d < eps`, `d` is
-non-finite, or `E_n` is not `≤ CAPTURE_REDSHIFT` (NaN captures). The constants
-are converted to the type of `d`, so a `Float32` lane stays `Float32`.
+non-finite, or `E_n` is not `≤ E_c` (NaN captures). The constants are converted
+to the type of `d`, so a `Float32` lane stays `Float32`.
 """
-@inline march_captured(d::T, En::T, eps::Real = HORIZON_EPS_SAMPLED) where {T<:Real} =
-    d < T(eps) || !isfinite(d) || !(En <= T(CAPTURE_REDSHIFT))
+@inline march_captured(d::T, En::T, eps::Real = HORIZON_EPS_SAMPLED,
+                       Ec::Real = CAPTURE_REDSHIFT) where {T<:Real} =
+    d < T(eps) || !isfinite(d) || !(En <= T(Ec))
 
 """
     march_escaped(R, R_prev, escape, R_em) -> Bool
@@ -49,7 +50,9 @@ not stopped on its way in. `R_em = Inf` disables the emission early-out.
 """
     march_stop(d, E_n, R, R_prev, escape, R_em) -> Bool
 
-The termination rule `march_captured(d, E_n) || march_escaped(R, R_prev, escape, R_em)`.
+The termination rule `march_captured(d, E_n) || march_escaped(R, R_prev, escape, R_em)`;
+`march_stop(d, E_n, R, R_prev, b::MarchBudget)` takes the cut, the backstop and the
+radii of the budget `b`.
 All arguments share one type: a `Float64` scalar in a `Float32` march is a
 `MethodError`, never a silent promotion.
 """
@@ -87,22 +90,66 @@ Kerr-Schild radius and normal-frame photon energy of `y` on Kerr of spin `a`
 end
 
 """
-    MarchBudget{T}(C, escape, R_em, nmax)
+    MarchBudget{T}(C, escape, R_em, nmax[, integrator, capture, horizon_eps, winding])
+    MarchBudget(C, escape, R_em, nmax; integrator = ClassicalRK4(),
+                capture = CAPTURE_REDSHIFT, horizon_eps = HORIZON_EPS_SAMPLED, winding = false)
 
 Control of a fixed-control march: step divisor `C` (the step is the distance to
 the horizon proxy over `C`), escape radius `escape`, emission radius `R_em`
-(`Inf` disables the early-out) and step limit `nmax`. `lane(b, T)` converts the
-scalars.
+(`Inf` disables the early-out), step limit `nmax`, the [`MarchIntegrator`](@ref) of
+the step, the redshift cut `capture` (the normal-frame energy above which the march
+captures), the horizon backstop `horizon_eps`, and `winding`, whether the step resolves
+the frame-dragged winding near a spinning horizon ([`winding_factor`](@ref)).
+`MarchBudget{T, I}` carries the integrator type `I`, so each integrator compiles to its
+own march. `lane(b, T)` converts the scalars.
 """
-struct MarchBudget{T}
+struct MarchBudget{T,I<:MarchIntegrator}
     C::T
     escape::T
     R_em::T
     nmax::Int
+    integrator::I
+    capture::T
+    horizon_eps::T
+    winding::Bool
 end
-MarchBudget(C, escape, R_em, nmax::Integer) = MarchBudget(promote(C, escape, R_em)..., Int(nmax))
+MarchBudget{T}(C, escape, R_em, nmax::Integer, integ::I = ClassicalRK4(),
+               capture = CAPTURE_REDSHIFT, horizon_eps = HORIZON_EPS_SAMPLED,
+               winding::Bool = false) where {T,I<:MarchIntegrator} =
+    MarchBudget{T,I}(T(C), T(escape), T(R_em), Int(nmax), integ, T(capture), T(horizon_eps), winding)
+function MarchBudget(C, escape, R_em, nmax::Integer; integrator::MarchIntegrator = ClassicalRK4(),
+                     capture = CAPTURE_REDSHIFT, horizon_eps = HORIZON_EPS_SAMPLED,
+                     winding::Bool = false)
+    T = promote_type(typeof(C), typeof(escape), typeof(R_em))
+    return MarchBudget{T}(C, escape, R_em, nmax, integrator, capture, horizon_eps, winding)
+end
 
-lane(b::MarchBudget, ::Type{T}) where {T} = MarchBudget{T}(T(b.C), T(b.escape), T(b.R_em), b.nmax)
+lane(b::MarchBudget, ::Type{T}) where {T} =
+    MarchBudget{T}(b.C, b.escape, b.R_em, b.nmax, b.integrator, b.capture, b.horizon_eps, b.winding)
+
+"""
+    winding_factor(r, r_h, a) -> w
+
+The factor `w = (1 + q⁴)^(-1/4)`, `q = 2|a|/(r - r_-)` with `r_- = a²/r_h`, of the step
+distance of a march that resolves the frame-dragged winding near a spinning horizon. A
+ray within `r - r_h` of the outer horizon of a hole of spin `a` turns by
+`dφ = 2a dr/Δ`, `Δ = (r - r_h)(r - r_-)`, in its azimuth about the spin axis (the
+Kerr–Schild azimuth of a backward-traced ray winds without bound as it nears the past
+horizon), so a step of radial extent `(r - r_h)/C` turns it by `2|a|/((r - r_-) C)`,
+up to `2|a|/((r_h - r_-) C)` at the horizon, seven radians over `C` at `a = 0.99`. The
+step `w (r - r_h)/C` keeps the turn below about `1/C` and leaves the step unchanged
+where `r - r_- ≫ 2|a|`; `w = 1` at `a = 0`.
+"""
+@inline function winding_factor(r::T, rh, a) where {T}
+    am = abs(a)
+    q = 2 * am / (r - am * am / rh)
+    q2 = q * q
+    return one(T) / sqrt(sqrt(one(T) + q2 * q2))
+end
+
+# The termination rule under the budget's capture constants.
+@inline march_stop(d::T, En::T, R::T, R_prev::T, b::MarchBudget{T}) where {T<:Real} =
+    march_captured(d, En, b.horizon_eps, b.capture) || march_escaped(R, R_prev, b.escape, b.R_em)
 
 """
     MarchStep{T}
@@ -124,10 +171,15 @@ The fixed-control step at state `y` (`r_prev` the radius of the previous
 decision, `Inf` at the first):
 
 - `KerrSchildCartesian`: `d = r - r_h` on the Kerr-Schild radius `r`,
-  `stop = march_stop(d, E_n, r, r_prev, escape, R_em)`, `h = d / C`, `R = r`;
+  `stop = march_stop(d, E_n, r, r_prev, b)`, `h = d / C` (`d w / C` with the
+  [`winding_factor`](@ref) `w` of a `winding` budget), `R = r`;
 - `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`: `d = min_A(r_A - r_h,A)`
   (`-Inf` on a non-finite `r_A`; the moving holes' `r_A` at the ray's time), the
-  same rule on the coordinate radius `R`, `h = d / C`; a state where `g^{tt} ≥ 0`
+  same rule on the coordinate radius `R`, `h = d / C` (`min_A d_A w_A / C` under
+  `winding`), and a redshift cut of at most `CAPTURE_REDSHIFT`: the superposition's
+  horizons are approximate, `d` stalls above zero while `E_n` grows, and a march
+  continued beyond `E_n ≈ 10²` loses the ray (it comes out with garbage momenta);
+  a state where `g^{tt} ≥ 0`
   (a coarse step into a hole) captures through `E_n = Inf`;
 - `ADMGrid`: `d` is the lapse `1/√(-g^{tt})` minus `alpha_min` (lapse 1 and no
   redshift cut where `g^{tt} ≥ 0`), capture at `d < 0`, `h = max(R, 1)/C` on the
@@ -138,23 +190,30 @@ decision, `Inf` at the first):
 @inline function march_control(st::KerrSchildCartesian{T}, y::SVector{8,T}, r_prev::T,
                                b::MarchBudget{T}) where {T}
     r, En = ks_radius_energy(y, st.a)
-    return MarchStep{T}(march_stop(r - st.r_h, En, r, r_prev, b.escape, b.R_em),
-                        (r - st.r_h) / b.C, r)
+    h = b.winding ? (r - st.r_h) * winding_factor(r, st.r_h, st.a) / b.C : (r - st.r_h) / b.C
+    return MarchStep{T}(march_stop(r - st.r_h, En, r, r_prev, b), h, r)
 end
 
 @inline function march_control(st::Union{SuperposedKerrSchild{N,T},BoostedSuperposedKerrSchild{N,T}},
                                y::SVector{8,T}, r_prev::T, b::MarchBudget{T}) where {N,T}
     x = position(y)
-    dmin = T(Inf)
+    dmin = T(Inf); wmin = T(Inf)
     @inbounds for A in 1:N
-        dA = ks_radius(st, x, A) - horizon_radius(st, A)
-        isfinite(dA) || (dmin = T(-Inf); break)
+        rA = ks_radius(st, x, A)
+        dA = rA - horizon_radius(st, A)
+        isfinite(dA) || (dmin = T(-Inf); wmin = T(-Inf); break)
         dmin = min(dmin, dA)
+        b.winding && (wmin = min(wmin, dA * winding_factor(rA, horizon_radius(st, A), _spin_magnitude(st, A))))
     end
     R = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
-    cap = march_captured(dmin, normal_frame_energy(st, y))
-    return MarchStep{T}(cap || march_escaped(R, r_prev, b.escape, b.R_em), dmin / b.C, R)
+    Ec = min(b.capture, T(CAPTURE_REDSHIFT))
+    cap = march_captured(dmin, normal_frame_energy(st, y), b.horizon_eps, Ec)
+    return MarchStep{T}(cap || march_escaped(R, r_prev, b.escape, b.R_em),
+                        (b.winding ? wmin : dmin) / b.C, R)
 end
+
+@inline _spin_magnitude(st::SuperposedKerrSchild, A) = st.spin[A]
+@inline _spin_magnitude(st::BoostedSuperposedKerrSchild, A) = sqrt(dot(st.spin[A], st.spin[A]))
 
 @inline function march_control(st::ADMGrid{T}, y::SVector{8,T}, r_prev::T,
                                b::MarchBudget{T}) where {T}

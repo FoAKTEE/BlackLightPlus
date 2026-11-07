@@ -6,8 +6,9 @@ Run configuration, precision lanes and `prepare`, which turns a configuration, a
 module Plans
 
 using ..Numerics: Units
-using ..Spacetime: Spacetime, KerrSchildCartesian, Minkowski, PlaneParallelCamera, CameraFrame,
-                   MarchBudget, lane, horizon_radius, critical_curve
+using ..Spacetime: Spacetime, StationarySpacetime, KerrSchildCartesian, Minkowski,
+                   PlaneParallelCamera, CameraFrame, MarchBudget, march_integrator, lane,
+                   horizon_radius, critical_curve
 import ..Spacetime: npixels
 using ..Matter: ElectronModel, PlasmaCuts, UniformSphere, legacy_bound, domain_radius
 using ..MonteCarlo: HotcrossTable
@@ -21,7 +22,7 @@ include("lanes.jl")
 include("plan.jl")
 include("prepare.jl")
 
-export CameraConfig, PlasmaConfig, RunConfig
+export CameraConfig, PlasmaConfig, RunConfig, precise, PRECISE_C, PRECISE_CAPTURE
 export Lanes, MixedLanes, geodesic_type
 export Plan, prepare, transfer_params
 

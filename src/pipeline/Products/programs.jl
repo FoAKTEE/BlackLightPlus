@@ -115,7 +115,8 @@ end
     TraceProgram(st, budget, rays, resume)
 
 One window of a fixed-control trace on the geodesic lane: `march_control(st, …,
-budget)` decides each step and `rk4_step` takes it, for at most `TRACE_WINDOW` steps and
+budget)` decides each step and the budget integrator's `march_step` takes it (`rk4_step`
+for `ClassicalRK4`), for at most `TRACE_WINDOW` steps and
 at most `budget.nmax` in all. The window starts at the camera ray of `rays` (narrowed
 to the lane) when `resume === nothing`, else at `resume[item]`, a [`TraceState`](@ref).
 Called as `prog(item, i, w_0, …, w_K, state)` with `K = TRACE_WINDOW`: `w_0[i]` is the
@@ -124,15 +125,15 @@ start state, `w_s[i]` the [`TraceStep`](@ref) `s` of the window, `state[i]` the 
 Successive windows continue the march exactly, so the trajectory is the one a single
 march takes.
 """
-struct TraceProgram{S,T,R,Q} <: Function
+struct TraceProgram{S,T,B<:MarchBudget{T},R,Q} <: Function
     st::S
-    budget::MarchBudget{T}
+    budget::B
     rays::R
     resume::Q
 end
 Adapt.@adapt_structure TraceProgram
 
-@inline function trace_start(p::TraceProgram{S,T,R,Nothing}, item) where {S,T,R}
+@inline function trace_start(p::TraceProgram{S,T,B,R,Nothing}, item) where {S,T,B<:MarchBudget{T},R}
     y, ok = camera_state(p.rays, item)
     return SVector{8,T}(y), T(Inf), 0, ok
 end
@@ -161,7 +162,7 @@ function (p::TraceProgram{S,T})(item, i, outs::Vararg{Any,N}) where {S,T,N}
             stop = true
         else
             r_prev = m.R
-            y = rk4_step(p.st, y, m.h)
+            y = march_step(p.budget.integrator, p.st, y, m.h)
             n += 1
             store_slot!(ws, n + 1, i, TraceStep{T}(y, m.h))
         end
@@ -189,14 +190,15 @@ The fate of one camera ray without plasma, on the geodesic lane: at every step t
 error `|g^{μν} p_μ p_ν|` is recorded (its finite maximum kept), then the ray is
 captured when `march_control(st, y, …, budget)` stops (`budget` has infinite escape and
 emission radii, so it stops on capture only), escapes when the decision's radius
-exceeds `escape` (no outbound test), and is otherwise stepped by `rk4_step`; a
+exceeds `escape` (no outbound test), and is otherwise stepped by the budget
+integrator's `march_step`; a
 non-finite state after a step counts as captured. `out_y[i]` is the final state and
 `out_m[i] = (fate, steps, max null error, final coordinate radius)` with fate 1
 captured, 2 escaped, 0 step-limited, -1 no positive-energy null root at the camera.
 """
-struct ShadowProgram{S,T,R} <: Function
+struct ShadowProgram{S,T,B<:MarchBudget{T},R} <: Function
     st::S
-    budget::MarchBudget{T}
+    budget::B
     escape::T
     rays::R
 end
@@ -223,7 +225,7 @@ function (p::ShadowProgram{S,T})(item, i, out_y, out_m) where {S,T}
             break
         end
         r_prev = m.R
-        y = rk4_step(p.st, y, m.h)
+        y = march_step(p.budget.integrator, p.st, y, m.h)
         n += 1
         if !all(isfinite, y)
             status = 1.0

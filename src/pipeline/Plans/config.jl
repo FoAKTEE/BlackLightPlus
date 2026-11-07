@@ -3,18 +3,24 @@
 # `prepare`, not configuration fields.
 
 """
-    CameraConfig(; inclination_deg = 60.0, distance = 1000.0, fov = 40.0, resolution = 64)
+    CameraConfig(; inclination_deg = 60.0, distance = 1000.0, fov = 40.0, resolution = 64,
+                 infinity = false)
 
 Camera geometry: observer inclination `inclination_deg` (degrees from the spin axis),
 camera distance `distance` and full field of view `fov` (both in M = GM/c²), and
-`resolution` pixels per side.
+`resolution` pixels per side. With `infinity = true` the observer is at infinity: the
+image coordinates are Bardeen's, and each ray is carried in from infinity through the
+far zone and started on the plane at `distance` (stationary spacetimes only).
 """
 Base.@kwdef struct CameraConfig
     inclination_deg::Float64 = 60.0
     distance::Float64 = 1000.0
     fov::Float64 = 40.0
     resolution::Int = 64
+    infinity::Bool = false
 end
+CameraConfig(inclination_deg, distance, fov, resolution) =
+    CameraConfig(inclination_deg, distance, fov, resolution, false)
 
 """
     PlasmaConfig(; mu = 0.5, ne_ni = 1.0, use_p = true, rat_low = 1.0, rat_high = 10.0,
@@ -57,13 +63,20 @@ end
 """
     RunConfig(; m_bh_cgs = 6.2e9 × 1.989e33, mass_scale_cgs = 1e24, frequency_hz = 230e9,
               camera = CameraConfig(), plasma = PlasmaConfig(), max_steps = 2500,
-              C = 80.0, escape_factor = 1.1)
+              C = 80.0, escape_factor = 1.1, integrator = :rk4, capture_redshift = 100.0,
+              horizon_eps = 1e-3, winding = false)
 
 One run: the hole mass `m_bh_cgs` (g), the density mass scale `mass_scale_cgs` (g), the
 observing frequency `frequency_hz` (Hz), the camera and the plasma model, and the march
-budget: at most `max_steps` steps of affine length (distance to the horizon proxy)/`C`,
-a ray escaping beyond `escape_factor × camera.distance`. The spacetime, the matter, the
-transfer mode and the precision lanes are arguments of [`prepare`](@ref).
+budget: at most `max_steps` steps of affine length (distance to the horizon proxy)/`C`
+taken by `integrator` (`:rk4`, the classical fourth-order step, or `:verner9`, the
+ninth-order step), a ray escaping beyond `escape_factor × camera.distance` and captured
+where its normal-frame energy exceeds `capture_redshift` (camera energy 1) or it comes
+within `horizon_eps` of the horizon proxy, and with `winding` the step near a spinning
+horizon shortened to resolve the frame-dragged winding (`winding_factor`).
+[`precise`](@ref) gives the precise mode of a
+configuration. The spacetime, the matter, the transfer mode and the precision lanes are
+arguments of [`prepare`](@ref).
 """
 Base.@kwdef struct RunConfig
     m_bh_cgs::Float64 = 6.2e9 * 1.989e33
@@ -74,4 +87,33 @@ Base.@kwdef struct RunConfig
     max_steps::Int = 2500
     C::Float64 = 80.0
     escape_factor::Float64 = 1.1
+    integrator::Symbol = :rk4
+    capture_redshift::Float64 = 100.0
+    horizon_eps::Float64 = 1.0e-3
+    winding::Bool = false
+end
+
+"Step divisor of the precise mode ([`precise`](@ref))."
+const PRECISE_C = 20.0
+"Redshift cut of the precise mode ([`precise`](@ref))."
+const PRECISE_CAPTURE = 1.0e6
+
+"""
+    precise(cfg::RunConfig = RunConfig(); infinity = true, C = PRECISE_C) -> RunConfig
+
+The precise mode of `cfg`: the `:verner9` march at step divisor `C` with the step
+resolving the winding near a spinning horizon, the redshift cut at `PRECISE_CAPTURE` with
+no horizon backstop (`horizon_eps = 0`), a step limit of at least 10⁵, and, with
+`infinity = true`, the camera at infinity (on a stationary spacetime; pass
+`infinity = false` for a time-dependent one). Every other field is `cfg`'s. The geodesic
+of every product follows the ninth-order step; a volumetric render samples its plasma
+once per step, so its accuracy is set by `C`, not by the integrator, and it keeps the
+production divisor or a larger one.
+"""
+function precise(cfg::RunConfig = RunConfig(); infinity::Bool = true, C::Real = PRECISE_C)
+    c = cfg.camera
+    cam = CameraConfig(c.inclination_deg, c.distance, c.fov, c.resolution, infinity || c.infinity)
+    return RunConfig(cfg.m_bh_cgs, cfg.mass_scale_cgs, cfg.frequency_hz, cam, cfg.plasma,
+                     max(cfg.max_steps, 100_000), Float64(C), cfg.escape_factor, :verner9,
+                     PRECISE_CAPTURE, 0.0, true)
 end

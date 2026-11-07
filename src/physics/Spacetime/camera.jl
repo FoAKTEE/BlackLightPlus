@@ -9,38 +9,46 @@
 # fluid-frame frequency is ν = -k·u ν_obs.
 
 """
-    PlaneParallelCamera(; inc_deg = 60.0, d = 1000.0, fov = 40.0, npix = 64)
+    PlaneParallelCamera(; inc_deg = 60.0, d = 1000.0, fov = 40.0, npix = 64, infinity = false)
 
 Square plane-parallel camera at inclination `inc_deg` (degrees from the spin
 axis) and distance `d` (M), field of view `fov` (M) on each side, `npix` pixels
-per side.
+per side. With `infinity = true` the camera is the observer at infinity: a pixel's
+ray is the one received at infinity at the Bardeen screen point of its image
+coordinates, started on the plane at distance `d` ([`infinity_ray`](@ref)).
 """
 Base.@kwdef struct PlaneParallelCamera
     inc_deg::Float64 = 60.0
     d::Float64       = 1000.0
     fov::Float64     = 40.0
     npix::Int        = 64
+    infinity::Bool   = false
 end
+PlaneParallelCamera(inc_deg, d, fov, npix) = PlaneParallelCamera(inc_deg, d, fov, npix, false)
 
 """
     CameraFrame{T}
     CameraFrame(cam::PlaneParallelCamera)
+    CameraFrame(sin_i, cos_i, d, up[, infinity = false])
 
 The `isbits` image-plane geometry of a camera: `sin_i`, `cos_i` of the
-inclination, the distance `d`, and `up`, the contravariant image vertical
+inclination, the distance `d`, `up`, the contravariant image vertical
 `(0, -cos i, 0, sin i)` (image `+β`, north) that the polarized march transports
-as the camera polarization frame.
+as the camera polarization frame, and `infinity`, whether the rays are those of the
+observer at infinity ([`infinity_ray`](@ref)).
 """
 struct CameraFrame{T}
     sin_i::T
     cos_i::T
     d::T
     up::SVector{4,T}
+    infinity::Bool
 end
+CameraFrame(sin_i::T, cos_i::T, d::T, up::SVector{4,T}) where {T} = CameraFrame(sin_i, cos_i, d, up, false)
 
 function CameraFrame(cam::PlaneParallelCamera)
     i = deg2rad(cam.inc_deg)
-    return CameraFrame(sin(i), cos(i), cam.d, SVector(0.0, -cos(i), 0.0, sin(i)))
+    return CameraFrame(sin(i), cos(i), cam.d, SVector(0.0, -cos(i), 0.0, sin(i)), cam.infinity)
 end
 
 """
@@ -50,9 +58,11 @@ The initial state `[x^μ; p_μ]` of the ray at image-plane coordinates `(α, β)
 position from arXiv:2304.03804 Eqs. 5–7, momentum `p = -k/E` with `k` the null
 covector received along the inward plane normal, so `p_t = +1` exactly. `ok` is
 false when no positive-energy null root exists at the camera (see
-[`null_covariant`](@ref)).
+[`null_covariant`](@ref)). A frame with `infinity` set gives the ray of the observer
+at infinity instead ([`infinity_ray`](@ref)).
 """
 @inline function camera_ray(st, fr::CameraFrame{T}, α, β) where {T}
+    fr.infinity && return infinity_ray(st, fr, α, β)
     x = SVector(zero(T), -β * fr.cos_i + fr.d * fr.sin_i, α, β * fr.sin_i + fr.d * fr.cos_i)
     kcon = SVector(one(T), fr.sin_i, zero(T), fr.cos_i)    # provisional received k^μ
     k = metric(st, x) * kcon

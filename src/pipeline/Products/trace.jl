@@ -165,6 +165,8 @@ stop), the escape radius `plan.escape` on the lane, and its camera rays.
 function shadow_program(plan::Plan)
     b = plan.geodesic_budget
     T = typeof(b.C)
-    return ShadowProgram(plan.geodesic_spacetime, MarchBudget{T}(b.C, T(Inf), T(Inf), b.nmax),
+    return ShadowProgram(plan.geodesic_spacetime,
+                         MarchBudget{T}(b.C, T(Inf), T(Inf), b.nmax, b.integrator, b.capture,
+                                        b.horizon_eps, b.winding),
                          T(plan.escape), CameraRays(plan.spacetime, plan.frame, plan.pixels))
 end

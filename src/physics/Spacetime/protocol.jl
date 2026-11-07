@@ -85,6 +85,17 @@ The contraction `g^μν(x) p_ν`. Closed forms skip the 4×4 matrix.
 @inline raise_index(st::Spacetime, x, p::SVector{4}) = inverse_metric(st, x) * p
 
 """
+    raise_index_offset(st::Spacetime, x, p::SVector{4}) -> SVector{4}
+
+The offset `(g^μν - η^μν) p_ν` of the raised covector from its flat-space value. The
+default subtracts `η p` from [`raise_index`](@ref), which leaves an absolute error of
+order `eps |p|`; Kerr–Schild spacetimes form it from their terms, so it carries rounding
+relative to itself where the metric is nearly flat (the far zone of
+[`infinity_ray`](@ref)).
+"""
+@inline raise_index_offset(st::Spacetime, x, p::SVector{4}) = raise_index(st, x, p) - _eta_apply(p)
+
+"""
     raise_and_norm(st::Spacetime, x, p::SVector{4}) -> (g^μν p_ν, g^μν p_μ p_ν)
 
 The raised covector and its squared norm (twice the geodesic Hamiltonian) from

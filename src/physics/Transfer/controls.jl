@@ -5,16 +5,17 @@
 # control's lane and the transfer in Float64 on the program's spacetime.
 
 """
-    SpacetimeMarch{S,T}(st, budget::MarchBudget{T})
+    SpacetimeMarch{S,T,B}(st, budget::MarchBudget{T})
 
 Fixed-control march on the geodesic-lane spacetime `st` (scalars of type `T`, e.g.
 `lane(KerrSchildCartesian(a), Float32)`): at every step `march_control(st, y, r_prev,
-budget)` decides the stop and the affine step, and `rk4_step` advances the state.
+budget)` decides the stop and the affine step, and the budget's integrator
+(`march_step`; `rk4_step` for the default `ClassicalRK4`) advances the state.
 The step limit is `budget.nmax`.
 """
-struct SpacetimeMarch{S,T}
+struct SpacetimeMarch{S,T,B<:MarchBudget{T}}
     st::S
-    budget::MarchBudget{T}
+    budget::B
 end
 # The control reaches a device with its spacetime adapted (an ADM grid carries its data array).
 Adapt.adapt_structure(to, c::SpacetimeMarch) = SpacetimeMarch(Adapt.adapt(to, c.st), c.budget)
@@ -77,12 +78,23 @@ end
 """
     geodesic_step(ctl, y, h, it) -> RayState
 
-Advance the ray state over step `it` of affine length `h`: `rk4_step` on the control's
-spacetime for a [`SpacetimeMarch`](@ref), the next stored state for a
+Advance the ray state over step `it` of affine length `h`: the budget integrator's
+`march_step` on the control's spacetime for a [`SpacetimeMarch`](@ref) (`rk4_step` for
+`ClassicalRK4`), the next stored state for a [`StoredPath`](@ref).
+"""
+@inline geodesic_step(c::SpacetimeMarch, y, h, it) =
+    march_step(c.budget.integrator, geodesic_spacetime(c), y, h)
+@inline geodesic_step(c::StoredPath, y, h, it) = next_state(c, y, it)
+
+"""
+    step_integrator(ctl) -> MarchIntegrator
+
+The integrator that advances the polarized camera frame under the control `ctl`: the
+budget's for a [`SpacetimeMarch`](@ref), `ClassicalRK4()` over the stored steps of a
 [`StoredPath`](@ref).
 """
-@inline geodesic_step(c::SpacetimeMarch, y, h, it) = rk4_step(geodesic_spacetime(c), y, h)
-@inline geodesic_step(c::StoredPath, y, h, it) = next_state(c, y, it)
+@inline step_integrator(c::SpacetimeMarch) = c.budget.integrator
+@inline step_integrator(::StoredPath) = ClassicalRK4()
 
 """
     geodesic_spacetime(ctl)

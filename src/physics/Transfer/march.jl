@@ -124,8 +124,9 @@ end
 
 Observed `(I, Q, U, V)` (cgs, `ν_obs³` times the invariant Stokes vector) of the camera
 ray `y0` in the camera polarization frame: the normal observer at the camera with
-`e_(2)` along `prog.frame.up`, parallel-transported with the geodesic by RK4 in the
-lane `Tg` (`geodesic_transport_rhs`). Each valid sample contributes its Mueller
+`e_(2)` along `prog.frame.up`, parallel-transported with the geodesic in the lane `Tg`
+(`geodesic_transport_rhs`) by the step of `rk4_step` or, under a `Verner9` budget, by the
+ninth-order `transport_step`. Each valid sample contributes its Mueller
 operator in the fluid tetrad, rotated into the transported frame, and the accumulated
 Stokes vector is kept admissible. The march also ends where the transported frame
 admits no spacelike screen leg (`fluid_tetrad_checked`), i.e. the photon momentum has
@@ -169,21 +170,26 @@ is one `Float64` `TransferParams`. Pure and allocation-free.
                 G = G * rotate_qu(c2, s2, M)
             end
         end
-        # low-storage streaming RK4 of {y, eU, eUu}, the operations of `rk4_step`
-        dy, (de, du) = geodesic_transport_rhs(stg, y, (eU, eUu))
-        ay = dy; ae = de; au = du
-        ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
-        ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
-        ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
-        dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
-        ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
-        ys = y + h*dy; es = eU + h*de; us = eUu + h*du
-        dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
-        ay = ay + dy; ae = ae + de; au = au + du
-        y   = next_state(ctl, y + (h/6)*ay, it)
-        eU  = eU  + (h/6)*ae
-        eUu = eUu + (h/6)*au
+        if step_integrator(ctl) isa ClassicalRK4
+            # low-storage streaming RK4 of {y, eU, eUu}, the operations of `rk4_step`
+            dy, (de, du) = geodesic_transport_rhs(stg, y, (eU, eUu))
+            ay = dy; ae = de; au = du
+            ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
+            dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
+            ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
+            ys = y + (h/2)*dy; es = eU + (h/2)*de; us = eUu + (h/2)*du
+            dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
+            ay = ay + 2*dy; ae = ae + 2*de; au = au + 2*du
+            ys = y + h*dy; es = eU + h*de; us = eUu + h*du
+            dy, (de, du) = geodesic_transport_rhs(stg, ys, (es, us))
+            ay = ay + dy; ae = ae + de; au = au + du
+            y   = next_state(ctl, y + (h/6)*ay, it)
+            eU  = eU  + (h/6)*ae
+            eUu = eUu + (h/6)*au
+        else
+            yn, (eU, eUu) = transport_step(step_integrator(ctl), stg, y, (eU, eUu), h)
+            y = next_state(ctl, yn, it)
+        end
     end
     return S * p.nu_obs^3
 end

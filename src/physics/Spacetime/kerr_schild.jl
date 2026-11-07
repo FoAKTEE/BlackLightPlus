@@ -13,7 +13,7 @@
     a2 = a * a
     rr2 = X * X + Y * Y + Z * Z
     r2 = (rr2 - a2 + hypot(rr2 - a2, 2 * a * Z)) / 2
-    r = sqrt(r2)
+    r = sqrt(max(r2, zero(r2)))               # a device hypot may round below |rr2 - a2|
     if iszero(r) && rr2 < a2
         return r, zero(M * r), SVector(one(T), Y / a, -X / a, zero(T))
     end
@@ -84,6 +84,12 @@ end
     return _eta_apply(p) - (f * dot(lu, p)) * lu
 end
 
+@inline function raise_index_offset(st::KerrSchildCartesian, x::SVector{4}, p::SVector{4})
+    _, f, l = _rfl(x, st.a)
+    lu = _eta_apply(l)
+    return -(f * dot(lu, p)) * lu
+end
+
 # Norm by the closed form η(p, p) - f (l^μ p_μ)².
 @inline function raise_and_norm(st::KerrSchildCartesian, x::SVector{4}, p::SVector{4})
     _, f, l = _rfl(x, st.a)
@@ -108,3 +114,4 @@ lane(::Minkowski, ::Type{T}) where {T} = Minkowski{T}()
 @inline inverse_metric(::Minkowski, x::SVector{4,T}) where {T} = _eta(T)
 @inline lower_index(::Minkowski, x::SVector{4}, v::SVector{4}) = _eta_apply(v)
 @inline raise_index(::Minkowski, x::SVector{4}, p::SVector{4}) = _eta_apply(p)
+@inline raise_index_offset(::Minkowski, x::SVector{4}, p::SVector{4}) = zero(p)
