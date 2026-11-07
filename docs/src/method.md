@@ -508,8 +508,26 @@ $C_2+iS_2=\Delta s\,\varphi\big((\alpha_I-i\lambda_2)\Delta s\big)$ of
 $e^{-\alpha_I s}(\cos,\sin)\lambda_2 s$, with $\varphi(z)=(1-e^{-z})/z$:
 $b=\big[\tfrac12(C_1+C_2)\mathbf M_1-S_2\mathbf M_2-S_1\mathbf M_3+\tfrac12(C_1-C_2)\mathbf M_4\big]j$.
 Their usual closed forms carry $1/(\alpha_I^2-\lambda_1^2)$ and
-$1/(\alpha_I^2+\lambda_2^2)$; within a relative gap of $10^{-6}$ of those poles
-the segment evaluates $\varphi$, which is regular at $z=0$. The cases:
+$1/(\alpha_I^2+\lambda_2^2)$ and are differences of terms of order
+$1/(\alpha_I\mp\lambda_1)$ whose difference is of order $\Delta s$, so they keep only a
+relative accuracy $\epsilon/[(\alpha_I-\lambda_1)\Delta s]$ of their value ($\epsilon$ the
+rounding unit; the cosine pair fares better, $|\alpha_I-i\lambda_2|\ge\alpha_I-\lambda_1$).
+The segment uses them only where the slow-mode depth $(\alpha_I-\lambda_1)\Delta s\ge1$
+and the relative gap to either pole exceeds $10^{-6}$, and evaluates $\varphi$, regular at
+$z=0$, everywhere else. That is the small-absorption limit: as $\alpha\to0$ at fixed
+$\rho$, $\lambda_1\to|\boldsymbol\alpha\cdot\boldsymbol\rho|/\rho_P$, $\lambda_2\to\rho_P$,
+$C_1\to\Delta s$, $S_1\to0$ and $C_2+iS_2\to[\sin\theta+i(1-\cos\theta)]/\rho_P$
+($\theta=\rho_P\Delta s$), the rotation segment below, whereas the closed forms become
+$0/0$ (once $\alpha_I\lesssim10^{-154}$ their denominators underflow, as for the far
+gas of a power-law or kappa fit). The eigen-decomposition is formed scale-free:
+$\lambda_{1,2}$ are homogeneous of degree 1 in $(\boldsymbol\alpha_P,\boldsymbol\rho_P)$ and
+$\mathbf M_{2,3,4}$ of degree 0, so both come from the polarized coefficients divided by
+the largest of them, and of $\lambda_{1,2}^2$ the root that the formula gives as a
+difference is taken as $(\boldsymbol\alpha\cdot\boldsymbol\rho)^2$ over the other
+($\lambda_1^2\lambda_2^2=(\boldsymbol\alpha\cdot\boldsymbol\rho)^2$). No square under- or
+overflows and neither root cancels; with $\rho_P=10^{10}\alpha_I$ the difference form
+loses $\lambda_1$ altogether and the slow mode decays at $\alpha_I$ instead of
+$\alpha_I-\lambda_1$. The cases:
 
 - *emission only* ($\alpha_I=\alpha_P=\rho_P=0$): $M=\mathbf 1$, $b=j\,\Delta s$;
 - *total absorption* ($\alpha_P=\rho_P=0$): $M=e^{-\alpha_I\Delta s}\mathbf 1$,

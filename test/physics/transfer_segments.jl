@@ -1,11 +1,12 @@
 # Segment operators of constant-coefficient transfer: the physical limits of the
 # polarized coupling (Landi Degl'Innocenti 1985; ipole, blacklight StokesCoupleNoSplit),
 # agreement with dense matrix exponentials, the exact limits (dichroism-cone boundary,
-# nilpotent coupling, rotation without absorption, thick segments with a shallow mode)
-# against 256-bit solutions, the unprojected solver on the problems of Prather et al.
+# nilpotent coupling, rotation without absorption, thick segments with a shallow mode,
+# small absorption down to the underflow range, any coefficient scale) against 256-bit
+# solutions, the unprojected solver on the problems of Prather et al.
 # (2023), Stokes admissibility and the order independence it buys, the unpolarized
 # operator, and derivatives through the coupling.
-using Test, BlackLightPlus, StaticArrays, LinearAlgebra, ForwardDiff
+using Test, BlackLightPlus, StaticArrays, LinearAlgebra, ForwardDiff, Random
 using BlackLightPlus.Transfer: StokesI, IQUV, segment, couple, stokes_admissible, POL_DELTA_TAU_MAX,
                     thermal_synchrotron_polarized
 
@@ -192,6 +193,60 @@ end
         # rotation without absorption: one segment equals any chain of segments
         j = SVector(0.2, 0.1, 0.1, 0.1); ρ = SVector(0.0, 10.0, 0.0, -4.0)
         @test chain_unprojected(j, z, ρ, 3.0, 1) ≈ chain_unprojected(j, z, ρ, 3.0, 300) rtol = 1e-12
+    end
+
+    @testset "small absorption: the regular limit, to rounding at every scale" begin
+        # the absorptivity of a power-law or kappa fit far out: α_I² underflows, and the
+        # closed form's 1/(α_I² − λ₁²) is 0/0 (the GRMHD comparison's reproducer)
+        j = SVector(1.29e-198, -1.28e-198, 0.0, 1.03e-201)
+        α = SVector(1.98e-160, -1.97e-160, 0.0, 1.58e-163)
+        ρ = SVector(0.0, -1.46e-11, 0.0, 1.54e-6); ds = 0.394
+        M, b = segment(IQUV(), j, α, ρ, ds)
+        Me, be = exact_segment(j, α, ρ, ds)
+        @test all(isfinite, M) && all(isfinite, b)
+        @test close_to(b, be; rtol = 1e-14) && maximum(abs.(M .- Me)) <= 1e-14
+        @test all(isfinite, stokes_couple(SVector(1.0, 0.1, 0.0, 0.0), j, α, ρ, ds))
+        # α → 0 at fixed ρ: through the ladder to the rotation segment, every rung exact
+        j1 = SVector(1.29, -1.28, 0.0, 0.0103); a1 = SVector(1.98, -1.97, 0.0, 0.00158)
+        Mr, br = segment(IQUV(), j1, ZERO4, ρ, ds)
+        for k in (4, 8, 12, 16, 50, 154, 156, 160, 300)
+            M, b = segment(IQUV(), j1, a1 .* 10.0^(-k), ρ, ds)
+            Me, be = exact_segment(j1, a1 .* 10.0^(-k), ρ, ds)
+            @test close_to(b, be; rtol = 1e-14) && maximum(abs.(M .- Me)) <= 1e-14
+            k >= 50 && @test close_to(b, br; rtol = 1e-14) && maximum(abs.(M .- Mr)) <= 1e-14
+        end
+        # thin physical segments: b exact where the closed form kept ε/(α_I ds) of it
+        rng = Xoshiro(20261107)
+        for dtau in (1e-6, 1e-10, 1e-14), _ in 1:10
+            ap = 0.9 * rand(rng); th = 2π * rand(rng); r = 10.0^(3 * rand(rng)); ph = 2π * rand(rng)
+            α = SVector(1.0, ap * cos(th), 0.0, ap * sin(th))
+            ρ = SVector(0.0, r * cos(ph), 0.0, r * sin(ph))
+            j = SVector(1.0, 0.5 * cos(ph + 1), 0.0, 0.5 * sin(ph + 1))
+            M, b = segment(IQUV(), j, α, ρ, dtau)
+            Me, be = exact_segment(j, α, ρ, dtau)
+            @test close_to(b, be; rtol = 1e-14) && maximum(abs.(M .- Me)) <= 1e-14
+        end
+        # every coefficient times c and ds over c: the same operator at any scale
+        j = SVector(1.0, 0.3, 0.0, -0.2); α = SVector(1.0, 0.5, 0.0, 0.3); ρ = SVector(0.0, 2.0, 0.0, -1.0)
+        M1, b1 = segment(IQUV(), j, α, ρ, 0.7)
+        for c in (1e-150, 1e-160, 1e-200, 1e-300, 1e150)
+            Mc, bc = segment(IQUV(), j .* c, α .* c, ρ .* c, 0.7 / c)
+            @test maximum(abs.(Mc .- M1)) <= 1e-14 && close_to(bc, b1; rtol = 1e-14)
+        end
+        Mc, bc = segment(IQUV(), j .* 1e-160, ZERO4, ρ .* 1e-160, 0.7e160)   # rotation alone
+        @test all(isfinite, Mc) && close_to(bc, segment(IQUV(), j, ZERO4, ρ, 0.7)[2]; rtol = 1e-14)
+        # Faraday rotation 1e10 times the absorption: λ₁ = |α·ρ|/ρ_P = 0.0702 to rounding (as
+        # the difference of two terms of 3.6e19 it is lost, and the slow mode decays at α_I:
+        # M₁₁ = 2.1e-9 for 4.45e-9 at ds = 20); the rotation angle ρ_P ds itself carries
+        # ε ρ_P ds, so the decaying I row is compared
+        α = SVector(1.0, 0.6, 0.0, 0.3); ρ = SVector(0.0, 3e9, 0.0, -8e9)
+        for ds in (1.0, 20.0)
+            M, b = segment(IQUV(), j, α, ρ, ds)
+            Me, be = exact_segment(j, α, ρ, ds)
+            @test M[1, 1] ≈ Me[1, 1] rtol = 1e-12
+            @test b[1] ≈ be[1] rtol = 1e-12
+            @test maximum(abs, M) <= exp(-(1.0 - 0.0706) * ds) * (1 + 1e-6)
+        end
     end
 
     @testset "unprojected solver on the problems of Prather et al. (2023)" begin

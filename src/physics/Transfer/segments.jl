@@ -57,15 +57,30 @@ exact for constant coefficients:
   sin λ₂s M₂ − sinh λ₁s M₃ + ½(cosh λ₁s − cos λ₂s) M₄]`, so `b = P j` with
   `P = ½(C₁ + C₂) M₁ − S₂ M₂ − S₁ M₃ + ½(C₁ − C₂) M₄`, where `C₁, S₁` and `C₂, S₂` are the
   integrals of `e^{-α_I s}(cosh, sinh) λ₁s` and `e^{-α_I s}(cos, sin) λ₂s` over the
-  segment. Their closed forms carry `1/(α_I² − λ₁²)` and `1/(α_I² + λ₂²)`; within
-  `POL_LANDI_GAP` of those poles, `C₁ ± S₁ = ds φ((α_I ∓ λ₁) ds)` and
-  `C₂ + iS₂ = ds φ((α_I − iλ₂) ds)` with `φ(z) = (1 − e^{-z})/z`, regular at `z = 0`, give
-  the exact limit. With `ρ = 0` this is the dichroism-cone boundary `|α_P| = α_I`: the
-  mode polarized against `α̂` decays at `α_I − α_P = 0` and gathers its emission linearly,
-  so the step is never saturated there;
+  segment. Their closed forms carry `1/(α_I² − λ₁²)` and `1/(α_I² + λ₂²)` and are
+  differences of terms of order `1/(α_I ∓ λ₁)` whose difference is of order `ds`, so
+  their relative rounding error is `ε/((α_I − λ₁) ds)` (the cosine pair's is smaller,
+  `|α_I − iλ₂| ≥ α_I − λ₁`); they are used where the slow-mode depth
+  `(α_I − λ₁) ds ≥ 1` and the relative gap to either pole exceeds `POL_LANDI_GAP`.
+  Elsewhere `C₁ ± S₁ = ds φ((α_I ∓ λ₁) ds)` and `C₂ + iS₂ = ds φ((α_I − iλ₂) ds)` with
+  `φ(z) = (1 − e^{-z})/z`, regular at `z = 0`, give the integrals to rounding at any depth.
+  This holds the small-absorption limit: as `α → 0` at fixed `ρ`, `λ₁ → |α·ρ|/ρ_P`,
+  `λ₂ → ρ_P`, `C₁ → ds`, `S₁ → 0` and `C₂ + iS₂ → (sin θ + i(1 − cos θ))/ρ_P` with
+  `θ = ρ_P ds`, the rotation segment, where the closed forms are `0/0` (their
+  denominators underflow once `α ≲ 1e-154`). With `ρ = 0` the gap closes at the
+  dichroism-cone boundary `|α_P| = α_I`: the mode polarized against `α̂` decays at
+  `α_I − α_P = 0` and gathers its emission linearly, so the step is never saturated
+  there;
 - nilpotent `N` (`λ₁ = λ₂ = 0`, i.e. `|α_P| = |ρ_P|` and `α ⊥ ρ`): `N⁴ = 0`, so
   `e^{-K s} = e^{-α_I s}(1 − sN + s²N²/2 − s³N³/6)` and `P = Σₖ (−N)ᵏ gₖ` with
   `gₖ = ∫₀^ds sᵏ/k! e^{-α_I s} ds`.
+
+`λ₁,₂` are homogeneous of degree 1 in `(α_P, ρ_P)` and `M₂, M₃, M₄` of degree 0, so
+they are formed from the polarized coefficients over the largest of `|α_Q|, |α_V|, |ρ_Q|,
+|ρ_V|`, and of the two roots `λ₁,₂²` the one the formula gives as a difference is taken
+as `(α·ρ)²` over the other (`λ₁²λ₂² = (α·ρ)²`): no square under- or overflows and
+neither root cancels, so `λ₁ ≤ |α_P|` holds to rounding when `ρ_P ≫ α_P`. `|j_P|`,
+`|α_P|` and `|ρ_P|` are formed from their components over the largest the same way.
 
 A segment is saturated, `M = 0` and `b = K⁻¹ j`, when its slowest mode is deeper than
 `dtau_max`, `(α_I − λ₁) ds > dtau_max`; a segment with `α_I ds > dtau_max` and a shallower
@@ -82,28 +97,24 @@ tests of Prather et al. 2023). Generic in the number type.
     Tb = promote_type(eltype(j), T)
     I4 = one(SMatrix{4,4,T})
     if project
-        j_p = sqrt(j[2] * j[2] + j[3] * j[3] + j[4] * j[4])
+        j_p = _norm(j[2], j[3], j[4])
         if j[1] > 0.0 && j_p > j[1]
             sj = j[1] / j_p
             j = SVector(j[1], j[2] * sj, j[3] * sj, j[4] * sj)
         end
     end
-    alpha_sq = α[2] * α[2] + α[4] * α[4]
-    alpha_p = sqrt(alpha_sq)
+    alpha_p = _norm(α[2], α[4])
     if project && alpha_p > α[1]
         if α[1] > 0.0
             sc = α[1] / alpha_p
             α = SVector(α[1], α[2] * sc, α[3] * sc, α[4] * sc)
-            alpha_sq = α[1] * α[1]
             alpha_p = α[1]
         else
             α = SVector(α[1], zero(alpha_p), zero(alpha_p), zero(alpha_p))
-            alpha_sq = zero(alpha_sq)
             alpha_p = zero(alpha_p)
         end
     end
-    rho_sq = ρ[2] * ρ[2] + ρ[4] * ρ[4]
-    rho_p = sqrt(rho_sq)
+    rho_p = _norm(ρ[2], ρ[4])
     aI = α[1]
     delta_tau = aI * ds
     thin = delta_tau <= dtau_max
@@ -114,20 +125,25 @@ tests of Prather et al. 2023). Generic in the number type.
     elseif aI == 0.0 && alpha_p == 0.0                 # rotation without absorption
         return _segment_rotation(j, ρ[2], ρ[4], rho_p, ds, T, Tb)
     end
-    # full absorption and rotation
-    aQ = α[2]; aV = α[4]; rQ = ρ[2]; rV = ρ[4]
+    # full absorption and rotation: N's eigen-decomposition from the polarized
+    # coefficients over the largest of them (hats dropped), the cancelling root of λ² as
+    # (α·ρ)² over the other
+    sig = max(abs(α[2]), abs(α[4]), abs(ρ[2]), abs(ρ[4]))
+    aQ = α[2] / sig; aV = α[4] / sig; rQ = ρ[2] / sig; rV = ρ[4] / sig
+    alpha_sq = aQ * aQ + aV * aV
+    rho_sq = rQ * rQ + rV * rV
     ar = aQ * rQ + aV * rV
     asr = alpha_sq - rho_sq
     la = sqrt(asr * asr / 4.0 + ar * ar)
     lb = asr / 2.0
-    l1 = sqrt(la + lb)
-    l2 = sqrt(max(la - lb, zero(la)))
-    ct = l1 * l1 + l2 * l2
+    l1sq = lb >= 0.0 ? la + lb : ar * ar / (la - lb)
+    l2sq = lb <= 0.0 ? la - lb : ar * ar / (la + lb)
+    ct = l1sq + l2sq
     if ct <= 1.0e-12 * (alpha_sq + rho_sq)               # nilpotent N
-        return _segment_nilpotent(j, aI, aQ, aV, rQ, rV, ds, T, Tb)
+        return _segment_nilpotent(j, aI, α[2], α[4], ρ[2], ρ[4], ds, T, Tb)
     end
+    l1 = sqrt(l1sq); l2 = sqrt(l2sq)
     s = ar >= 0.0 ? 1.0 : -1.0
-    a0 = aI * aI
     it = 1.0 / ct
     m2 = it .* @SMatrix [0.0 (l2 * aQ - s * l1 * rQ) 0.0 (l2 * aV - s * l1 * rV);
                          (l2 * aQ - s * l1 * rQ) 0.0 (s * l1 * aV + l2 * rV) 0.0;
@@ -144,8 +160,13 @@ tests of Prather et al. 2023). Generic in the number type.
                                  0.0 (aV * aQ + rV * rQ) 0.0 (aV * aV + rV * rV - d0)]
     p4 = I4 .+ m4
     m4m = I4 .- m4
-    if abs(a0 - l1 * l1) <= POL_LANDI_GAP * (a0 + l1 * l1) ||
-       a0 + l2 * l2 <= 1.0e-12 * (alpha_sq + rho_sq) || (!thin && (aI - l1) * ds <= dtau_max)
+    aIs = aI / sig                                       # α_I over the same scale
+    pole2 = aIs * aIs + l2sq <= 1.0e-12 * (alpha_sq + rho_sq)
+    l1 *= sig; l2 *= sig                                 # the rates
+    a0 = aI * aI
+    xs = (aI - l1) * ds                                  # depth of the slow mode
+    if xs < 1.0 || abs(a0 - l1 * l1) <= POL_LANDI_GAP * (a0 + l1 * l1) || pole2 ||
+       (!thin && xs <= dtau_max)
         return _segment_mode_integrals(j, aI, l1, l2, m2, m3, p4, m4m, ds, T, Tb)
     end
     f1 = 1.0 / (a0 - l1 * l1)
@@ -161,6 +182,20 @@ tests of Prather et al. 2023). Generic in the number type.
     pp = pp .- ev .* (chv .* cosh_t .+ cv .* cos_t .+ sv .* sin_t .+ shv .* sinh_t)
     oo = ev .* (0.5 .* chv .* p4 .+ 0.5 .* cv .* m4m .- sv .* m2 .- shv .* m3)
     return SMatrix{4,4,T}(oo), SVector{4,Tb}(pp * j)
+end
+
+# |(x…)| from the components over the largest, so no square under- or overflows.
+@inline function _norm(x, y)
+    m = max(abs(x), abs(y))
+    m == 0.0 && return zero(m)
+    u = x / m; v = y / m
+    return m * sqrt(u * u + v * v)
+end
+@inline function _norm(x, y, z)
+    m = max(abs(x), abs(y), abs(z))
+    m == 0.0 && return zero(m)
+    u = x / m; v = y / m; w = z / m
+    return m * sqrt(u * u + v * v + w * w)
 end
 
 # φ(x) = (1 − e^{-x})/x, regular at x = 0.
@@ -208,16 +243,15 @@ end
 @inline function _segment_rotation(j, rQ, rV, rho_p, ds, ::Type{T}, ::Type{Tb}) where {T,Tb}
     th = rho_p * ds
     cr = cos(th); sr = sin(th); s2 = sin(th / 2.0); ss = s2 * s2
-    rho_sq = rho_p * rho_p
+    q = rQ / rho_p; v = rV / rho_p
     M = @SMatrix [1.0 0.0 0.0 0.0;
-                  0.0 (cr + 2.0 * rQ * rQ / rho_sq * ss) (-rV / rho_p * sr) (2.0 * rQ * rV / rho_sq * ss);
-                  0.0 (rV / rho_p * sr) cr (-rQ / rho_p * sr);
-                  0.0 (2.0 * rV * rQ / rho_sq * ss) (rQ / rho_p * sr) (cr + 2.0 * rV * rV / rho_sq * ss)]
+                  0.0 (cr + 2.0 * q * q * ss) (-v * sr) (2.0 * q * v * ss);
+                  0.0 (v * sr) cr (-q * sr);
+                  0.0 (2.0 * v * q * ss) (q * sr) (cr + 2.0 * v * v * ss)]
     t2 = th * th
     tms = abs(th) < 0.1 ?
           th * t2 / 6.0 * (1.0 - t2 / 20.0 * (1.0 - t2 / 42.0 * (1.0 - t2 / 72.0))) : th - sr
     sc = sr / rho_p; cc = 2.0 * ss / rho_p; hm = tms / rho_p
-    q = rQ / rho_p; v = rV / rho_p
     jQ = j[2]; jU = j[3]; jV = j[4]
     dt = q * jQ + v * jV
     b = SVector(j[1] * ds,

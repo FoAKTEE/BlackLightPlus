@@ -7,6 +7,20 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `Transfer.segment(IQUV)` is exact to rounding at small absorption and at any
+  coefficient scale. The closed form of the eigenmode integrals carries
+  $1/(\alpha_I^2-\lambda_1^2)$ and keeps a relative accuracy
+  $\epsilon/[(\alpha_I-\lambda_1)\Delta s]$; it is used only where the slow-mode depth
+  $(\alpha_I-\lambda_1)\Delta s\ge1$, and the $\varphi$ form, regular as $\alpha\to0$,
+  elsewhere. The eigen-decomposition is formed from the polarized coefficients over the
+  largest of them, with the cancelling root of $\lambda^2$ as
+  $(\boldsymbol\alpha\cdot\boldsymbol\rho)^2$ over the other. The segment returned NaN
+  for $0<\alpha_I\lesssim10^{-154}$ (the far gas of the power-law and kappa fits), lost
+  up to 6 % of $b$ at $\alpha_I\Delta s=10^{-14}$ and all of the emission of $I$ below
+  $\alpha_I\Delta s\approx\epsilon$, and with $\rho_P=10^{10}\alpha_I$ let the slow mode
+  decay at $\alpha_I$ instead of $\alpha_I-\lambda_1$; every case now matches the 320-bit
+  solution to $10^{-15}$. The thermal production images change by at most $3\times10^{-8}$
+  of their maximum.
 - AthenaK snapshots are sampled on every meshblock extended by one layer of ghost cells,
   built when the snapshot is loaded from the neighbouring blocks: copied at the same
   level, the mean of the finer cells from a finer block, the minmod-limited linear
@@ -23,7 +37,6 @@ While the version is `0.x`, a bump of `x` may break that API.
   (20 % more memory for blocks of $32^3$, 10 % for $64^3$; 1 s for 512 blocks of $64^3$
   on 24 threads); `Data.corner(b, i, j, k, m)` reads the interior as `1:n` and the ghost
   layer as `0` and `n + 1`.
-
 - `render_analytic(plan, disk; observables = false)` runs `Products.RadiusProgram`
   (`Spacetime.radius_prep`, `band_radius`): the landing radius without the azimuth and time
   integrals, the intensity, radius and radial sign bit for bit those of the full path, about
