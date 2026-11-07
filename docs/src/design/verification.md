@@ -20,7 +20,7 @@ julia -t auto --project=. -e 'using Pkg; Pkg.test()'
 
 On the GPU the CUDA extension tests, the backend switch (`backend = :gpu`, `BLP_BACKEND`)
 and every product's `:gpu` path run on the device; on the CPU they skip with a report. The
-GPU run uses an environment in which `CUDA` is a direct dependency (§5).
+GPU run uses an environment in which `CUDA` is a direct dependency (§6).
 
 ## 2. Oracle against the reference implementation
 
@@ -215,7 +215,29 @@ CPU the reference's first calls are longer (23 against 6.5 s for native blocks I
 128 threads). No two-device pair of either package has been recorded; the Slurm history
 of the record lists the attempts.
 
-## 5. Running on `anta`
+## 5. The Monte Carlo estimator
+
+Measured on 2026-11-07 at the commits named, scripts, logs and arrays in
+`results/blp/mc_audit/fixes/` (`scripts/`, `logs/`, `data/`, figures in `figs/`). The
+torus deck is the AthenaK snapshot 00999 on Kerr `a = 0.9` of `figures/paper/fig_mc_kerr.jl`
+with the density unit 2.749183e-22 g cm⁻³; the spheres are those of the bug hunt.
+
+| Check | Result |
+|---|---|
+| `F(K)` table against the Simpson rule, `K` from 1e-40 to 3e8 | within 2.6e-9 of 512 intervals, 6.5e-11 of 8,192 |
+| One step, 27 points of `(Δτ_s, Δτ_a, b)` and 36 of `(Δτ_s, Δτ_a, w/w_ref, Θₑ)` under the state bias | deposit and event-fraction moments within 1e-3 |
+| Strided zones on a two-level mesh, `r⁻⁶` emissivity, 5,000 seeds | 0.988 ± 0.012, 1.018 ± 0.019, 1.006 ± 0.038 of the stride-1 sum (strides 2–4); a fixed first cell gives 2.1, 23, 15 |
+| Thin sphere, escaped power over the closed form, 32 seeds × 10⁶ | 0.99984 ± 0.00033 (`n_esamp = 400`), 0.99993 ± 0.00033 (1600), 0.99839 ± 0.00033 (100, the node quadrature) |
+| Spheres without absorption, constant `b0` from 1 to 3×10⁴ | order weights and powers flat within 3σ; thin order-1 fraction 1.0000 ± 0.0012 of `1 − P_esc` at `b0 = 3×10⁴` |
+| Spheres with absorption (`τ_T` 0.2 and 0.02), constant `b0` 1–1000 and state `b0` 1, 10 | order-1 power flat, χ² 0.8 and 0.9 for 5 dof |
+| Thin Compton sphere with absorption, 64 seeds × 10⁶, spawned over its conditional expectation | 0.9974 ± 0.0139 (state `b0 = 1`), 1.0003 ± 0.0014 (state 10²), 0.99983 ± 0.00024 (constant 10⁴) |
+| Torus ledger, `(w_children + w_unspawned)/scatter_loss`, 64 seeds, stride 8 | 1.00036 ± 0.00075 |
+| Torus thin, stride 1, 10⁷, against ray tracing with cell-centre plasma at 1.12e12 Hz | 0.988, 0.986, 1.001 (17°, 50°, 90°; −0.5, −1.0, +0.2σ); with trilinear plasma 0.96–0.99, the 3 % difference of the two plasma descriptions |
+| Torus Compton, stride 1, equal wall time | summed effective photon number above 1e15 Hz 34 times that of the constant `b0 = 1e4` |
+| Thread count and hardware | 1 against 16 threads bitwise; 16 threads against one A100: equal counts in every cell, sums within 1.2e-11 |
+| Speed, 32 threads | stride-1 zone tables 21 s (10,303,459 zones; 61 min before); thin torus photon phase 2.2× by the plunge stop, bitwise |
+
+## 6. Running on `anta`
 
 The host is its own Slurm node. Outside an allocation the devices are not accessible
 (`nvidia-smi` fails to initialise NVML); inside one they are:
