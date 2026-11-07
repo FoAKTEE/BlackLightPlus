@@ -167,7 +167,7 @@ radius at the ray's time.
 
 ## Analytic Kerr fast path and lensing bands
 
-For equatorial sources in Kerr, an exact closed-form tracer (no ODE) inverts
+For sources on surfaces in Kerr, an exact closed-form tracer (no ODE) inverts
 the geodesic with Legendre/Jacobi elliptic integrals in the formulation of
 [GrallaLupsasca2020NullGeodesics](@citet) and its lensing companion
 [GrallaLupsasca2020Lensing](@citep), following the conventions of Krang.jl
@@ -175,13 +175,99 @@ the geodesic with Legendre/Jacobi elliptic integrals in the formulation of
 [CardenasAvendano2023](@citep):
 conserved quantities $(\lambda,\eta)$ from Bardeen screen coordinates, quartic
 radial roots, angular and radial Mino-time integrals, and per-image-order
-$n=0,1,2$ equatorial landing points $(r_s,\phi_s,t_s)$. `critical_curve`
+landing points $(r_s,\phi_s,t_s)$. `critical_curve`
 returns the photon-shell boundary; `lensing_band` and `band_grid` build the
 nested order-$n$ lensing-band masks used by `photon_ring_layers` to compute
 razor-thin photon-ring images and, via the interferometry utilities, visibility
 amplitudes. The analytic $r_s$ agrees with the ODE tracer's equatorial crossing
 to $6\times10^{-6}$, and ForwardDiff propagates $dr_s/d(a,\theta_o)$ through
 the elliptic functions (verified against finite differences).
+
+### Surfaces at any polar angle
+
+With $u=\cos^2\theta$ the polar potential factors as
+$\Theta\sin^2\theta=a^2(u_+-u)(u-u_-)$. For an ordinary ray ($\eta>0$,
+$u_-<0<u_+$) the antiderivatives
+$$\Psi_\theta=\frac{F(\varphi|k)}{a\sqrt{-u_-}},\quad
+\Psi_\phi=\frac{\Pi(u_+;\varphi|k)}{a\sqrt{-u_-}},\quad
+\Psi_t=-\frac{2u_+}{a\sqrt{-u_-}}\,\frac{E(\varphi|k)-F(\varphi|k)}{2k},$$
+with $\sin\varphi=\cos\theta/\sqrt{u_+}$ and $k=u_+/u_-$, satisfy
+$d\Psi_\theta/d\theta=-1/\sqrt\Theta$, $d\Psi_\phi/d\theta=-1/(\sin^2\theta\sqrt\Theta)$
+and $d\Psi_t/d\theta=-\cos^2\theta/\sqrt\Theta$, and $\Psi$ runs monotonically
+between the turning values $\pm\hat G/2$, $\hat G=2K(k)/(a\sqrt{-u_-})$. A ray traced
+back from the observer starts toward the pole when $\beta>0$ ($\theta_o<\pi/2$), so
+with $s_\beta={\rm sign}\,\beta$ (${\rm sign}\,0=+1$) it meets the surface
+$\theta=\theta_s$ after $m$ polar turning points at
+$$G_i(m)=m\,\hat G_i-s_\beta\Psi_i(\theta_o)+\nu_\theta\Psi_i(\theta_s),\qquad
+\nu_\theta=s_\beta(-1)^m,\qquad i\in\{\theta,\phi,t\},$$
+where $\nu_\theta$ is the sign of $p^\theta$ of the photon at emission. A crossing exists
+when $\cos^2\theta_s<u_+$ and $G_\theta(m)>0$; at the equator $\Psi(\pi/2)=0$ and
+$m=n+H(\beta)$. A vortical ray ($\eta<0$, $0<u_-<u_+$) stays in one hemisphere; with
+$\sin^2\psi=(\cos^2\theta-u_-)/(u_+-u_-)$ and $k_v=1-u_+/u_-$,
+$\Psi_\theta=F(\psi|k_v)/(a\sqrt{u_-})$,
+$\Psi_\phi=\Pi(n_v;\psi|k_v)/((1-u_-)a\sqrt{u_-})$ with $n_v=(u_+-u_-)/(1-u_-)$,
+$\Psi_t=\sqrt{u_-}E(\psi|k_v)/a$, and the same formula holds with $\hat G$ the half
+oscillation $K(k_v)/(a\sqrt{u_-})$ and $\Psi$ centred on it. The radial inversion of
+$G_\theta$ is the sn, cn or sc function of cases II, III and IV
+([GrallaLupsasca2020NullGeodesics](@citet) App. B); case IV (no real root) is met by
+vortical rays only, since $R(0)=-a^2\eta<0$ forces two real roots when $\eta>0$.
+
+Image orders follow Krang's labelling with every crossing in exactly one order. Let
+$m_0=0$ when the first leg of the traced ray reaches the surface and $m_0=1$ otherwise.
+A surface at most as inclined as the line of sight ($|\cos\theta_s|\le|\cos\theta_o|$,
+the equator among them) has the single crossing $m=n+m_0$ in order $n$; a surface
+closer to a pole has the pair $\{n,n+1\}$ when $n\equiv m_0\pmod 2$ (the near and far
+sides of a jet cone) and none otherwise; a vortical ray has the pair
+$\{2n+m_0,2n+m_0+1\}$. `surface_prep` holds the per-pixel state, `surface_landing`
+the crossing after $m$ turning points and `image_crossings` the crossings of order $n$.
+At the equator the surface path reproduces `band_landing` bit for bit.
+
+### Observer at infinity
+
+`pixel_prep` and `surface_prep` take `ro = Inf` for an observer at infinity:
+$I_0$, $I_\pm$ and the azimuth converge, while $dt/dr=1+2/r+O(r^{-2})$ makes
+$I_1\sim\ln r$ and $I_2\sim r$ diverge. The landing time is then the regularized
+$\tilde t=\lim_{r_o\to\infty}(t_s+r_o+2\ln r_o)$, the emission time relative to the
+observer's retarded time, evaluated in closed form by the connection formula
+$\Pi(n;\varphi|k)+\Pi(k/n;\varphi|k)=F(\varphi|k)+\sqrt c\,R_C\big((c-1)(c-k),(c-n)(c-k/n)\big)$,
+$c=\csc^2\varphi$, whose $R_C$ term carries the logarithm. The finite-observer
+landings approach it as $1/r_o$ in all three radial cases.
+
+### Polarization by the Walker–Penrose constant
+
+At a landing the photon momentum is $p_\mu=(-1,\nu_r\sqrt R/\Delta,\nu_\theta\sqrt{\Theta},\lambda)$.
+The emitter's rest frame is the zero-angular-momentum frame
+$e_{(t)}=(\partial_t+\omega\partial_\phi)/\alpha_L$, $e_{(r)}=\sqrt{\Delta/\Sigma}\,\partial_r$,
+$e_{(\phi)}=\sqrt{\Sigma/\mathcal A}\,\partial_\phi/\sin\theta$, $e_{(z)}=-\partial_\theta/\sqrt\Sigma$
+($\alpha_L=\sqrt{\Sigma\Delta/\mathcal A}$, $\omega=2ar/\mathcal A$) boosted by the emitter's
+velocity; there $p=\omega_{\rm em}(1,\hat k)$, the redshift is $g=1/\omega_{\rm em}$, and the
+synchrotron electric vector is $f=(0,\hat k\times b)$ for the rest-frame field $b$
+[Narayan2021](@citep). For a field given as a spacetime vector $B^\mu$ the three conditions
+$f\cdot p=f\cdot u=f\cdot B=0$ of [CardenasAvendano2023](@citet) select the same direction.
+The Walker–Penrose constant
+$$\kappa=(r-ia\cos\theta)(\mathcal A_\kappa-i\mathcal B_\kappa),\quad
+\mathcal A_\kappa=(p^tf^r-p^rf^t)+a\sin^2\theta(p^rf^\phi-p^\phi f^r),\quad
+\mathcal B_\kappa=[(r^2+a^2)(p^\phi f^\theta-p^\theta f^\phi)-a(p^tf^\theta-p^\theta f^t)]\sin\theta$$
+is conserved along the ray, invariant under $f\to f+cp$, and
+$|\kappa|^2=(f\cdot f)(\eta+(\lambda-a)^2)$ [Himwich2020](@citep). On the screen, with
+$\nu=-(\alpha+a\sin\theta_o)$ and $\nu^2+\beta^2=\eta+(\lambda-a)^2$,
+$E_\alpha=(\beta\kappa_2-\nu\kappa_1)/(\nu^2+\beta^2)$ and
+$E_\beta=(\beta\kappa_1+\nu\kappa_2)/(\nu^2+\beta^2)$ [Gelles2021](@citep), so
+$E_\alpha^2+E_\beta^2=f\cdot f$; with north $+\beta$ and east $-\alpha$,
+$Q=E_\beta^2-E_\alpha^2$ and $U=-2E_\alpha E_\beta$ scaled to the polarized intensity.
+`SynchrotronSurface` is the power-law synchrotron surface of [Narayan2021](@citet)
+(observed $I=|\hat k\times b|^{1+\sigma}\min(1/|\cos\zeta|,100)\,\mathcal P(r)\,g^{3+\sigma}$,
+fully polarized); `PolarizedDisk` is the AART g-disk with $|P|=I$ along the field direction
+fixed by a ZAMO-frame field.
+
+The closed-form EVPA agrees with the numerical polarized march of this package, whose
+camera frame is parallel-transported along each RK4 step: the difference falls as
+$C^{-4}$ to a floor set by the plane-parallel camera, $2\times10^{-5}$ rad at a camera
+distance of $10^5\,M$ and $10^{-8}$ rad (median) at $10^9\,M$. It agrees with Krang's
+polarized synchrotron material and AART's polarization model to rounding error (NMSE
+of $I,Q,U$ between $10^{-28}$ and $10^{-24}$, EVPA medians of $10^{-15}$ rad), after two
+corrections to Krang (the Stokes $I$ weight of its polarized material and the emission
+polar sign on far-hemisphere cones) described in the validation record.
 
 ## Radiative transfer
 

@@ -7,6 +7,21 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- The closed-form Kerr tracer images thin surfaces at any polar angle, polarized:
+  `Spacetime.surface_prep`, `surface_landing` and `image_crossings` invert ordinary and
+  vortical rays (radial cases II, III and IV) to the crossings of the cone θ = θs, ordered
+  in Krang's image orders with every crossing in one order and with the sign of p^θ at
+  emission (`Landing` gains `θ` and `νθ`); at the equator they reproduce `band_landing` bit
+  for bit. `ro = Inf` places the observer at infinity with the regularized emission time
+  lim (t + ro + 2 ln ro). `Matter.SynchrotronSurface` (the power-law synchrotron surface of
+  Narayan et al. 2021) and `Matter.PolarizedDisk` (AART's polarized g-disk) carry the
+  rest-frame electric vector k × b to the screen through its Walker–Penrose constant
+  (`Spacetime.penrose_walker`, `screen_polarization`, the ZAMO and rest-frame maps), and
+  `render_analytic(plan, materials)` returns Stokes I, Q, U per order for one material or a
+  tuple. Against Krang and AART the I, Q, U and κ agree to NMSE 10^-28–10^-24; the EVPA
+  agrees with the package's polarized march to its C^-4 error.
+- `angular_turning_points` clamps the discriminant at zero, so a vortical ray whose
+  observer sits at its polar turning point no longer raises a `DomainError`.
 - `mc_spectrum` on a plasma grid emits from every cell centre its block owns by default
   (`stride = 1`), above the horizon proxy; `stride = s` keeps one owned cell per group of
   `s³`, drawn uniformly on a stream of the seed, with the group's owned volume, an

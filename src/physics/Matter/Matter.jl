@@ -11,7 +11,8 @@ using ..Numerics: MP, ME, CL, KB, HPL, Units, primal
 using ..Spacetime: metric, metric_and_inverse, ks_radius, KerrSchildCartesian, Landing,
                    kerr_horizon, kerr_delta, kerr_radial_potential, isco_radius, isco_prograde,
                    marginally_bound_radius, photon_orbit_radius, keplerian_omega,
-                   keplerian_specific_angular_momentum
+                   keplerian_specific_angular_momentum, photon_momentum, zamo_components,
+                   zamo_vector, rest_components, penrose_walker, screen_polarization
 
 include("records.jl")
 include("electrons.jl")
@@ -22,6 +23,7 @@ include("sources/polish_doughnut.jl")
 include("sources/page_thorne.jl")
 include("sources/hotspot.jl")
 include("sources/gdisk.jl")
+include("sources/polarized_surfaces.jl")
 include("zones.jl")
 
 export PlasmaPrimitives, PlasmaState, vacuum
@@ -31,7 +33,9 @@ export ElectronModel, electron_theta, Bound, legacy_bound, outside, PlasmaCuts, 
 export PolishDoughnut, torus_potential, PageThorneDisk, page_thorne_flux, page_thorne_temperature,
        EquatorialHotspot, hotspot_center
 export EquatorialDisk, intensity, gfactor_circular, gfactor_plunge, gfactor_disk,
-       johnson_su_profile, equatorial_disk_intensity
+       johnson_su_profile, equatorial_disk_intensity, disk_velocity
+export SynchrotronSurface, PolarizedDisk, surface_angle, material_spin, rest_photon,
+       polarized_emission
 export EmissionZone, ZoneSite, UniformSphere, emission_zone
 
 end # module

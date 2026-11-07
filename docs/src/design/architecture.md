@@ -55,9 +55,11 @@ src/
 │   │                  philox.jl special.jl
 │   ├── Spacetime/     Spacetime.jl protocol.jl kerr_schild.jl user_metric.jl superposed.jl
 │   │                  adm_grid.jl metric_ops.jl geodesic.jl termination.jl adaptive.jl
-│   │                  camera.jl kerr_orbits.jl analytic_kerr.jl
+│   │                  camera.jl kerr_orbits.jl analytic_kerr.jl analytic_radial.jl
+│   │                  analytic_surfaces.jl analytic_frames.jl
 │   ├── Matter/        Matter.jl records.jl electrons.jl decode.jl protocol.jl
 │   │   ├── sources/   shared.jl polish_doughnut.jl page_thorne.jl hotspot.jl gdisk.jl
+│   │   │              polarized_surfaces.jl
 │   │   └── zones.jl
 │   ├── Transfer/      Transfer.jl params.jl synchrotron.jl tetrads.jl coefficients.jl
 │   │                  segments.jl controls.jl march.jl
@@ -73,7 +75,7 @@ src/
     ├── Plans/         Plans.jl config.jl lanes.jl plan.jl prepare.jl
     ├── Analysis/      Analysis.jl refinement.jl lensing_bands.jl interferometry.jl
     └── Products/      Products.jl programs.jl image.jl trace.jl sensitivity.jl analytic.jl
-                       amr.jl montecarlo.jl
+                       analytic_surfaces.jl amr.jl montecarlo.jl
 ext/
 └── BlackLightPlusCUDAExt.jl
 ```
@@ -507,6 +509,9 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   disk, bands)` (in `analytic.jl`) lands every band of one screen point into the `5K`
   plain `Float64` outputs of `analytic_outputs(K, n)`, quantity-major, which
   `render_analytic` reshapes into its maps without a copy; it needs a 32 KiB device stack.
+  `SurfaceProgram(gen, theta_o, a, ro, materials, bands)` (in `analytic_surfaces.jl`)
+  does the same for a tuple of surface materials at any polar angle into the `7K` outputs
+  of `surface_outputs(K, n)` (Stokes I, Q, U and the first valid landing per band).
 - The Monte Carlo programs `MCPrimary(source, transport, sink, seed)` and
   `MCLayer(generation, transport, sink)` (a `Generation`, or `photons, rngs`) are called
   as `prog(item, i)` without outputs

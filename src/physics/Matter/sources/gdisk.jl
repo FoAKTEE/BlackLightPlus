@@ -68,11 +68,17 @@ infall (0); the defaults give the Keplerian equatorial disk.
 Gralla & Lupsasca (2020), Eq. B13.
 """
 @inline function gfactor_circular(rs, a, b, λ, η; sub_kep = 1.0, betar = 1.0, betaphi = 1.0)
+    ur, OT = _flow_circular(rs, a, sub_kep, betar, betaphi)
+    return g_from_velocity(rs, a, b, λ, η, ur, OT)
+end
+
+# (uʳ, Ω) of the flow outside the ISCO.
+@inline function _flow_circular(rs, a, sub_kep, betar, betaphi)
     ℓ = l_subkep(rs, a, sub_kep)
     OH = omega_subkep(rs, a, ℓ)
     OT = OH + (1 - betaphi) * (omega_infall(rs, a) - OH)
     ur = (1 - betar) * u_r_infall(rs, a)
-    return g_from_velocity(rs, a, b, λ, η, ur, OT)
+    return ur, OT
 end
 
 """
@@ -87,6 +93,12 @@ ISCO so that it matches `gfactor_circular` there. Arguments as in `gfactor_circu
 Gralla & Lupsasca (2020), Eq. B13.
 """
 @inline function gfactor_plunge(rs, a, b, λ, η; sub_kep = 1.0, betar = 1.0, betaphi = 1.0)
+    ur, OT = _flow_plunge(rs, a, sub_kep, betar, betaphi)
+    return g_from_velocity(rs, a, b, λ, η, ur, OT)
+end
+
+# (uʳ, Ω) of the flow inside the ISCO.
+@inline function _flow_plunge(rs, a, sub_kep, betar, betaphi)
     isco = isco_prograde(a)
     ℓms = l_subkep(isco, a, sub_kep)
     OH = omega_subkep(rs, a, ℓms)
@@ -94,7 +106,21 @@ Gralla & Lupsasca (2020), Eq. B13.
     Ems = E_subkep(isco, a, ℓms)
     urhat = -kerr_delta(rs, a) / (rs * rs) * nu_subkep(rs, a, ℓms, Ems) * Ems
     ur = urhat + (1 - betar) * (u_r_infall(rs, a) - urhat)
-    return g_from_velocity(rs, a, b, λ, η, ur, OT)
+    return ur, OT
+end
+
+"""
+    disk_velocity(rs, a; sub_kep = 1, betar = 1, betaphi = 1) -> SVector{4}
+
+Contravariant Boyer–Lindquist four-velocity `(uᵗ, uʳ, 0, uᵗΩ)` of the equatorial flow of
+`gfactor_disk` at radius `rs`: the sub-Keplerian flow outside the ISCO and the plunge
+inside it, with `uᵗ` from `u_t_general`.
+"""
+@inline function disk_velocity(rs, a; sub_kep = 1.0, betar = 1.0, betaphi = 1.0)
+    ur, Ω = rs >= isco_prograde(a) ? _flow_circular(rs, a, sub_kep, betar, betaphi) :
+            _flow_plunge(rs, a, sub_kep, betar, betaphi)
+    ut = u_t_general(rs, a, ur, Ω)
+    return SVector(ut, ur, zero(ut), ut * Ω)
 end
 
 """

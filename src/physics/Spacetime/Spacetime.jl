@@ -25,6 +25,9 @@ include("adaptive.jl")
 include("camera.jl")
 include("kerr_orbits.jl")
 include("analytic_kerr.jl")
+include("analytic_radial.jl")
+include("analytic_surfaces.jl")
+include("analytic_frames.jl")
 
 # protocol and spacetimes
 export Spacetime, StationarySpacetime, ETA, metric, inverse_metric, metric_and_inverse,
@@ -49,6 +52,9 @@ export kerr_horizon, kerr_delta, kerr_radial_potential, isco_radius, isco_progra
        keplerian_specific_angular_momentum,
        conserved_quantities, radial_roots, angular_turning_points,
        analytic_angular_integrals, analytic_radial_integrals,
-       pixel_prep, Landing, band_landing, critical_curve
+       pixel_prep, Landing, band_landing, critical_curve,
+       surface_prep, surface_landing, image_crossings,
+       kerr_bl_metric, photon_momentum, zamo_components, zamo_vector, rest_components,
+       penrose_walker, screen_polarization, photon_shell_exponents
 
 end # module

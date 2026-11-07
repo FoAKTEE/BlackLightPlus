@@ -12,9 +12,11 @@ using ForwardDiff: Dual, value, partials
 using ..Numerics: position, momentum, MCRng, MCStreamLayout, widest_layout, mc_uniform, primary_rng,
                   ME, CL
 using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step,
-                   inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance
+                   inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance,
+                   surface_prep, surface_landing, image_crossings
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
-                sample, emission_zone
+                sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
+                polarized_emission
 using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
                     CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
@@ -40,11 +42,13 @@ include("image.jl")
 include("trace.jl")
 include("sensitivity.jl")
 include("analytic.jl")
+include("analytic_surfaces.jl")
 include("amr.jl")
 include("montecarlo.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
+       SurfaceProgram, surface_outputs,
        StoredPathProgram, AdaptiveTraceProgram, TRACE_WINDOW, imaging_program, shadow_program,
        trace_outputs
 # Monte Carlo programs

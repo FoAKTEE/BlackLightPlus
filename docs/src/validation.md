@@ -78,6 +78,31 @@ With the two indices corrected in Blacklight and nothing else, the images agree:
 patch, the builds and the statistics are under `results/blp/stokes_v/` on the `blp`
 branch.
 
+## Closed-form Kerr against AART and Krang
+
+The closed-form tracer is compared with AART [CardenasAvendano2023](@citep) and Krang
+[Chang2024](@citep) at identical screen points (the nodes of a square grid, even so that no
+node lies on the $\alpha$ axis), each code with its own elliptic integrals, and with the
+package's own numerical march. NMSE is the normalized mean squared error of
+[Gold2020](@citet) with the reference code in the denominator.
+
+| Comparison | Result |
+|---|---|
+| equatorial g-disk intensity, orders 0–2, $2500^2$ and $1200^2$ | NMSE $\sim10^{-22}$ against AART and Krang |
+| polarized g-disk, Walker–Penrose constant in AART's gauge ($f_t=1$), $400^2$, two scenes | NMSE($\kappa$) $7\times10^{-25}$, $3\times10^{-24}$; EVPA median $9\times10^{-16}$ rad, maximum $10^{-9}$ rad (on AART's Cardano curve) |
+| power-law synchrotron surfaces, $400^2$, four scenes (dual cone, equator at $80^\circ$, jet cones in both hemispheres, polar cones with vortical rays), orders 0–2 | NMSE of $I$, $Q$, $U$ between $7\times10^{-29}$ and $2\times10^{-24}$ against Krang; EVPA median $10^{-15}$ rad |
+| cone landings against the traced crossings of the same rays (ordinary and vortical, cases II–IV) | radius within $10^{-4}$, the polar sign of every crossing equal |
+| EVPA against the package's polarized march (transported camera frame) | falls as $C^{-4}$ to the camera floor: $2\times10^{-5}$ rad at $d=10^5\,M$, median $10^{-8}$ rad at $d=10^9\,M$ |
+
+Three reference-code findings shape these comparisons. Krang's polarized synchrotron
+material weights its Stokes $I$ by $|\hat k\times B|^{2(1+\sigma)}$ where its intensity material
+(and the emissivity of the model) has $|\hat k\times B|^{1+\sigma}$; its fast-light entry points
+give the emission polar sign of a cone in the far hemisphere outside the observer's cone the
+wrong sign. Both are corrected in the comparison and reported upstream. AART flips the
+radial sign of emission at the turning point seen from infinity while its radial integrals
+start at the finite observer distance, which tilts the EVPA by up to $4\times10^{-5}$ rad on
+a thin ring at $D=10^5$; the comparison uses $D=10^{15}$.
+
 ## Published figures
 
 The generators under `figures/` reproduce published figures with the package; each

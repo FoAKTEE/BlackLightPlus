@@ -70,13 +70,16 @@ end
     angular_turning_points(λ, η, a) -> (u_p, u_m)
 
 The roots `u_± = cos² θ_±` of the angular potential (P2 Eq. 11); real for
-`η ≥ 0`, with `u_p ≥ 0 ≥ u_m` for equator-crossing rays. The root of the sign
+`η ≥ 0`, with `u_p ≥ 0 ≥ u_m` for equator-crossing rays, and for every vortical ray that
+reaches an observer (the discriminant is clamped at zero against rounding). The root of the sign
 of `Δθ = (1 - (η + λ²)/a²)/2` is formed by addition and the other from the exact
 product `u_p u_m = -η/a²`, which avoids cancellation at small spin.
 """
 @inline function angular_turning_points(λ::T, η, a) where {T}
     Δθ = (1 - (η + λ * λ) / (a * a)) / 2
-    disc = sqrt(Δθ * Δθ + η / (a * a))
+    # a vortical ray with the observer at its single polar turning point has a double
+    # root, Δθ² + η/a² = 0, which rounding may make negative
+    disc = sqrt(max(Δθ * Δθ + η / (a * a), zero(Δθ)))
     if Δθ < 0
         u_m = Δθ - disc
         return -η / (a * a * u_m), u_m
@@ -115,7 +118,7 @@ radial inversion is evaluated at.
     pm_o = β >= 0 ? one(T) : -one(T)   # H(0) = 1 (sign(0) = 0 would alias β = 0)
     den = abs(a) * sqrt(-u_m)          # √(-u_m a²)
     return (u_p=u_p, K=K, Ep=E_prime, PI=PI, F_o=F_o, Ep_o=E_prime_o, PI_o=PI_o,
-            Hβ=H_β, pm_o=pm_o, den=den)
+            Hβ=H_β, pm_o=pm_o, den=den, k=k, u_m=u_m)
 end
 
 @inline function _angular_from_parts(n::Integer, ang)
@@ -140,7 +143,7 @@ end
     r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2; r21 = r2 - r1
     A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
     k3 = ((A + B)^2 - real(r21)^2) / (4 * A * B)
-    x3o = real((A * (ro - r1) - B * (ro - r2)) / (A * (ro - r1) + B * (ro - r2)))
+    x3o = _x3_obs(ro, A, B, r1, r2)
     x3h = real((A * (rph - r1) - B * (rph - r2)) / (A * (rph - r1) + B * (rph - r2)))
     return (JacobiElliptic.F(acos(clamp(x3o, -one(T), one(T))), k3) -
             JacobiElliptic.F(acos(clamp(x3h, -one(T), one(T))), k3)) / sqrt(A * B)
@@ -231,19 +234,9 @@ observer-minus-source difference.
                        _radial_obs_parts(ro, roots, a, λ, η, is_case2))
 
 # The layer-independent observer-side antiderivatives: the (ro, r4) legs in case II,
-# the ro leg in case III (second slot unused).
-@inline function _radial_obs_parts(ro, roots, a, λ, η, is_case2::Bool)
-    r1, r2, r3, r4 = roots
-    if is_case2
-        po = _radial_case2_antideriv(ro, r1, r2, r3, r4, a, λ, η)
-        pt = _radial_case2_antideriv(real(r4), r1, r2, r3, r4, a, λ, η)
-        return po, pt
-    else
-        po = _radial_case3_antideriv(ro, r1, r2, r3, r4, a)
-        z = zero(po[1])
-        return po, (z, z, z, z, z)
-    end
-end
+# the ro leg in case III (second slot unused); `ro = Inf` gives the regularized limits.
+@inline _radial_obs_parts(ro, roots, a, λ, η, is_case2::Bool) =
+    _radial_obs_parts(ro, roots, a, λ, η, is_case2 ? 2 : 3)
 
 # Definite integrals from the observer parts `obs = (po, pt)` and the source antiderivative.
 @inline function _radial_from_parts(rs::T, roots, a, λ, η, is_case2::Bool, νr, obs) where {T}
@@ -278,13 +271,16 @@ end
 
 The layer-independent state of the exact-Kerr equatorial inversion for the
 screen point `(α, β)` (Bardeen), observer inclination `θo` (rad) at radius `ro`,
-spin `a`. The domain is normalised by exact Kerr symmetries: `θo > π/2` mirrors
+spin `a` (`ro = Inf`: the observer at infinity, with the time regularized as
+`lim (I_t − ro − 2 ln ro)`). The domain is normalised by exact Kerr symmetries: `θo > π/2` mirrors
 through the equator (`θo → π - θo`, `β → -β`), `a < 0` through the azimuth
 (`α → -α`, recorded in `sφ`), and `|a| < 1e-6` is clamped to `1e-6` (the angular
 integrals are 0/0 at `a = 0`). Fields: `vortical` (`η < 0`, never crosses the
-equator; the other fields are then placeholders), `sφ`, the normalised `a`, the
-horizon `rph`, `λ`, `η`, `is_case2` (four real radial roots), `roots`, `ang` (the
-angular elliptic terms), the radial modulus `kr` and observer amplitude `Fr`,
+equator; the other fields are then placeholders), `sφ`, `sθ` (−1 when the equator
+mirror was applied), the normalised `a`, the
+horizon `rph`, `λ`, `η`, `is_case2` (four real radial roots), `rcase` (2 or 3, the
+radial case), `roots`, `ang` (the
+angular elliptic terms and the parameter `k = u₊/u₋`), the radial modulus `kr` and observer amplitude `Fr`,
 `τturn` (Mino time from the observer to the case-II turning point, the I0
 antiderivative at `ro`), `τtot` (the ray's Mino budget: observer → turn →
 infinity in case II with r4 outside the horizon, observer → horizon in case II
@@ -292,7 +288,8 @@ with all four roots inside it and in case III), and the observer
 antiderivatives `po`, `pt`. Consumed by [`band_landing`](@ref).
 """
 @inline function pixel_prep(α::T, β, θo, a; ro = T(1000)) where {T}
-    if cos(θo) < 0
+    sθ = cos(θo) < 0 ? -one(T) : one(T)
+    if sθ < 0
         θo = oftype(θo, π) - θo
         β = -β
     end
@@ -308,57 +305,36 @@ antiderivatives `po`, `pt`. Consumed by [`band_landing`](@ref).
         z = zero(λ + η + a + β + ro)
         c = Complex(z)
         parts = (z, z, z, z, z)
-        return (vortical=true, sφ=sφ, a=a, rph=rph, λ=λ, η=η, is_case2=true,
-                roots=(c, c, c, c),
-                ang=(u_p=z, K=z, Ep=z, PI=z, F_o=z, Ep_o=z, PI_o=z, Hβ=0, pm_o=z, den=z),
+        return (vortical=true, sφ=sφ, sθ=sθ, a=a, rph=rph, λ=λ, η=η, is_case2=true,
+                rcase=2, roots=(c, c, c, c),
+                ang=(u_p=z, K=z, Ep=z, PI=z, F_o=z, Ep_o=z, PI_o=z, Hβ=0, pm_o=z, den=z,
+                     k=z, u_m=z),
                 kr=z, Fr=z, τturn=z, τtot=z, po=parts, pt=parts)
     end
 
     roots = radial_roots(λ, η, a)
-    r1, r2, r3, r4 = roots
     u_p, u_m = angular_turning_points(λ, η, a)
     ang = _angular_parts(β, u_p, u_m, θo, a)
-
-    # Case II (real r4) or III. Near the critical curve the root splitting falls below
-    # Float64 resolution; the split then has a conditioning plateau far below a pixel.
-    is_case2 = _isreal_c(r4, T(1e-10) * max(abs(r4), one(T)))
-    po, pt = _radial_obs_parts(ro, roots, a, λ, η, is_case2)
-    if is_case2
-        r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
-        kr = real(r32 * r41 / (r31 * r42))
-        x2 = real(sqrt((ro - r4) * r31 / ((ro - r3) * r41)))
-        Fr = JacobiElliptic.F(asin(clamp(x2, -one(T), one(T))), kr)
-        τturn = po[1]                                  # observer → turn
-        τtot = po[1] + _tau_max_case2(r1, r2, r3, r4, T)   # observer → turn → infinity
-        if real(r4) <= rph
-            # four real roots, all inside the horizon (P2 region II): the ray reaches the
-            # horizon before r4, so its budget is observer → horizon
-            x2h = real(sqrt((rph - r4) * r31 / ((rph - r3) * r41)))
-            τtot = τturn - 2 / real(sqrt(r31 * r42)) *
-                   JacobiElliptic.F(asin(clamp(x2h, -one(T), one(T))), kr)
-        end
-    else
-        r21 = r2 - r1; r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
-        A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
-        kr = ((A + B)^2 - real(r21)^2) / (4 * A * B)
-        x3o = real((A * (ro - r1) - B * (ro - r2)) / (A * (ro - r1) + B * (ro - r2)))
-        Fr = JacobiElliptic.F(acos(clamp(x3o, -one(T), one(T))), kr)
-        τturn = zero(kr)                               # no case-III turn
-        τtot = _mino_to_horizon_case3(ro, r1, r2, r3, r4, rph)  # observer → horizon
-    end
-    return (vortical=false, sφ=sφ, a=a, rph=rph, λ=λ, η=η, is_case2=is_case2,
-            roots=roots, ang=ang, kr=kr, Fr=Fr, τturn=τturn, τtot=τtot, po=po, pt=pt)
+    # Case II (real r4) or III (η ≥ 0 has two real roots). Near the critical curve the root
+    # splitting falls below Float64 resolution; the split then has a conditioning plateau
+    # far below a pixel.
+    rs = _radial_state(ro, roots, a, λ, η, rph, T, false)
+    return (vortical=false, sφ=sφ, sθ=sθ, a=a, rph=rph, λ=λ, η=η, is_case2=rs.rcase == 2,
+            rcase=rs.rcase, roots=roots, ang=ang, kr=rs.kr, Fr=rs.Fr, τturn=rs.τturn,
+            τtot=rs.τtot, po=rs.po, pt=rs.pt)
 end
 
 """
     Landing{T}
 
-The equatorial source point of one photon-ring layer of one screen point: the
-Boyer–Lindquist radius `r`, azimuth `φ` and time of flight `t` (P3 Eqs. 11–12),
-the sign `νr ∈ {-1, +1}` of the radial velocity at emission, `valid` (false for a
-vortical ray, a landing inside the horizon, or a Mino time beyond the ray's
-budget, i.e. an sn/cn alias), and the ray's conserved `λ` and `η` (with the sign
-of the original spin restored in `λ`).
+The source point of one image of one screen point on an emitting surface: the
+Boyer–Lindquist radius `r`, azimuth `φ` and emission time `t` (P3 Eqs. 11–12; the
+time of the observation is zero), the sign `νr ∈ {-1, +1}` of the radial velocity at
+emission, `valid` (false for a ray that does not reach the surface, a landing inside
+the horizon, or a Mino time beyond the ray's budget, i.e. an sn/cn alias), the ray's
+conserved `λ` and `η` (with the sign of the original spin restored in `λ`), the polar
+angle `θ` of the surface and the sign `νθ ∈ {-1, +1}` of `p^θ` at emission. Both
+signs are those of the photon travelling from the source to the observer.
 """
 struct Landing{T}
     r::T
@@ -368,25 +344,34 @@ struct Landing{T}
     valid::Bool
     λ::T
     η::T
+    θ::T
+    νθ::Int
 end
 
-@inline function _landing(r, φ, t, νr, valid, λ, η)
-    T = promote_type(typeof(r), typeof(φ), typeof(t), typeof(λ), typeof(η))
-    return Landing{T}(r, φ, t, νr, valid, λ, η)
+@inline function _landing(r, φ, t, νr, valid, λ, η, θ, νθ)
+    T = promote_type(typeof(r), typeof(φ), typeof(t), typeof(λ), typeof(η), typeof(θ))
+    return Landing{T}(r, φ, t, νr, valid, λ, η, θ, νθ)
 end
 
 """
     band_landing(prep, n::Integer) -> Landing
 
-The landing of photon-ring layer `n` (0 direct, 1, 2, …) from the per-pixel
-state `prep = pixel_prep(…)`: one sn/cn inversion (P1 Eqs. 30–32 in case II,
-P2 Eqs. B57–B75 in case III) and the source-side radial antiderivative.
-ForwardDiff-generic.
+The equatorial landing of photon-ring layer `n` (0 direct, 1, 2, …) from the
+per-pixel state `prep = pixel_prep(…)`: one sn/cn inversion (P1 Eqs. 30–32 in case
+II, P2 Eqs. B57–B75 in case III) and the source-side radial antiderivative. The ray
+reaches the equator after `m = n + H(β)` polar turning points and leaves it with
+`νθ = sign(β)(−1)^m` (`H(0) = 1`, `sign(0) = 1`), mapped back through the equator
+mirror. ForwardDiff-generic.
 """
 @inline function band_landing(prep, n::Integer)
     T = typeof(prep.sφ)
-    prep.vortical && return _landing(prep.rph, T(NaN), T(NaN), 1, false, prep.sφ * prep.λ, prep.η)
+    θeq = T(π) / 2
+    prep.vortical &&
+        return _landing(prep.rph, T(NaN), T(NaN), 1, false, prep.sφ * prep.λ, prep.η, θeq, 1)
     Gθ, Gφ, Gt = _angular_from_parts(n, prep.ang)
+    # νθ = sign(β)(−1)^m of the normalised frame, flipped back through the equator mirror
+    νθ = (prep.ang.pm_o > 0) == iseven(n + prep.ang.Hβ) ? 1 : -1
+    νθ = prep.sθ < 0 ? -νθ : νθ
     r1, r2, r3, r4 = prep.roots
     local rs, νr
     if prep.is_case2
@@ -408,7 +393,7 @@ ForwardDiff-generic.
                                        prep.is_case2, νr, (prep.po, prep.pt))
     φs = -prep.sφ * (I_φ + prep.λ * Gφ) - T(π) / 2     # P3 Eq. 11 (sφ: a < 0 mirror)
     ts = -(I_t + prep.a * prep.a * Gt)                 # P3 Eq. 12
-    return _landing(rs, φs, ts, νr, valid, prep.sφ * prep.λ, prep.η)
+    return _landing(rs, φs, ts, νr, valid, prep.sφ * prep.λ, prep.η, θeq, νθ)
 end
 
 # Photon-shell (λ, η) at shell radius r (P2 Eqs. 38–39), with Δ(r) = `kerr_delta`.

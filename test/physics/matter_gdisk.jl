@@ -73,7 +73,7 @@ landing(α, β, θo, a, n; ro = 1.0e4) = band_landing(pixel_prep(α, β, θo, a;
             end
         end
         @test nvalid > 0 && ninvalid > 0
-        bad = Landing{Float64}(NaN, NaN, NaN, 1, false, 1.0, 2.0)
+        bad = Landing{Float64}(NaN, NaN, NaN, 1, false, 1.0, 2.0, π / 2, 1)
         @test intensity(d, bad) === 0.0
         @test equatorial_disk_intensity(kerr_horizon(0.94), 1, 0.94, 1.0, 2.0) == 0.0
     end
