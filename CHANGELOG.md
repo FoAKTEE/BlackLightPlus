@@ -45,6 +45,28 @@ While the version is `0.x`, a bump of `x` may break that API.
   without the factor, the one-step expectation at the biases of later generations, and
   the escaped power of every order of a sphere of Thomson depth 0.2 equal with and
   without the factor, absorption off and on.
+- `mc_spectrum(plan, Ns; window = (t_a, t_b))` runs the Monte Carlo over an emission
+  window: every superphoton is emitted at its own coordinate time, reads plasma and metric
+  at its own time along the march, and is binned by its arrival time `t − n̂·x` at a
+  distant observer (`time_bins`, `time_ebins`, `sectors` for azimuth sectors) into a
+  `Products.TimedSpectrumResult`, read by `light_curve` and `time_spectrum`; its `result` is
+  the stationary result of the same matter with every spectrum the window mean. The matter
+  may be a snapshot held fixed or a sphere (on a stationary spacetime), a series of frames
+  (`Data.FrameSequence`, or a `SeriesProvider`; on a stationary spacetime), whose emission is
+  interpolated linearly in time between the frames, a plasma carried rigidly about `z`
+  (`Data.Corotating`, on a spacetime with that helical symmetry, `Spacetime.helical_symmetry`:
+  the orbiting binary at its orbital frequency) or a sphere whose density varies in time
+  (`Matter.VariableSphere`). A frozen snapshot or sphere over a window is the stationary run
+  bit for bit but for the photons' emission times. The light curves match their closed
+  forms: the variable sphere's damping `sinc²(π/n) 3 j₁(ωR)/(ωR)` with no phase shift, the
+  echo of a thin Thomson shell (`Matter.SphericalShell`, a smooth shell; `medium` and
+  `step_frac` give the sphere run another medium), the helical symmetry of a co-rotating
+  plasma on the orbiting binary, and errors falling as N^-1/2 that match the scatter of
+  independent seeds. The run over a window uses the CPU threads. `MonteCarlo.generate` of
+  a zone is compiled as a function of its own, never inlined, so every program that
+  generates from a zone gets the same photons bit for bit (its dot products are `@simd`
+  reductions whose rounding followed the inlining context); `Execution.SectorBands` and
+  `Execution.TimedBands` are the new binning rules.
 - The closed-form Kerr tracer takes its radial sn, cn and sc from `Spacetime.jacobi_sncndn`
   and the Jacobi amplitude from `Spacetime.jacobi_amplitude`, which uses the m → 1
   expansion (A&S 16.15.4) only where $(1-m)\cosh^2u<\sqrt\varepsilon$ and the AGM elsewhere.

@@ -16,25 +16,27 @@ using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, r
                    radius_prep, band_radius,
                    surface_prep, surface_landing, image_crossings, surface_terms,
                    ks_radius, raise_index, surface_crossing, EquatorialPlane, ClassicalRK4,
-                   march_step_compensated
+                   march_step_compensated, helical_symmetry
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
                 sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
-                polarized_emission, EquatorialSpot, spot_amplitude, equatorial_disk_intensity
+                polarized_emission, EquatorialSpot, spot_amplitude, equatorial_disk_intensity,
+                VariableSphere, node_sphere, domain_radius
 using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
                     CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
                     generate, track!, table_zone, zone_nsuperphotons, mean_weight, int_jnu_zone,
                     EMISSIVITY_TABLE, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP, WeightTable, ZoneNodes,
                     zone_count, int_jnu, WEIGHT_FLOOR, HotcrossTable, hotcross_nodes, juttner_norm,
-                    total_compton_cross_num
+                    total_compton_cross_num, SPHERE_STEP_FRAC, SPHERE_MAX_STEPS
 import ..MonteCarlo: record!, child_stream, spawn!, tally!
 using ..Data: FluidBlocks, AthenaKSnapshot, locate, build_weight_table, emission_sites, zone_tables,
-              build_hotcross_table
+              build_hotcross_table, FrameSequence, Corotating, SeriesProvider
 import ..Execution
 using ..Execution: ThreadedExecutor, resolve, describe, foreach_item!, ray, image_coords,
                    CameraRays, BlockGrid, CoordList, mixed_partition, ImageBlock, stream_blocks!,
                    ExactBins, ExactScalars, ChildBuffer, PolarBands, InclinationBands, Spectrum,
-                   band, gather!, children, overflow, scalar, addends, nu_centers, nuLnu_solid
+                   band, gather!, children, overflow, scalar, addends, nu_centers, nuLnu_solid,
+                   SectorBands, TimedBands
 import ..Execution: workgroupsize, stack_bytes
 using ..Plans: Plan, Lanes, MixedLanes, geodesic_type, transfer_params, hotcross_table
 using ..Analysis: refinement_indicator, needs_refinement, lensing_band, band_grid, band_points
@@ -53,6 +55,7 @@ include("crossings.jl")
 include("amr.jl")
 include("montecarlo.jl")
 include("montecarlo_tables.jl")
+include("montecarlo_time.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
@@ -62,11 +65,13 @@ export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, Analy
        trace_outputs
 # Monte Carlo programs
 export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER_STRIPES,
-       mc_ledger, ledger_sum, ledger_count
+       mc_ledger, ledger_sum, ledger_count, TimeProfile, profile_area, clip_profile, sample_time,
+       time_stream, place, TimedSource, arrival_time, record_arrival!, TimedRecord, TimedPrimary,
+       TimedLayer
 # products and results
 export Image, Trajectories, render, render_amr, render_analytic, render_crossings,
        photon_ring_layers, trace, shadow, sensitivity, variants, analytic_movie
 export mc_spectrum, ScatterResult, GRMHDSpectrumResult, emission_zones, analytic_nuLnu,
-       incl_nuLnu
+       incl_nuLnu, TimedSpectrumResult, arrival_times, light_curve, time_spectrum
 
 end # module

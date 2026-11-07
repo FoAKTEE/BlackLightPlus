@@ -754,8 +754,12 @@ over the whole range, and costs one logarithm and one exponential per evaluation
 built once, when the package compiles, and generation reads the same function as the
 zone tables, so the frequency acceptance and its envelope stay consistent.
 
-**Zones, weights and counts.** A zone of proper volume $dV$ emits
-$d\dot N/d\ln\nu=(dV/h)\int j_\nu d\Omega$ photons per second per unit $\ln\nu$. The
+**Zones, weights and counts.** The number of emission events in a spacetime region is a
+scalar and the fluid-frame element $dV_f\,d\tau_f$ is the invariant $\sqrt{-g}\,d^4x$, so a
+zone of measure $dV=\sqrt{-g}\,\Delta^3x\,L^3$ emits
+$d\dot N/d\ln\nu=(dV/h)\int j_\nu d\Omega$ photons per second of coordinate time per unit
+$\ln\nu$ (the fluid's own volume $u^t\sqrt{-g}\,\Delta^3x$ and proper time $dt/u^t$ carry
+$u^t$ factors that cancel). The
 weight table $w_m=\sum_z\int j_\nu d\Omega(\nu_m)\,dV_z/(hN_s')$ on $n+1$ nodes over
 $[\nu_{\min},\nu_{\max}]$, $N_s'=N_s/\ln(\nu_{\max}/\nu_{\min})$, makes the generated
 density uniform in $\ln\nu$; zone $z$ receives
@@ -869,6 +873,86 @@ identical for any thread count, device count and schedule
 (`test/physics/numerics_exactsum.jl`, `test/pipeline/products_montecarlo.jl`,
 `test/pipeline/products_backend.jl`), and the device kernel on the
 KernelAbstractions CPU backend reproduces the threaded run bit for bit.
+
+### Emission over a window and arrival time
+
+With an emission window $[t_a,t_b]$ of coordinate time the plasma changes while the
+superphotons travel. The emission rate density is a sum of nodes,
+$\dot n(t)=\sum_m\phi_m(t)\,\dot n_m$, each $\dot n_m$ the complete stationary emission of one
+plasma state and $\phi_m\ge0$ a profile in time. A frozen snapshot or sphere is one node with
+$\phi=1$ on the window; a series of frames at $\tau_k$ gives each frame the hat that is 1 at
+$\tau_k$ and 0 at its neighbours, so $\sum_k\phi_k\equiv1$ and the emission is the linear
+interpolation in time of the frames' emission, and a run of equal frames is one node with the sum
+of its hats. (The emissivity of linearly blended primitives is not linear in $t$; the two
+interpolants of the same frames differ at second order in their spacing, as the cell-centre
+emission and the interpolated absorption do in space.) The node's share of the window's emission
+is $W_m=\int\phi_m\,dt/(t_b-t_a)$, and the window mean of the emission is the stationary emission
+of the nodes' zones with the measure $W_m\,dV$: one weight table and the counts of the
+stationary scheme over the concatenated zones give the expected number of primaries $N_s$ and one
+weight $w(\nu)$ for every packet, which is now the window mean of the rate, so a packet stands for
+$w\,(t_b-t_a)\,L/c$ photons. A primary's emission time is drawn exactly from its node's
+piecewise-linear profile (a segment by its area; on it the density $\propto(1-s)v_0+sv_1$ as the
+mixture of $2(1-s)$ and $2s$ with weights $v_0$, $v_1$), on its own identity's Philox stream from
+draw $2^{31}$, so the stationary draws are untouched.
+
+Each primary is the stationary photon of its node, generated at coordinate time 0, carried to its
+emission time: by the time translation on a stationary spacetime, and for a plasma co-rotating at
+$\omega$ also by the rotation $R_z(\omega t_e)$ of its position and of the spatial components of
+its covariant momentum. The second is exact when the spacetime has the helical Killing vector
+$\partial_t+\omega\partial_\phi$, $g(Rx,t+\tau)=R\,g(x,t)R^{\mathsf T}$: the photon is null at
+its event and the zone's $\sqrt{-g}$, $n_e$, $\Theta_e$ and $b^2$ are invariants of the map. Kerr
+with its spin along $z$ and flat space have it at every $\omega$, two holes with spins along $z$
+on a circular orbit at the orbital frequency; a frozen snapshot or a series emits over a window
+only on a stationary spacetime. The march reads the metric and the plasma at the photon's $x^0$:
+frames blended linearly in their primitives, the co-rotating plasma at $R_z(-\omega x^0)x$ with its
+vectors rotated back, the variable sphere at its density of the time. A scattered child starts with
+its event's time.
+
+**Arrival time.** A photon escaping at $(t_e,\mathbf x_e)$ along $\hat n=\mathbf k/|\mathbf k|$
+crosses the wavefront $\hat n\cdot\mathbf x=D$ of a distant observer along $\hat n$ at
+$t_e+D-\hat n\cdot\mathbf x_e$ in flat space, so $t_{\rm arr}=t_e-\hat n\cdot\mathbf x_e$ up to
+a constant common to all photons; it is constant along a straight line, so it does not depend on
+where the march stops. Beyond the escape sphere an outgoing ray of Kerr–Schild time keeps
+$t-r-4M\ln(r-2M)$ constant, so the constant is $D+4M\ln D$ and the photon-dependent remainder
+$-4M\ln r_e$ varies by at most $4M\ln(1+1/C)\approx4M/C$ between photons (the escape step
+overshoots by about $r/C$), plus $O(Mb^2/r_e^2)$ for impact parameter $b$: $0.05\,M$ and
+$10^{-2}M$ at $C=80$, $r_e=10^3M$, $b=100\,M$. In flat space the arrival time is exact.
+
+**Light curves.** Each photon is assigned to the observer along its own direction. An arrival
+bin of width $\Delta t$ in a row of solid angle $\Delta\Omega$ gives the isotropic-equivalent
+
+```math
+\nu L_\nu=\frac{m_ec^2}{\Delta\ln\nu}\,\frac{4\pi}{\Delta\Omega}\,\frac{t_b-t_a}{\Delta t}\sum_{\rm bin}wE ,
+```
+
+with the standard error from $\sum(wE)^2$ as for the stationary bins; $L/c$ cancels. Summed over
+the bins with the weights $\Delta t/(t_b-t_a)$ it is the stationary estimator, the window mean.
+Arrival times within the march's emission radius $R$ of the window edges see part of the source
+(on flat space exactly those within the sphere radius). Without scattering each history adds at
+most one photon to a bin and $\sum(wE)^2$ overestimates the variance only by
+$\sum(\mathrm E\,X_i)^2$, a relative excess of the order of the largest probability that one
+history lands in the bin; children of one history in one bin add cross terms it does not see.
+
+**The frozen limit.** A run with one node whose profile is flat on the window has $W=1$ exactly,
+so its tables, counts, streams and photons are the stationary run's but for $x^0$; on a stationary
+spacetime with time-independent matter nothing in the march reads $x^0$, the generation runs as one
+compiled function for both programs (its dot products are `@simd` reductions, whose rounding
+follows the inlining context) and the march runs in the stationary sink, the arrival time being
+recorded after it returns. The window-mean spectra, the ledger and the children are then the
+stationary ones bit for bit.
+
+**Exact tests.** A uniform thin ball of radius $R$ seen along $\hat z$ has the delay
+distribution $P(\tau)=3(R^2-\tau^2)/4R^3$, so an emission $1+A\sin\omega t$ is observed as
+$1+A\hat P\sin\omega t$ with $\hat P=3(\sin x-x\cos x)/x^3=3j_1(x)/x$, $x=\omega R$, and no
+phase shift; a density interpolated linearly through $n$ nodes per period has the fundamental
+$A\,\mathrm{sinc}^2(\pi/n)$, so the light curve's is $A\,\mathrm{sinc}^2(\pi/n)\hat P$ exactly. A
+flash at the centre of a thin shell of radius $r$ and Thomson depth $\tau$ returns, to first order
+in $\tau$, the echo $\tau\,\Psi(t)$ with $\Psi=(3/8r)[1+(1-t/r)^2]$ on $0\le t\le2r$, averaged
+over the shell's depth profile. A co-rotating plasma on the orbiting binary obeys
+$L(t+\tau,\theta,\phi+\omega\tau)=L(t,\theta,\phi)$: azimuth-integrated light curves are flat,
+and at fixed $(\theta,\phi)$ the period is $2\pi/\omega$, halved only when the plasma, like the
+equal-mass metric, is symmetric under the rotation by $\pi$
+(`test/pipeline/products_montecarlo_time.jl`).
 
 ## Deviations from reference codes
 

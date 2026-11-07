@@ -6,7 +6,7 @@ momentum along geodesics, decay by Kirchhoff absorption and, with `scattering = 
 Compton-scatter off a relativistic Maxwellian electron population. The matter of the
 plan decides the run: a uniform sphere in flat spacetime, or a GRMHD grid on any
 spacetime, a moving binary included, the grid one snapshot held fixed while the
-superphotons travel.
+superphotons travel, or, over an emission window, a plasma that changes in time.
 
 ## A thin synchrotron sphere
 
@@ -101,6 +101,54 @@ synchrotron fit, so the zone tables of a 10⁷-cell snapshot take seconds and th
 every cell. For a quick look, `stride = s` keeps one randomly drawn owned cell per group of
 `s³` cells with the group's volume: an unbiased but noisier quadrature of the same
 emission. `r_emit_max` and `max_zones` limit the zones.
+
+## Light curves and time-resolved spectra
+
+With `window = (t_a, t_b)` the plasma emits over that span of coordinate time, every
+superphoton reads plasma and metric at its own time, and the escaped photons are also binned
+by their arrival time at a distant observer. A sphere whose density varies in time shows the
+light-travel smearing across the ball:
+
+```julia
+using BlackLightPlus
+using BlackLightPlus.Matter: UniformSphere, VariableSphere
+using BlackLightPlus.Products: light_curve, time_spectrum
+
+ω = 1.5; P = 2π / ω
+times = collect(range(0.0, 6P; length = 145))                     # 24 nodes per period
+vs = VariableSphere(UniformSphere(R = 1.0), times, 1 .+ 0.5 .* sin.(ω .* times))
+res = mc_spectrum(prepare(vs), 10^6; window = (0.0, 6P), time_bins = (0.0, 6P, 72))
+t, L, sigma, count = light_curve(res)                            # erg/s in each arrival bin
+nu, nuLnu, sig, n = time_spectrum(res, 30)                       # the spectrum of bin 30
+res.result                                                       # the window-mean spectrum
+res.interior                                                     # bins that see the whole ball
+```
+
+The light curve's modulation is the emitted one times `3 j₁(ωR)/(ωR)`. `light_curve` takes a
+band row (`row`, 0 for the whole sky), a frequency range (`nu_min`, `nu_max`) and a scattering
+order (`order`); `time_ebins` sets the frequency bins of the time-resolved spectra.
+
+On a plasma grid the matter may be a snapshot held fixed (on a stationary spacetime), a series
+of frames (`BlackLightPlus.Data.FrameSequence`, frames at given coordinate times, on a stationary
+spacetime) or a snapshot carried rigidly with an orbiting binary
+(`BlackLightPlus.Data.Corotating`, on a spacetime with that helical symmetry); `sectors` splits
+every inclination band into azimuth sectors, so each sector is one observer azimuth:
+
+```julia
+using BlackLightPlus.Spacetime: BoostedSuperposedKerrSchild, CircularOrbit
+using BlackLightPlus.Data: Corotating
+
+orbit = CircularOrbit((0.5, 0.5), 25.0)
+binary = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], orbit)
+plan = prepare(cfg; spacetime = binary, matter = Corotating(snap, orbit.omega))
+P = 2π / orbit.omega
+res = mc_spectrum(plan, 10^6; scattering = true, window = (0.0, 2P), sectors = 16,
+                  time_bins = (0.0, 2P, 64))
+```
+
+With a snapshot held fixed and no window, or with a window on a stationary spacetime, the
+window-mean spectrum `res.result` is that of the stationary run bit for bit. The run over a
+window uses the CPU threads.
 
 ## Reproducibility
 

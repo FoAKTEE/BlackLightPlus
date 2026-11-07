@@ -69,6 +69,7 @@ end
 
 """
     prepare(sphere::UniformSphere) -> Plan
+    prepare(sphere::VariableSphere) -> Plan
 
 The plan of the Monte Carlo sphere: the flat spacetime `Minkowski()` with `sphere` as its
 matter, in centimetres. The coordinates are cm and the parameter set is `nothing`: the
@@ -77,7 +78,7 @@ Monte Carlo opacities of a plan without a parameter set take one centimetre per
 coordinate length. The configuration is `RunConfig()`; its camera, march budget and
 queue are not read by the Monte Carlo, and a plan without a parameter set is not imaged.
 """
-prepare(sphere::UniformSphere) =
+prepare(sphere::Union{UniformSphere,VariableSphere}) =
     plan_of(RunConfig(), Minkowski(), sphere, StokesI(), Lanes(), 16, nothing, nothing)
 
 # The plan of `cfg` on `spacetime` through `matter` with the parameter set `params` and

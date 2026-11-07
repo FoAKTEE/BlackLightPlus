@@ -161,7 +161,7 @@ The emission zones of the plan's matter (an `AthenaKSnapshot` or `FluidBlocks`) 
 `mc_spectrum` draws them, decoded in full: `Data.emission_sites` of its blocks on the
 plan's spacetime with the plan's parameter set (one zone per group of `stride³` cells,
 its cell drawn uniformly among the group's owned cells on a stream of `seed`, volume
-the owned cells' proper volume at that cell; every owned cell above the horizon proxy at
+the owned cells' measure √−g Δ³x L³ at that cell; every owned cell above the horizon proxy at
 `stride = 1`), each zone `Matter.emission_zone` of its site.
 """
 emission_zones(plan::Plan; kw...) =
@@ -192,9 +192,10 @@ const MC_BIAS_MAX = 1.0e6
                 spec_nu_max = scattering ? 1e24 : nu_max, n_esamp = 400, n_ebins = 200,
                 table = nothing, max_scatt = 3, bias = nothing, bias_max = MC_BIAS_MAX,
                 bias_order = 1, split = 1, absorption, capacity = nothing, C = plan.budget.C,
-                escape = 1e3,
-                R_em = 100.0, stride = 1, r_emit_max = Inf, max_zones = typemax(Int))
-        -> Spectrum | ScatterResult | GRMHDSpectrumResult
+                escape = 1e3, R_em = 100.0, stride = 1, r_emit_max = Inf,
+                max_zones = typemax(Int), medium = nothing, step_frac = SPHERE_STEP_FRAC,
+                window = nothing, time_bins = 64, time_ebins = 20, sectors = 0)
+        -> Spectrum | ScatterResult | GRMHDSpectrumResult | TimedSpectrumResult
 
 The Monte Carlo spectrum of the plan's matter from about `Ns` superphotons, run on the
 executor `resolve(backend)` (`nothing`: the session default).
@@ -203,7 +204,9 @@ The matter decides the run. The uniform sphere of `prepare(sphere)` (flat spacet
 primaries uniform in the ball, a straight-line march (`FlatMarch`); without scattering
 the result is the absorbed `Spectrum`, with scattering a [`ScatterResult`](@ref) of
 per-order spectra (`absorption` defaults to `false` there: the idealized Comptonization
-sphere). A plasma grid (`AthenaKSnapshot`, `FluidBlocks`) on any spacetime, a moving
+sphere); `medium` is another plasma for the march (a `SphericalShell` about a small
+source: a light echo), whose radius extends the march, and `step_frac` the march step as
+a fraction of its radius. A plasma grid (`AthenaKSnapshot`, `FluidBlocks`) on any spacetime, a moving
 binary included: the grid is one snapshot, emitting from its cell centres at `t = 0`
 and held fixed while the superphotons travel, and the march reads the metric at each
 photon's own time; primaries spread over the [`emission_zones`](@ref) of the plan
@@ -242,9 +245,24 @@ children, so no child is lost or counted twice. On threads each task's two child
 buffers start with `capacity` slots (`nothing`: 4096) and grow; a photon whose children
 overflow is rerun the same way.
 
+Emission over a window: with `window = (t_a, t_b)` (coordinate time) the plasma emits over
+the window and the result is a [`TimedSpectrumResult`](@ref): the stationary result of the
+same matter, with every spectrum the window mean, and the escaped photons binned by their
+arrival time `t − n̂·x` at a distant observer into `time_bins` equal bins over
+`[t_a − R, t_b + R]` (`R` the march's emission radius; or `(t_lo, t_hi, n)`) with an
+underflow and an overflow bin, on `time_ebins` frequency bins over
+`[spec_nu_min, spec_nu_max]`, in the run's bands split into `sectors` azimuth sectors
+(`Execution.SectorBands`; 0: none). The matter may be a frozen snapshot or sphere (on a
+stationary spacetime), a `Data.Corotating` plasma (on a spacetime with that helical
+symmetry), a `Data.FrameSequence` or `SeriesProvider` of frames (on a stationary
+spacetime; the frame times in the coordinate time of the spacetime, the window inside
+them) or a `Matter.VariableSphere`; the time-dependent ones need the window. The march
+reads plasma and metric at each photon's time. Runs on CPU threads.
+
 Determinism: bitwise reduction. The bins, the ledger and the children depend only on the
 plan, `Ns` and the keywords, whatever the executor, the device count, the chunking or
-the buffer capacity.
+the buffer capacity. A frozen snapshot over a window is the stationary run bit for bit
+but for the photons' emission times.
 """
 function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = nothing,
                      bands = nothing, seed::Integer = 0x5eed5eed, nu_min::Real = MC_NU_MIN,
@@ -253,10 +271,12 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
                      n_esamp::Integer = MC_N_ESAMP, n_ebins::Integer = 200,
                      table = nothing, max_scatt::Integer = 3, bias = nothing,
                      bias_max::Real = MC_BIAS_MAX, bias_order::Real = 1.0, split::Integer = 1,
-                     absorption::Bool = !(scattering && plan.provider isa UniformSphere),
+                     absorption::Bool = !(scattering && plan.provider isa Union{UniformSphere,VariableSphere}),
                      capacity = nothing, C::Real = plan.budget.C, escape::Real = 1.0e3,
                      R_em::Real = 100.0, stride::Integer = 1, r_emit_max::Real = Inf,
-                     max_zones::Integer = typemax(Int))
+                     max_zones::Integer = typemax(Int), window = nothing, time_bins = 64,
+                     time_ebins::Integer = 20, sectors::Integer = 0, medium = nothing,
+                     step_frac::Real = SPHERE_STEP_FRAC)
     t0 = time_ns()
     exec = resolve(backend)
     Ns > 0 || throw(ArgumentError("mc_spectrum: Ns must be positive"))
@@ -278,8 +298,15 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
                  order = Float64(bias_order)), capacity = capacity,
          march = (C = Float64(C), escape = Float64(escape), R_em = Float64(R_em)),
          zones = (stride = Int(stride), r_emit_max = Float64(r_emit_max),
-                  max_zones = Int(max_zones)))
-    return mc_run(plan.provider, plan, exec, bands, o, t0)
+                  max_zones = Int(max_zones)),
+         time = (window = window, bins = time_bins, ebins = Int(time_ebins), sectors = Int(sectors)),
+         medium = medium, step_frac = Float64(step_frac))
+    window === nothing && return mc_run(plan.provider, plan, exec, bands, o, t0)
+    exec isa ThreadedExecutor ||
+        throw(ArgumentError("mc_spectrum: a run over a window runs on CPU threads (backend = :cpu)"))
+    sectors >= 0 && time_ebins >= 1 ||
+        throw(ArgumentError("mc_spectrum: sectors must be non-negative and time_ebins positive"))
+    return mc_run_timed(plan.provider, plan, exec, bands, o, t0)
 end
 
 # The hot-cross table of a run: the one given, or the plan's, built on the run's executor
@@ -301,14 +328,22 @@ mc_opacities(params, o, w_ref) =
 mc_run(::Nothing, plan, exec, bands, o, t0) =
     throw(ArgumentError("mc_spectrum needs matter: prepare the plan with `matter = …`"))
 
-# The uniform sphere.
+# Time-dependent matter needs the emission window.
+mc_run(m::Union{VariableSphere,FrameSequence,SeriesProvider,Corotating}, plan, exec, bands, o, t0) =
+    throw(ArgumentError("mc_spectrum: $(nameof(typeof(m))) changes in time; give the emission " *
+                        "window, window = (t_a, t_b)"))
+
+# The uniform sphere, the medium of its march (`medium`, the sphere by default) and the
+# radius of the march, the larger of the two.
 function mc_run(sphere::UniformSphere, plan, exec, bands, o, t0)
     plan.spacetime isa Minkowski ||
         throw(ArgumentError("the Monte Carlo sphere runs on Minkowski(); the plan's " *
                             "spacetime is $(nameof(typeof(plan.spacetime)))"))
     tables, N = sphere_tables(sphere, o.gen)
-    ctl = FlatMarch(sphere)
-    transport = MCTransport(ctl, plan.spacetime, sphere,
+    medium = o.medium === nothing ? sphere : o.medium
+    ctl = FlatMarch(max(Float64(sphere.R), Float64(domain_radius(medium))), o.step_frac,
+                    SPHERE_MAX_STEPS)
+    transport = MCTransport(ctl, plan.spacetime, medium,
                             mc_opacities(plan.params, o, mean_weight(tables.weights)),
                             Val(o.absorption), Val(o.scattering))
     rows = bands === nothing ? PolarBands(6) : bands
@@ -317,7 +352,11 @@ function mc_run(sphere::UniformSphere, plan, exec, bands, o, t0)
     layout = widest_layout(N, o.K)
     nchildren = run_layers(exec, SphereSource(sphere, tables), transport, o.seed, N, orders,
                            ledger, layout, o.scattering, o.capacity)
-    rec = run_record(exec, plan, t0)
+    return sphere_result(orders, o, N, nchildren, ledger, plan, run_record(exec, plan, t0))
+end
+
+# The sphere's result of the run's bins: the absorbed spectrum, or the orders with scattering.
+function sphere_result(orders, o, N, nchildren, ledger, plan, rec)
     o.scattering || return Spectrum(orders[1]; plan = plan, run = rec)
     total = similar(orders[1])
     foreach(b -> merge!(total, b), orders)
@@ -355,14 +394,19 @@ function mc_run(provider, plan, exec, bands, o, t0)
     source = ZoneSource(sites, provider, st, plan.params, wgt, EMISSIVITY_TABLE, dnmax, offset)
     nchildren = run_layers(exec, source, transport, o.seed, N, orders, ledger, layout,
                            o.scattering, o.capacity)
+    return grid_result(orders, rows, o, length(sites), N, ledger, nchildren, plan,
+                       run_record(exec, plan, t0))
+end
+
+# The grid's result of the run's bins.
+function grid_result(orders, rows, o, n_zones, N, ledger, nchildren, plan, rec)
     total = similar(orders[1])
     foreach(b -> merge!(total, b), orders)
     spec = Spectrum(total)
     nb = length(rows.lo)
-    rec = run_record(exec, plan, t0)
     return GRMHDSpectrumResult(collect(rows.incl_deg), rows.half_width_deg, spec.dOmega[1:nb],
                                [band(spec, k) for k in 1:nb], band(spec, nb + 1),
-                               [Spectrum(b) for b in orders], o.K, length(sites), N,
+                               [Spectrum(b) for b in orders], o.K, n_zones, N,
                                ledger_count(ledger, ESCAPED), nchildren,
                                ledger_totals(ledger)..., o.scattering, plan, rec)
 end
@@ -382,16 +426,21 @@ end
 
 # The layered loop on `exec`, as a cascade: `MCPrimary` over the primaries `1:n0`, then
 # up to `layout.max_layer` layers of `MCLayer` over the children of the layer before,
-# into the run totals `orders` and `ledger`, gathered here. Without scattering only the
-# primaries run. Returns the number of children.
+# into the run totals `orders` and `ledger` and, with `timed` (a `TimedRecord`), the
+# time-resolved bins and the clock of `TimedPrimary` and `TimedLayer`, gathered here.
+# Without scattering only the primaries run. Returns the number of children.
 function run_layers(exec, source, transport, seed::UInt32, n0::Int, orders, ledger, layout,
-                    scatter::Bool, capacity)
+                    scatter::Bool, capacity; timed = nothing)
     slot = scatter ? ChildBuffer(Superphoton, 0, layout) : nothing
     sink = MCSink(transport.ctl, orders, slot, ledger)
-    nchildren = Execution.foreach_cascade!(exec, MCPrimary(source, transport, sink, seed),
-                                           MCLayer(Superphoton[], MCRng[], transport, sink),
-                                           n0, scatter ? layout.max_layer : 0; capacity)
+    gen = Execution.Generation(Superphoton[], MCRng[])
+    primary = timed === nothing ? MCPrimary(source, transport, sink, seed) :
+              TimedPrimary(source, transport, sink, seed, timed)
+    layer = timed === nothing ? MCLayer(gen, transport, sink) : TimedLayer(gen, transport, sink, timed)
+    nchildren = Execution.foreach_cascade!(exec, primary, layer, n0,
+                                           scatter ? layout.max_layer : 0; capacity)
     foreach(gather!, orders)
+    timed === nothing || (foreach(gather!, timed.timed); gather!(timed.clock))
     gather!(ledger)
     return nchildren
 end

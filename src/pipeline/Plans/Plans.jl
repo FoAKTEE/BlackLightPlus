@@ -10,7 +10,7 @@ using ..Spacetime: Spacetime, StationarySpacetime, KerrSchildCartesian, Minkowsk
                    PlaneParallelCamera, CameraFrame, MarchBudget, march_integrator, lane,
                    horizon_radius, critical_curve
 import ..Spacetime: npixels
-using ..Matter: ElectronModel, PlasmaCuts, UniformSphere, legacy_bound, domain_radius
+using ..Matter: ElectronModel, PlasmaCuts, UniformSphere, VariableSphere, legacy_bound, domain_radius
 using ..MonteCarlo: HotcrossTable
 using ..Data: build_hotcross_table
 using ..Transfer: TransferMode, StokesI, IQUV, PowerLaw, Kappa, TransferParams
