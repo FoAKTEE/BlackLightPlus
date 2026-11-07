@@ -175,12 +175,14 @@ The matter decides the run. The uniform sphere of `prepare(sphere)` (flat spacet
 primaries uniform in the ball, a straight-line march (`FlatMarch`); without scattering
 the result is the absorbed `Spectrum`, with scattering a [`ScatterResult`](@ref) of
 per-order spectra (`absorption` defaults to `false` there: the idealized Comptonization
-sphere). A plasma grid (`AthenaKSnapshot`, `FluidBlocks`) on a stationary spacetime:
-primaries spread over the [`emission_zones`](@ref) of the plan (`stride`, `r_emit_max`,
-`max_zones`) by their expected counts, rounded stochastically on the stream
-`MCRng(seed, 0)`; a geodesic march (`CurvedMarch`: step divisor `C`, escape at radius
-`escape`, emission-confinement radius the larger of `R_em` and 1.2 times the outermost
-zone radius); absorption always by default; the result a
+sphere). A plasma grid (`AthenaKSnapshot`, `FluidBlocks`) on any spacetime, a moving
+binary included: the grid is one snapshot, emitting from its cell centres at `t = 0`
+and held fixed while the superphotons travel, and the march reads the metric at each
+photon's own time; primaries spread over the [`emission_zones`](@ref) of the plan
+(`stride`, `r_emit_max`, `max_zones`) by their expected counts, rounded stochastically
+on the stream `MCRng(seed, 0)`; a geodesic march (`CurvedMarch`: step divisor `C`,
+escape at radius `escape`, emission-confinement radius the larger of `R_em` and 1.2
+times the outermost zone radius); absorption always by default; the result a
 [`GRMHDSpectrumResult`](@ref).
 
 Generation: the weight table over `[nu_min, nu_max]` on `n_esamp` intervals for about

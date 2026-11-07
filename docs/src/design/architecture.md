@@ -517,7 +517,7 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
 | `shadow(plan; backend)` | `(fate, steps, null_error, radius, final, plan, run)` | no `MixedLanes` |
 | `sensitivity(plan, param; backend)` | `(image, derivative, flux, dflux, param)` | `param` is `:mass_scale` or `:rat_high` |
 | `variants(plan, mass_scales; backend)` | `(images, mass_scales, plan, run)` | grid providers |
-| `mc_spectrum(plan, Ns; scattering = false, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | a sphere plan, or grid matter on a stationary spacetime (inclination bands only) |
+| `mc_spectrum(plan, Ns; scattering = false, backend, bands, …)` | `Spectrum`, `ScatterResult` or `GRMHDSpectrumResult` | a sphere plan, or grid matter (one snapshot) on any spacetime (inclination bands only) |
 
 - Determinism: on one hardware every imaging product is bitwise per item, whatever the
   executor, device count, chunking or queue order; `render_amr`'s visited blocks, mosaic,
@@ -547,10 +547,10 @@ absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` is the Mo
 Carlo product. The plan's matter selects the run. The sphere of `prepare(sphere)`
 marches straight lines (`FlatMarch`) and returns a `Spectrum`, or with `scattering =
 true` a `ScatterResult` of per-order spectra (`absorption` defaults to `false` there). A
-plasma grid on a stationary spacetime spreads the primaries over
-`emission_zones(plan; stride, r_emit_max, max_zones)` by their expected counts, marches
-geodesics (`CurvedMarch` with `C`, `escape`, `R_em`) and returns a `GRMHDSpectrumResult`
-of inclination bands. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
+plasma grid on any spacetime (one snapshot, held fixed during transport) spreads the
+primaries over `emission_zones(plan; stride, r_emit_max, max_zones)` by their expected
+counts, marches geodesics (`CurvedMarch` with `C`, `escape`, `R_em`) and returns a
+`GRMHDSpectrumResult` of inclination bands. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
 sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
 `ExactScalars`, and scattered children into the `ChildBuffer` of the cascade
 (`foreach_cascade!`): within each chunk of primaries the next generation tracks the

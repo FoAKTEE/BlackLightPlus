@@ -4,8 +4,9 @@
 superphoton packets sample the synchrotron emissivity zone by zone, carry covariant
 momentum along geodesics, decay by Kirchhoff absorption and, with `scattering = true`,
 Compton-scatter off a relativistic Maxwellian electron population. The matter of the
-plan decides the run: a uniform sphere in flat spacetime, or a GRMHD grid on a
-stationary spacetime.
+plan decides the run: a uniform sphere in flat spacetime, or a GRMHD grid on any
+spacetime, a moving binary included, the grid one snapshot held fixed while the
+superphotons travel.
 
 ## A thin synchrotron sphere
 
