@@ -160,3 +160,17 @@ function photon_shell_exponents(a::Real, r::Real)
     τ = 2 / (a * sq) * (r^2 * (r + 3) / (r - 1) * K - 2 * a^2 * u_p * (JacobiElliptic.E(k) - K) / (2k))
     return γ, δ, τ
 end
+
+"""
+    critical_point(a, θo, r) -> (α, β)
+
+The point of the critical curve on the Bardeen screen of an observer at inclination `θo`
+that belongs to the bound photon orbit of radius `r` (P2 Eqs. 38–39, 55):
+`α = −λ̃/sin θo`, `β = +√(η̃ + a² cos²θo − λ̃² cot²θo)` (the mirror point has `−β`); `β` is
+NaN for an orbit the observer does not see.
+"""
+function critical_point(a::Real, θo::Real, r::Real)
+    λ, η = _shell_lambda_eta(Float64(r), Float64(a))
+    b2 = η + a^2 * cos(θo)^2 - λ^2 * cot(θo)^2
+    return -λ / sin(θo), b2 >= 0 ? sqrt(b2) : NaN
+end

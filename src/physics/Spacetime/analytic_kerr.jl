@@ -170,8 +170,12 @@ end
     r3r = real(r3)
     I0 = F2
     I1 = r3r * F2 + real(r43) * PI21
-    I2 = sqrt(max(kerr_radial_potential(r, a, λ, η), zero(T))) / (r - r3r) -
-         real(r1 * r4 + r2 * r3) / 2 * F2 - E2
+    # √R/(r − r₃) from the factored potential, exactly zero at the turning point r = r₄:
+    # the expanded polynomial leaves a rounding residue there that √ lifts to ~√ε, which
+    # 1/(r₄ − r₃) amplifies near the critical curve
+    Rf = real((r - r1) * (r - r2) * (r - r3) * (r - r4))
+    sR = abs2(q) > 0 ? sqrt(max(Rf, zero(T))) : zero(T)
+    I2 = sR / (r - r3r) - real(r1 * r4 + r2 * r3) / 2 * F2 - E2
     Ip = -PI2p - F2 / real(rp3)
     Im = -PI2m - F2 / real(rm3)
     return I0, I1, I2, Ip, Im
@@ -238,8 +242,11 @@ observer-minus-source difference.
 @inline _radial_obs_parts(ro, roots, a, λ, η, is_case2::Bool) =
     _radial_obs_parts(ro, roots, a, λ, η, is_case2 ? 2 : 3)
 
-# Definite integrals from the observer parts `obs = (po, pt)` and the source antiderivative.
-@inline function _radial_from_parts(rs::T, roots, a, λ, η, is_case2::Bool, νr, obs) where {T}
+# Definite integrals from the observer parts `obs = (po, pt)` and the source antiderivative;
+# with `τ`, the radial Mino time I0 is replaced by the angular one (the geodesic equation
+# I_r = G_θ, exact) in every term proportional to it (`_radial_tau`).
+@inline function _radial_from_parts(rs::T, roots, a, λ, η, is_case2::Bool, νr, obs;
+                                    τ = nothing) where {T}
     po, pt = obs
     r1, r2, r3, r4 = roots
     if is_case2
@@ -258,12 +265,18 @@ observer-minus-source difference.
         I0 = I0o - I0s; I1 = I1o - I1s; I2 = I2o - I2s
         Ip = Ipo - Ips; Im = Imo - Ims
     end
+    τ === nothing ||
+        ((I0, I1, I2, Ip, Im) = _radial_tau((I0, I1, I2, Ip, Im), is_case2 ? 2 : 3, roots, a, τ))
+    return _radial_combine(I0, I1, I2, Ip, Im, a, λ)
+end
+
+# (I_r, I_φ, I_t) from the definite integrals (P1 Eqs. B1–B3).
+@inline function _radial_combine(I0, I1, I2, Ip, Im, a, λ)
     rph = 1 + sqrt(1 - a * a); rmh = 1 - sqrt(1 - a * a)
-    I_r = I0
     I_φ = 2 * a / (rph - rmh) * ((rph - a * λ / 2) * Ip - (rmh - a * λ / 2) * Im)
     I_t = 4 / (rph - rmh) * (rph * (rph - a * λ / 2) * Ip - rmh * (rmh - a * λ / 2) * Im) +
           4 * I0 + 2 * I1 + I2
-    return I_r, I_φ, I_t
+    return I0, I_φ, I_t
 end
 
 """
@@ -390,7 +403,7 @@ mirror. ForwardDiff-generic.
     # sn/cn are periodic: a Gθ beyond the Mino budget aliases to a ghost radius.
     valid = isfinite(rs) && rs > prep.rph && Gθ <= prep.τtot
     I_r, I_φ, I_t = _radial_from_parts(rs, prep.roots, prep.a, prep.λ, prep.η,
-                                       prep.is_case2, νr, (prep.po, prep.pt))
+                                       prep.is_case2, νr, (prep.po, prep.pt); τ = Gθ)
     φs = -prep.sφ * (I_φ + prep.λ * Gφ) - T(π) / 2     # P3 Eq. 11 (sφ: a < 0 mirror)
     ts = -(I_t + prep.a * prep.a * Gt)                 # P3 Eq. 12
     return _landing(rs, φs, ts, νr, valid, prep.sφ * prep.λ, prep.η, θeq, νθ)

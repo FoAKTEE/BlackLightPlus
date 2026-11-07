@@ -233,6 +233,29 @@ $\Pi(n;\varphi|k)+\Pi(k/n;\varphi|k)=F(\varphi|k)+\sqrt c\,R_C\big((c-1)(c-k),(c
 $c=\csc^2\varphi$, whose $R_C$ term carries the logarithm. The finite-observer
 landings approach it as $1/r_o$ in all three radial cases.
 
+### Photon-ring orders
+
+A ray that lands near the critical curve circles the photon shell before leaving: at screen
+distance $d$ from the critical point of shell radius $\tilde r$, successive images of one
+source radius satisfy $d_{m+1}/d_m\to e^{-\gamma}$, with azimuth lapse $\delta$ and time lapse
+$\tau$ per half orbit ([GrallaLupsasca2020Lensing](@citet) Eqs. 68, 70, 72;
+[Johnson2020](@citet)),
+$$\gamma=\frac{4\tilde r\sqrt{\tilde\chi}}{a\sqrt{-\tilde u_-}}K,\quad
+\delta=\frac{2}{\sqrt{-\tilde u_-}}\left[\frac{\tilde r+1}{\tilde r-1}K+\frac{\tilde\lambda}{a}\Pi\right]+2\pi H(\tilde r-\tilde r_0),\quad
+\tau=\frac{2}{a\sqrt{-\tilde u_-}}\left[\tilde r^2\frac{\tilde r+3}{\tilde r-1}K-2a^2\tilde u_+\frac{E-K}{2k}\right],$$
+$\tilde\chi=1-\Delta(\tilde r)/(\tilde r(\tilde r-1)^2)$, complete integrals of parameter
+$k=\tilde u_+/\tilde u_-$ (`photon_shell_exponents`; `critical_point` gives the screen point of
+$\tilde r$). The landings of orders 0–7 reproduce them: along the screen ray through a critical
+point, $\ln(d_{n-1}/d_n)-\gamma$, the azimuth step minus $2\pi-\delta$ and the time step minus
+$\tau$ fall as $e^{-\gamma n}$ to $10^{-6}$ at $n=7$. Two choices keep the high orders accurate:
+the radial Mino time $I_0$ in $I_\phi$ and $I_t$ is the angular one $G_\theta$ (equal by the
+geodesic equation, without the conditioning of the sn inversion near the critical curve), and
+$\sqrt{R}/(r-r_3)$ is evaluated from the factored potential, exactly zero at the turning point.
+What remains is the conditioning of the near-double roots $r_3\approx r_4$; the landing
+radius agrees with Krang's to within $\varepsilon\,|\partial\ln r_s/\partial\ln s|$ along the
+screen ray at every order. `lensing_band` finds the band edges of any order by a logarithmic
+search toward the critical curve.
+
 ### Polarization by the Walker–Penrose constant
 
 At a landing the photon momentum is $p_\mu=(-1,\nu_r\sqrt R/\Delta,\nu_\theta\sqrt{\Theta},\lambda)$.

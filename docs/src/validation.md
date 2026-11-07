@@ -92,6 +92,8 @@ package's own numerical march. NMSE is the normalized mean squared error of
 | polarized g-disk, Walker–Penrose constant in AART's gauge ($f_t=1$), $400^2$, two scenes | NMSE($\kappa$) $7\times10^{-25}$, $3\times10^{-24}$; EVPA median $9\times10^{-16}$ rad, maximum $10^{-9}$ rad (on AART's Cardano curve) |
 | power-law synchrotron surfaces, $400^2$, four scenes (dual cone, equator at $80^\circ$, jet cones in both hemispheres, polar cones with vortical rays), orders 0–2 | NMSE of $I$, $Q$, $U$ between $7\times10^{-29}$ and $2\times10^{-24}$ against Krang; EVPA median $10^{-15}$ rad |
 | cone landings against the traced crossings of the same rays (ordinary and vortical, cases II–IV) | radius within $10^{-4}$, the polar sign of every crossing equal |
+| landing radius at orders 0–6 along screen rays through 9 critical points, two scenes | within $\varepsilon\,|\partial\ln r_s/\partial\ln s|$ of Krang ($3\times10^{-10}$ at $n=0$, $10^{-6}$ at $n=6$, where $d_6\sim10^{-7}\,M$) |
+| photon-ring exponents against the landings of orders 6 and 7 | $\gamma$, $\delta$, $\tau$ to $10^{-6}$–$10^{-5}$, the differences falling as $e^{-\gamma n}$ |
 | EVPA against the package's polarized march (transported camera frame) | falls as $C^{-4}$ to the camera floor: $2\times10^{-5}$ rad at $d=10^5\,M$, median $10^{-8}$ rad at $d=10^9\,M$ |
 
 Three reference-code findings shape these comparisons. Krang's polarized synchrotron

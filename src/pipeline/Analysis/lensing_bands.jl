@@ -219,12 +219,43 @@ function _nlayers_residual(s, a, θo, α0, β0, mbar, outer::Bool)
     end
 end
 
+# Root of `f` at s = 1 + side·d near s = 1: the first sign change of f along d = 10^(-1),
+# …, 10^(-15) on 281 logarithmic steps, refined by bisection to the resolution of s. The
+# band edges of order n lie at |s − 1| ∝ e^{−γn} (γ the Lyapunov exponent), below the
+# reach of the linear scan from n ≈ 4 on. NaN when no step brackets.
+function _bisect_near_one(f, side)
+    dprev = 0.1
+    fprev = f(1 + side * dprev)
+    for k in 1:280
+        d = 10.0^(-1 - 14 * k / 280)
+        fd = f(1 + side * d)
+        if isfinite(fd) && isfinite(fprev) && fd * fprev <= 0
+            a = 1 + side * dprev; b = 1 + side * d; fa = fprev
+            for _ in 1:200
+                m = (a + b) / 2
+                (m == a || m == b) && break
+                fm = f(m)
+                isfinite(fm) || (b = m; continue)
+                (fa * fm <= 0) ? (b = m) : (a = m; fa = fm)
+            end
+            return (a + b) / 2
+        end
+        dprev, fprev = d, fd
+    end
+    return NaN
+end
+
 # Inner (s < 1) and outer (s > 1) edge scales of band n ≥ 1 along the critical-curve
-# point (α0, β0). The outer bracket [1.00001, 4] doubles up to [128, 256] when it holds
-# no root; unbracketed edges fall back to 0.999 and 1.001, with a warning.
+# point (α0, β0). Unbracketed on [0.2, 0.99999] and [1.00001, 4], the edges are searched
+# logarithmically toward s = 1 (high orders), and the outer bracket then doubles up to
+# [128, 256]; unbracketed edges fall back to 0.999 and 1.001, with a warning.
 function _band_edge_scales(a, θo, α0, β0, n)
-    s_in = _bisect(s -> _nlayers_residual(s, a, θo, α0, β0, n, false), 0.2, 0.99999)
-    s_out = _bisect(s -> _nlayers_residual(s, a, θo, α0, β0, n, true), 1.00001, 4.0)
+    fin = s -> _nlayers_residual(s, a, θo, α0, β0, n, false)
+    fout = s -> _nlayers_residual(s, a, θo, α0, β0, n, true)
+    s_in = _bisect(fin, 0.2, 0.99999)
+    isnan(s_in) && (s_in = _bisect_near_one(fin, -1))
+    s_out = _bisect(fout, 1.00001, 4.0)
+    isnan(s_out) && (s_out = _bisect_near_one(fout, 1))
     lo = 4.0
     while isnan(s_out) && lo < 256.0
         s_out = _bisect(s -> _nlayers_residual(s, a, θo, α0, β0, n, true), lo, 2 * lo)
@@ -248,8 +279,9 @@ and observer inclination `θo` (rad), each an `N × 2` matrix of vertices `(α, 
 npts)` and outside by the square of half-width `box`. A band `n ≥ 1` is a thin annulus
 about the critical curve: each point of [`critical_curve`](@ref)`(a, θo; n = npts)` is
 scaled inward to the case-III root and outward to the case-II root of the AART
-`nlayers` condition (P2 Eqs. A10, A11; P3), found by bisection; an unbracketed root
-falls back to `s = 0.999` (inner) or `1.001` (outer) with a warning. For `θo > π/2` the
+`nlayers` condition (P2 Eqs. A10, A11; P3), found by bisection, logarithmically close to
+`s = 1` for the high orders whose bands are `e^{−γn}` thin; an unbracketed root falls back
+to `s = 0.999` (inner) or `1.001` (outer) with a warning. For `θo > π/2` the
 edges are those of `π − θo` with `β → −β`, so `(α, β)` lies in band `n` at `θo` exactly
 when `(α, −β)` does at `π − θo`.
 

@@ -7,6 +7,15 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- Photon rings of high order: the landing time and azimuth of the closed-form tracer use
+  the angular Mino time G_θ for the radial I_0 (equal by the geodesic equation) and the
+  factored radial potential in √R/(r − r3), exactly zero at the turning point, so successive
+  orders up to 7 step by the photon-shell time lapse τ to 1e-6 where the turning-point term
+  had left errors up to 5e-4 at n = 7 (radii and intensities are unchanged; times and
+  azimuths change at the rounding level elsewhere). `Spacetime.photon_shell_exponents(a, r̃)`
+  (γ, δ, τ of P2 Eqs. 68–72) and `Spacetime.critical_point(a, θo, r̃)`; `lensing_band` finds
+  the edges of bands of any order (logarithmic search toward the critical curve, where it
+  fell back to fixed scales from n = 5 on).
 - The closed-form Kerr tracer images thin surfaces at any polar angle, polarized:
   `Spacetime.surface_prep`, `surface_landing` and `image_crossings` invert ordinary and
   vortical rays (radial cases II, III and IV) to the crossings of the cone θ = θs, ordered

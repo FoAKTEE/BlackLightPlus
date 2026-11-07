@@ -46,6 +46,22 @@ the same order; `image_crossings(prep, θs, n)` lists the crossings of order `n`
 `surface_landing(prep, θs, m)` the landing after `m` polar turning points, with its
 radius, azimuth, emission time and the signs of $p^r$ and $p^\theta$ at emission.
 
+## Photon rings of high order
+
+Every order `n` is a band of `bands`; orders above 2 are rings narrower than
+$e^{-\gamma n}$ of the screen and are resolved on cuts rather than on a pixel grid:
+
+```julia
+using BlackLightPlus.Spacetime: critical_point, photon_shell_exponents, pixel_prep, band_landing
+
+a, θo = 0.94, deg2rad(17.0)
+α0, β0 = critical_point(a, θo, 2.5)            # the critical point of shell radius 2.5
+γ, δ, τ = photon_shell_exponents(a, 2.5)       # demagnification, rotation, delay per order
+l = band_landing(pixel_prep(1.00001α0, 1.00001β0, θo, a; ro = Inf), 4)   # order 4 just outside
+```
+
+`lensing_band(a, θo, n)` returns the inner and outer edges of band `n` for any order.
+
 ## The observer at infinity
 
 `ro = Inf` places the observer at infinity: radii and azimuths are the limits of a far

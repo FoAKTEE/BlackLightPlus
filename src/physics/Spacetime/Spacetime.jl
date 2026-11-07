@@ -55,6 +55,6 @@ export kerr_horizon, kerr_delta, kerr_radial_potential, isco_radius, isco_progra
        pixel_prep, Landing, band_landing, critical_curve,
        surface_prep, surface_landing, image_crossings,
        kerr_bl_metric, photon_momentum, zamo_components, zamo_vector, rest_components,
-       penrose_walker, screen_polarization, photon_shell_exponents
+       penrose_walker, screen_polarization, photon_shell_exponents, critical_point
 
 end # module

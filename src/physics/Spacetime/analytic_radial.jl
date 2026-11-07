@@ -180,19 +180,42 @@ end
 end
 
 # The source-side antiderivatives at rs combined with the observer parts into the definite
-# integrals (I0, I1, I2, Ip, Im), then (I_r, I_φ, I_t) (P1 Eqs. B1–B3).
-@inline function _radial_from_parts(rs::T, roots, a, λ, η, rcase::Int, νr, obs) where {T}
-    rcase == 4 || return _radial_from_parts(rs, roots, a, λ, η, rcase == 2, νr, obs)
+# integrals, then (I_r, I_φ, I_t) (P1 Eqs. B1–B3); `τ` as in the case II/III method.
+@inline function _radial_from_parts(rs::T, roots, a, λ, η, rcase::Int, νr, obs;
+                                    τ = nothing) where {T}
+    rcase == 4 || return _radial_from_parts(rs, roots, a, λ, η, rcase == 2, νr, obs; τ = τ)
     po, _ = obs
     I0s, I1s, I2s, Ips, Ims = _radial_case4_antideriv(rs, roots, a)
     I0o, I1o, I2o, Ipo, Imo = po
-    I0 = I0o - I0s; I1 = I1o - I1s; I2 = I2o - I2s
-    Ip = Ipo - Ips; Im = Imo - Ims
+    I = (I0o - I0s, I1o - I1s, I2o - I2s, Ipo - Ips, Imo - Ims)
+    τ === nothing || (I = _radial_tau(I, 4, roots, a, τ))
+    return _radial_combine(I..., a, λ)
+end
+
+# The definite integrals with the radial Mino time I0 replaced by τ: each antiderivative is
+# c_k F(r) + (terms free of F), F the first-kind antiderivative whose difference is I0, so
+# I_k gains c_k (τ − I0). Near the critical curve the inverted radius, hence I0(rs), carries
+# the conditioning of the sn inversion; τ = G_θ does not.
+@inline function _radial_tau(I, rcase, roots, a, τ)
+    I0, I1, I2, Ip, Im = I
+    r1, r2, r3, r4 = roots
     rph = kerr_horizon(a); rmh = 2 - rph
-    I_φ = 2 * a / (rph - rmh) * ((rph - a * λ / 2) * Ip - (rmh - a * λ / 2) * Im)
-    I_t = 4 / (rph - rmh) * (rph * (rph - a * λ / 2) * Ip - rmh * (rmh - a * λ / 2) * Im) +
-          4 * I0 + 2 * I1 + I2
-    return I0, I_φ, I_t
+    δ = τ - I0
+    if rcase == 2
+        c1 = real(r3); c2 = -real(r1 * r4 + r2 * r3) / 2
+        cp = -1 / real(rph - r3); cm = -1 / real(rmh - r3)
+    elseif rcase == 3
+        A = real(sqrt((r3 - r2) * (r4 - r2))); B = real(sqrt((r3 - r1) * (r4 - r1)))
+        c1 = (B * real(r2) + A * real(r1)) / (B + A); c2 = c1 * c1
+        cp = -(B + A) / (B * real(rph - r2) + A * real(rph - r1))
+        cm = -(B + A) / (B * real(rmh - r2) + A * real(rmh - r1))
+    else
+        d = _case4_data(roots)
+        c1 = d.a2 / d.g0 - d.b1; c2 = c1 * c1
+        xp = (rph + d.b1) / d.a2; xm = (rmh + d.b1) / d.a2
+        cp = d.g0 / (d.a2 * (1 - d.g0 * xp)); cm = d.g0 / (d.a2 * (1 - d.g0 * xm))
+    end
+    return τ, I1 + c1 * δ, I2 + c2 * δ, Ip + cp * δ, Im + cm * δ
 end
 
 # The radial state of one ray: case, modulus `kr`, observer amplitude `Fr`, the Mino time

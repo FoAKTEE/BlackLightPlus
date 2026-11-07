@@ -139,7 +139,7 @@ frame. ForwardDiff-generic.
     rs, νr = _radius_at(prep, Gθ)
     valid = isfinite(rs) && rs > prep.rph
     I_r, I_φ, I_t = _radial_from_parts(rs, prep.roots, prep.a, prep.λ, prep.η, prep.rcase, νr,
-                                       (prep.po, prep.pt))
+                                       (prep.po, prep.pt); τ = Gθ)
     φs = -prep.sφ * (I_φ + prep.λ * Gφ) - T(π) / 2     # P3 Eq. 11 (sφ: a < 0 mirror)
     ts = -(I_t + prep.a * prep.a * Gt)                 # P3 Eq. 12
     return _landing(rs, φs, ts, νr, valid, λo, prep.η, θs, νθ)
