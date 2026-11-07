@@ -1,12 +1,14 @@
 # The Monte Carlo emission zones: the `EmissionZone` constructors (keyword widening, a
 # plasma state, the number type), and the uniform sphere as a provider (the closed
 # ball, the static fluid and the unit field along x¹ in flat spacetime, its volume
-# and domain radius) and as the zone a superphoton is drawn from.
+# and domain radius) and as the zone a superphoton is drawn from; the variable sphere (its
+# piecewise-linear density, its node spheres) and the smooth scattering shell.
 using Test, BlackLightPlus, StaticArrays, ForwardDiff
 using LinearAlgebra: dot
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, metric_and_inverse
 using BlackLightPlus.Matter: EmissionZone, UniformSphere, PlasmaState, AnalyticProvider, emission_zone,
-                  plasma_state, sample, domain_radius, vacuum
+                  plasma_state, sample, domain_radius, vacuum, VariableSphere, density_factor,
+                  node_sphere, SphericalShell
 
 const G_MINK = @SMatrix [-1.0 0.0 0.0 0.0; 0.0 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 1.0]
 
@@ -74,5 +76,49 @@ const G_MINK = @SMatrix [-1.0 0.0 0.0 0.0; 0.0 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0
         @test typeof(plasma_state(sph, st, xo, gd, nothing)) == typeof(plasma_state(sph, st, xd, gd, nothing))
         V(R) = UniformSphere(; R = R).dV
         @test ForwardDiff.derivative(V, 2.0) ≈ 4π * 4
+    end
+
+    @testset "variable sphere and scattering shell" begin
+        st = Minkowski()
+        sph = UniformSphere(n_e = 2.0e13, theta_e = 30.0, B = 5.0, R = 2.0)
+        vs = VariableSphere(sph, [0.0, 1.0, 3.0], [1.0, 3.0, 0.5])
+        @test vs isa AnalyticProvider && domain_radius(vs) == 2.0
+        @test density_factor(vs, -5.0) === 1.0 && density_factor(vs, 10.0) === 0.5
+        @test density_factor(vs, 0.25) ≈ 1.5 && density_factor(vs, 2.0) ≈ 1.75
+        @test density_factor(vs, 1.0) === 3.0
+        for t in (-1.0, 0.5, 2.2, 7.0)
+            x = SVector(t, 0.3, -0.4, 1.0)
+            s = plasma_state(vs, st, x, metric_and_inverse(st, x), nothing)
+            ref = plasma_state(sph, st, x, metric_and_inverse(st, x), nothing)
+            @test s.valid && s.n_e == sph.n_e * density_factor(vs, t)
+            @test (s.theta_e, s.B, s.ucon, s.bcon) == (ref.theta_e, ref.B, ref.ucon, ref.bcon)
+        end
+        @test plasma_state(vs, st, SVector(0.5, 2.1, 0.0, 0.0), metric_and_inverse(st, SVector(0.5, 2.1, 0.0, 0.0)),
+                           nothing) === vacuum(Float64)
+        n2 = node_sphere(vs, 2)
+        @test n2 isa UniformSphere && n2.n_e == 6.0e13 && (n2.theta_e, n2.B, n2.R) == (30.0, 5.0, 2.0)
+        @test_throws ArgumentError VariableSphere(sph, [0.0, 0.0], [1.0, 1.0])
+        @test_throws ArgumentError VariableSphere(sph, [0.0, 1.0], [1.0, -1.0])
+        @test_throws ArgumentError VariableSphere(sph, Float64[], Float64[])
+
+        sh = SphericalShell(n_e = 1.0e10, theta_e = 1.0e-3, r_in = 1.0, r_out = 1.5)
+        @test sh isa AnalyticProvider && domain_radius(sh) == 1.5
+        for r in (1.0, 1.1, 1.25, 1.4, 1.5)
+            x = SVector(0.0, r * 0.6, r * 0.8, 0.0)
+            s = plasma_state(sh, st, x, metric_and_inverse(st, x), nothing)
+            if 1.0 < r < 1.5
+                @test s.valid
+                @test s.n_e ≈ 1.0e10 * sin(π * (r - 1.0) / 0.5)^2 rtol = 1e-14
+                @test s.ucon == SVector(1.0, 0.0, 0.0, 0.0) && s.theta_e == 1.0e-3
+            else
+                @test !s.valid
+            end
+        end
+        # the depth profile (2/Δ) sin² integrates to one: radial depth n_e σ_T Δ/2
+        h = 0.5 / 4000
+        @test sum(plasma_state(sh, st, SVector(0.0, 1.0 + (k - 0.5) * h, 0.0, 0.0),
+                               metric_and_inverse(st, SVector(0.0, 1.0, 0.0, 0.0)), nothing).n_e
+                  for k in 1:4000) * h ≈ 1.0e10 * 0.25 rtol = 1e-9
+        @test_throws ArgumentError SphericalShell(n_e = 1.0, theta_e = 1.0, r_in = 2.0, r_out = 1.0)
     end
 end

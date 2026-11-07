@@ -13,7 +13,8 @@ using ..Numerics: CL, EE, ME, MP, HPL, SQRT2, SIGMA_THOMSON, MCRng, MCStreamLayo
                   position, momentum, raystate, tang_exp, tang_log
 using ..Spacetime: Minkowski, MarchStep, HORIZON_EPS_SAMPLED, metric_and_inverse,
                    inverse_metric, proxy_distance, horizon_floor, plunge_radius, rk4_step
-using ..Matter: PlasmaState, PlasmaProvider, EmissionZone, UniformSphere, sample, emission_zone
+using ..Matter: PlasmaState, PlasmaProvider, EmissionZone, UniformSphere, VariableSphere, sample,
+                emission_zone
 using ..Transfer: thermal_synchrotron, TransferParams
 import ..Transfer: march_control, max_steps, geodesic_step
 

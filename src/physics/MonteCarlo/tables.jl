@@ -90,7 +90,7 @@ ZoneNodes(wgt::WeightTable) =
     zone_count(n_e, theta_e, B, dV, wgt::WeightTable, emis::EmissivityTable) -> (N_s, dnmax)
 
 Expected superphoton count and frequency-rejection envelope of a zone of plasma
-`(n_e, Θₑ, B)` and proper volume `dV` (cm³) on the nodes `ν_m` of a weight table:
+`(n_e, Θₑ, B)` and measure `dV = √−g d³x L³` (cm³) on the nodes `ν_m` of a weight table:
 `N_s = (dV/h) dlnu Σ_m c_m ∫j_ν dΩ(ν_m)/(w_m + WEIGHT_FLOOR)` with the trapezoid
 weights `c_m` and `dnmax = max_m ∫j_ν dΩ(ν_m)/(w_m + WEIGHT_FLOOR)`, `∫j_ν dΩ` from
 [`int_jnu`](@ref) with `emis`. The `WeightTable` form evaluates the nodes first

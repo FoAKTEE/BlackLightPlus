@@ -25,11 +25,12 @@ struct StaticFrame end
 """
     rate_frame(provider) -> FluidFrame() | StaticFrame()
 
-The frame of the absorption rate of `provider`: `StaticFrame()` for a `UniformSphere`,
+The frame of the absorption rate of `provider`: `StaticFrame()` for a `UniformSphere` and a `VariableSphere`,
 `FluidFrame()` for every other provider.
 """
 @inline rate_frame(::PlasmaProvider) = FluidFrame()
 @inline rate_frame(::UniformSphere) = StaticFrame()
+@inline rate_frame(::VariableSphere) = StaticFrame()
 
 """
     absorption_rate(state::PlasmaState, p::SVector{4}) -> Float64
