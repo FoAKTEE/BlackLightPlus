@@ -36,7 +36,8 @@
 #   julia -t 24 --project=. figures/paper/fig_dynrays_slowlight.jl
 # Env: BLP_SL_SNAP (the 00455 dump), BLP_SL_RES (960), BLP_SL_FOV (56), BLP_SL_INC (90),
 #      BLP_SL_MS (mass scale, g; default the 17° calibration of fig_eht_bbh.jl for 00455),
-#      BLP_SL_STRIDE (4), BLP_SL_RES_SCAN (240), BLP_SL_SCANSPAN (30), BLP_SL_SCANSTEP (2),
+#      BLP_SL_C (step divisor, 320; at most 4000 C/80 steps), BLP_SL_STRIDE (4),
+#      BLP_SL_RES_SCAN (240), BLP_SL_SCANSPAN (30), BLP_SL_SCANSTEP (2),
 #      BLP_SL_SHIFTMAX (12), BLP_SL_PARTS (images,scan,delay,shift; the last three read
 #      records.json and I_fast.npy), BLP_SL_OUT.
 using Dates, LinearAlgebra, Printf, Statistics, StaticArrays
@@ -55,7 +56,7 @@ const SNAP = get(ENV, "BLP_SL_SNAP",
 const RES = parse(Int, get(ENV, "BLP_SL_RES", "960"))
 const FOV = parse(Float64, get(ENV, "BLP_SL_FOV", "56"))
 const INC = parse(Float64, get(ENV, "BLP_SL_INC", "90"))
-const MS = parse(Float64, get(ENV, "BLP_SL_MS", "2.272378166e28"))   # eht_bbh/s455_i90_Rh40/records.json
+const MS = parse(Float64, get(ENV, "BLP_SL_MS", "2.272822681e28"))   # eht_bbh/s455_i90_Rh40/records.json
 const STRIDE = parse(Int, get(ENV, "BLP_SL_STRIDE", "4"))
 const RES_SCAN = parse(Int, get(ENV, "BLP_SL_RES_SCAN", "240"))
 const SCANSPAN = parse(Float64, get(ENV, "BLP_SL_SCANSPAN", "30"))
@@ -76,8 +77,8 @@ const M_BH = 2 * 6.5e9 * MSUN
 const D_CM = 16.8e6 * 3.0856775814913673e18
 const NU = 230.0e9
 const DIST = 1000.0
-const CVAL = 80.0
-const MAXSTEPS = 4000
+const CVAL = parse(Float64, get(ENV, "BLP_SL_C", "320"))
+const MAXSTEPS = round(Int, 4000 * CVAL / 80)
 const R_LOW = 1.0
 const R_HIGH = 40.0
 const MU = 0.5

@@ -22,8 +22,8 @@
 # T_i/T_e = (R_high b^2 + R_low)/(1 + b^2), b = beta, total-pressure split (use_p), mu =
 # 0.5, n_e = n_i; sigma_cut = 1 (emission omitted where b^2/rho > 1); gamma from the dump.
 #
-# March: the fused fixed-control march of `render` (step min_A(r_A - r_h,A)/C, C = 80,
-# at most 4000 steps, capture at r_A - r_h,A < 1e-3 or normal-frame energy > 100, escape
+# March: the fused fixed-control march of `render` (step min_A(r_A - r_h,A)/C, C from BLP_C,
+# at most 4000 C/80 steps, capture at r_A - r_h,A < 1e-3 or normal-frame energy > 100, escape
 # beyond 1100 M), polarized for the images, Stokes I for the flux ladders.
 #
 # Flux calibration: mass_scale (density unit mass) is root-found per snapshot at the
@@ -50,7 +50,8 @@
 #
 # Env: BLP_SNAPS (s455,s093,s122), BLP_INCS (17,60,90), BLP_FID (s455), BLP_FID_INC (17),
 # BLP_RHIGH (40), BLP_RH_SURVEY (1,10,160; empty for none), BLP_RES (480), BLP_FOV (56),
-# BLP_FTOL (0.02), BLP_WIDE (1: wide-FOV flux check), BLP_OUT (figures/paper/out/eht_bbh).
+# BLP_C (320), BLP_FTOL (0.02), BLP_WIDE (1: wide-FOV flux check),
+# BLP_OUT (figures/paper/out/eht_bbh).
 # Every product runs with backend = :cpu; threads come from `julia -t N`.
 # Run, from the repository root:
 #   julia -t 48 --project=. figures/paper/fig_eht_bbh.jl
@@ -97,8 +98,8 @@ const NU = 230.0e9
 const F_TARGET = 1.0                     # Jy (total, ~0.5 Jy per hole)
 const DIST = 1000.0
 const ESCAPE = 1.1 * DIST
-const CVAL = 80.0
-const MAXSTEPS = 4000
+const CVAL = parse(Float64, get(ENV, "BLP_C", "320"))
+const MAXSTEPS = round(Int, 4000 * CVAL / 80)
 const R_LOW = 1.0
 const MU = 0.5
 const SIGMA_CUT = 1.0
