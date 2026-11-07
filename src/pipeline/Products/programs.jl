@@ -433,6 +433,12 @@ function (p::MCPrimary)(item, i)
     return nothing
 end
 
+# Blocks of one warp for the Monte Carlo marches: they run at the register cap and their
+# photons take very different step counts, so a block holds its registers until its
+# slowest photon ends; on the A100 the torus photon phase is 1.17 (thin) and 1.09
+# (Compton) times faster than in the backend's blocks of 256.
+workgroupsize(::MCPrimary) = 32
+
 """
     MCLayer(photons, rngs, transport, sink)
     MCLayer(generation::Generation, transport, sink)
@@ -457,6 +463,8 @@ function (p::MCLayer)(item, i)
     @inbounds transport!(p.transport, g.photons[item], g.rngs[item], at_stripe(p.sink, item))
     return nothing
 end
+
+workgroupsize(::MCLayer) = 32
 
 # ---------------------------------------------------------------- host-only programs
 
