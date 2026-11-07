@@ -805,15 +805,20 @@ Conditioned on that state, the expected child density is $p(f)$ whatever $b$, an
 parent's weight does not depend on $b$ at all; by the tower property every expectation
 linear in the escaping photons, each bin of $\nu L_\nu$ included, is independent of the
 rule. The default `StateBias` is
-$b=\mathrm{clamp}(b_0A(\Theta_e)\,w/w_\mathrm{ref},1,b_\mathrm{max})$, with
+$b=\mathrm{clamp}(b_0A(\Theta_e)\,(w/w_\mathrm{ref})\,f^{\,n},1,b_\mathrm{max})$ for a
+photon scattered $n$ times, with
 $A(\Theta_e)=1+4\Theta_e+16\Theta_e^2$ (the cold and hot limits of the mean energy gain
 $1+4\Theta_eK_3/K_2$ of one Thomson scattering, at most 15 % above it), $\Theta_e$ the
-larger end temperature of the step and $w_\mathrm{ref}$ the mean primary weight. A child
+larger end temperature of the step, $w_\mathrm{ref}$ the mean primary weight and $f\ge1$
+the factor per scattering order (`bias_order`, 1 by default). A primary's child
 then carries about $w_\mathrm{ref}/(b_0A)$ photons and the energy weight
 $w_\mathrm{ref}E/b_0$ whatever the gas that scattered it, so the rare scatterings of
 heavy seed photons off hot electrons, which feed the highest frequencies, are split into
 many light children rather than a few heavy ones; $b_\mathrm{max}$ bounds the events per
-step. With `split` $>1$, an event whose uncapped bias exceeds $b_\mathrm{max}$ spawns
+step. That child's own bias is about $fA'/A$, near 1 for $f=1$, so with $f=1$ the light
+scattered two and three times, which makes the highest frequencies of an optically thick
+corona, is sampled little; $f>1$ raises the bias of every later generation by $f$ per
+scattering. With `split` $>1$, an event whose uncapped bias exceeds $b_\mathrm{max}$ spawns
 $m$ children of weight $W/m$ with independent kicks, which keeps the expected child
 density by linearity.
 

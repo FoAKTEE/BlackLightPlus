@@ -230,7 +230,7 @@ rate_frame(provider) -> FluidFrame() | StaticFrame()         # StaticFrame for U
 absorption_rate(state, p); absorption_rate(::StaticFrame, state, kcon)   # ν α_ν
 scattering_rate(table::HotcrossTable, state, p)              # ν n_e σ_h
 struct Bias{T}; b0::T; end; bias(b, nscatt)                  # max(1, b0 (n + 1)²)
-StateBias(b0, w_ref, b_max, split)                           # clamp(b0 A(Θₑ) w/w_ref, 1, b_max)
+StateBias(b0, w_ref, b_max, split = 1, order = 1)            # clamp(b0 A(Θₑ) (w/w_ref) orderⁿ, 1, b_max)
 event_bias(bias, nscatt, theta_e, w) -> (b, copies)
 Opacities(; params, table, bias = Bias(1.0), L_unit = 1.0, weight_min = MC_WEIGHT_MIN, max_scatt = 0)
 
@@ -260,7 +260,8 @@ track!(ctl, st, provider, opac, sph, rng, sink; absorb = Val(true), scatter = Va
   event)`, `child_rng(rng, event, layout)` of the ordinal `event` of its event along the
   parent's march.
 - `bias` returns 1 unless `b0 (n + 1)²` exceeds 1, a NaN product included; `event_bias`
-  of a `StateBias` clamps `b0 A(Θₑ) w/w_ref` to `[1, b_max]`. A photon that may spawn no
+  of a `StateBias` clamps `b0 A(Θₑ) (w/w_ref) orderⁿ` to `[1, b_max]` for a photon
+  scattered `n` times. A photon that may spawn no
   more stops captured when a step moves it inward below `plunge_radius(st)` (the
   innermost spherical photon orbit on Kerr, less `PLUNGE_MARGIN`). Constants carry no
   leading underscore. `fluid_tetrad` (imaging, e₍₃₎ along k) and
@@ -573,7 +574,7 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   parameter set or a mass-scale tuple.
 
 `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max,
-spec_nu_min, spec_nu_max, n_esamp, n_ebins, table, max_scatt, bias, bias_max, split,
+spec_nu_min, spec_nu_max, n_esamp, n_ebins, table, max_scatt, bias, bias_max, bias_order, split,
 absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` is the Monte
 Carlo product. The plan's matter selects the run. The sphere of `prepare(sphere)`
 marches straight lines (`FlatMarch`) and returns a `Spectrum`, or with `scattering =
@@ -589,7 +590,8 @@ sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
 children of the one before, up to `max_scatt` generations, and a generation whose buffer
 overflows is rerun at the counted capacity into scratch sums. The hot-cross table is the
 `table` given or `hotcross_table(plan)`; the importance bias is a `StateBias` of `b0 =
-bias` (1 by default), or the `Bias` or `StateBias` given. `gather!` follows the cascade and
+bias` (1 by default) and the order factor `bias_order` (1 by default), or the `Bias` or
+`StateBias` given. `gather!` follows the cascade and
 `Spectrum(bins)` rounds once per cell, so on one hardware the bins, the ledger and the
 children depend only on the plan,
 `Ns` and the keywords, whatever the executor, thread count, device count or chunking.
@@ -748,7 +750,7 @@ Every name of `names(BlackLightPlus)`. The keyword `backend` of a product defaul
 | `shadow` | `shadow(plan; backend)` | `NamedTuple` |
 | `sensitivity` | `sensitivity(plan, param::Symbol; backend)` | `NamedTuple` |
 | `variants` | `variants(plan, mass_scales; backend)` | `NamedTuple` |
-| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max, n_esamp, n_ebins, table, max_scatt, bias, bias_max, split, absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` | `Spectrum` (thin sphere), `ScatterResult` (scattering sphere), `GRMHDSpectrumResult` (grid) |
+| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max, n_esamp, n_ebins, table, max_scatt, bias, bias_max, bias_order, split, absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` | `Spectrum` (thin sphere), `ScatterResult` (scattering sphere), `GRMHDSpectrumResult` (grid) |
 | `Image` | fields `I`, `Q`, `U`, `V` (`Matrix{Float64}`, `[iβ, iα]`), `plan`, `run` | result type |
 | `Trajectories` | fields `states`, `dls` (source → camera, `Float64`), `plan`, `run` | result type |
 | `Spectrum` | `Spectrum(bins::ExactBins; plan, run)`; fields `nu_min`, `nu_max`, `lnu_min`, `dlnu`, `n_ebins`, `n_bands`, `count`, `sumw`, `sumwE`, `sumwE2`, `dOmega`, `total_row`, `plan`, `run` | rounded spectrum (§4.2) |

@@ -132,6 +132,35 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         end
     end
 
+    @testset "order factor of the state bias: every order unchanged, with and without absorption" begin
+        # τ_T = 0.2, three orders: the state bias with the order factor 30 (each later
+        # generation biased 30 times more) against the plain state bias. Without absorption
+        # (B = 30 G, absorption off) the escaped power of every order agrees and the factor
+        # samples orders 2 and 3 several times better; with absorption (B = 100 G, self-
+        # absorbed seeds) every order agrees within its error as well.
+        for (B, absorb, b0, N) in ((30.0, false, 1.0, 20_000), (100.0, true, 10.0, 200_000))
+            ps = prepare(UniformSphere(n_e = 1.0e18, theta_e = 3.0, B = B, R = 3.0e5))
+            kw = (scattering = true, table = THOMSON, nu_max = 1.0e13, spec_nu_max = 1.0e18,
+                  n_ebins = 50, absorption = absorb, max_scatt = 3, backend = :cpu, bias = b0)
+            ra = mc_spectrum(ps, N; kw..., seed = 0xAC01)
+            rb = mc_spectrum(ps, N; kw..., seed = 0xAC02, bias_order = 30.0)
+            absorb || @test rb.n_children > 5 * ra.n_children
+            @test abs((rb.w_children + rb.w_unspawned) / rb.scatter_loss - 1.0) < (absorb ? 0.1 : 0.01)
+            rel = zeros(2, 4)
+            for n in 1:4
+                Pa = total_power(ra.orders[n]); Pb = total_power(rb.orders[n])
+                sa = ME_C2 * sqrt(sum(ra.orders[n].sumwE2)); sb = ME_C2 * sqrt(sum(rb.orders[n].sumwE2))
+                @test Pa > 0.0 && Pb > 0.0
+                @test abs(Pa - Pb) < 5.0 * sqrt(sa^2 + sb^2)
+                rel[1, n] = sa / Pa; rel[2, n] = sb / Pb
+            end
+            @test rel[2, 4] < rel[1, 4]
+            absorb || @test rel[2, 3] < 0.5 * rel[1, 3] && rel[2, 4] < 0.2 * rel[1, 4]
+        end
+        @test_throws ArgumentError mc_spectrum(prepare(UniformSphere()), 100; scattering = true,
+                                               bias_order = 0.5)
+    end
+
     snap = DK.amr_deck()
     pt = torus_plan(snap)
     zones = emission_zones(pt)

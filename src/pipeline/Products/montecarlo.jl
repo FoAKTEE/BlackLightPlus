@@ -191,7 +191,8 @@ const MC_BIAS_MAX = 1.0e6
                 seed = 0x5eed5eed, nu_min = 1e8, nu_max = 1e16, spec_nu_min = nu_min,
                 spec_nu_max = scattering ? 1e24 : nu_max, n_esamp = 400, n_ebins = 200,
                 table = nothing, max_scatt = 3, bias = nothing, bias_max = MC_BIAS_MAX,
-                split = 1, absorption, capacity = nothing, C = plan.budget.C, escape = 1e3,
+                bias_order = 1, split = 1, absorption, capacity = nothing, C = plan.budget.C,
+                escape = 1e3,
                 R_em = 100.0, stride = 1, r_emit_max = Inf, max_zones = typemax(Int))
         -> Spectrum | ScatterResult | GRMHDSpectrumResult
 
@@ -220,9 +221,11 @@ against `∫ j_ν dΩ` from the process's `EmissivityTable`. Primary `g` draws t
 (`scattering`) with the hot-cross `table` (`nothing`: `hotcross_table(plan)`, the
 process's table), at most `max_scatt` scatterings per photon, every step's scattering
 events a Poisson process under the importance `bias`: `nothing` or a number `b0` (1 by
-default) for the `StateBias` `b = clamp(b0 A(Θₑ) w/w_ref, 1, bias_max)` with `w_ref` the
-mean primary weight and `split` the most children per capped event (1: no splitting),
-or a `Bias`/`StateBias` used as given. Every choice leaves the spectrum unbiased; the
+default) for the `StateBias` `b = clamp(b0 A(Θₑ) (w/w_ref) bias_order^n, 1, bias_max)` of
+a photon scattered `n` times, with `w_ref` the mean primary weight, `bias_order` the factor
+per scattering order (1: none; larger samples the light scattered two and three times and
+the high-frequency tail it makes) and `split` the most children per capped event (1: no
+splitting), or a `Bias`/`StateBias` used as given. Every choice leaves the spectrum unbiased; the
 bias and `split` set its variance and cost. Lengths in `plan.params.units.L_unit` cm (one
 cm for a plan without parameters). Binning: `bands` (`PolarBands(6)` for the sphere,
 `InclinationBands((17, 50, 90), 10)` on a grid, which takes inclination bands only),
@@ -247,7 +250,7 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
                      spec_nu_max::Real = scattering ? 1.0e24 : nu_max,
                      n_esamp::Integer = MC_N_ESAMP, n_ebins::Integer = 200,
                      table = nothing, max_scatt::Integer = 3, bias = nothing,
-                     bias_max::Real = MC_BIAS_MAX, split::Integer = 1,
+                     bias_max::Real = MC_BIAS_MAX, bias_order::Real = 1.0, split::Integer = 1,
                      absorption::Bool = !(scattering && plan.provider isa UniformSphere),
                      capacity = nothing, C::Real = plan.budget.C, escape::Real = 1.0e3,
                      R_em::Real = 100.0, stride::Integer = 1, r_emit_max::Real = Inf,
@@ -261,6 +264,7 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
         throw(ArgumentError("mc_spectrum: capacity must be positive"))
     bias_max >= 1 || throw(ArgumentError("mc_spectrum: bias_max must be at least 1"))
     split >= 1 || throw(ArgumentError("mc_spectrum: split must be positive"))
+    bias_order >= 1 || throw(ArgumentError("mc_spectrum: bias_order must be at least 1"))
     o = (seed = UInt32(seed & 0xffffffff), scattering = scattering, absorption = absorption,
          K = K,
          gen = (nu_min = Float64(nu_min), nu_max = Float64(nu_max), n_esamp = Int(n_esamp),
@@ -268,7 +272,8 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
          grid = (nu_min = Float64(spec_nu_min), nu_max = Float64(spec_nu_max),
                  n_ebins = Int(n_ebins)),
          table = scattering ? hotcross(table, plan) : table,
-         bias = (b = bias, b_max = Float64(bias_max), split = Int(split)), capacity = capacity,
+         bias = (b = bias, b_max = Float64(bias_max), split = Int(split),
+                 order = Float64(bias_order)), capacity = capacity,
          march = (C = Float64(C), escape = Float64(escape), R_em = Float64(R_em)),
          zones = (stride = Int(stride), r_emit_max = Float64(r_emit_max),
                   max_zones = Int(max_zones)))
@@ -280,8 +285,8 @@ hotcross(::Nothing, plan) = hotcross_table(plan)
 hotcross(table, plan) = table
 
 # The importance bias of a run whose mean primary weight is `w_ref`.
-mc_bias(b::Nothing, kw, w_ref) = StateBias(1.0, w_ref, kw.b_max, kw.split)
-mc_bias(b::Real, kw, w_ref) = StateBias(Float64(b), w_ref, kw.b_max, kw.split)
+mc_bias(b::Nothing, kw, w_ref) = StateBias(1.0, w_ref, kw.b_max, kw.split, kw.order)
+mc_bias(b::Real, kw, w_ref) = StateBias(Float64(b), w_ref, kw.b_max, kw.split, kw.order)
 mc_bias(b::Union{Bias,StateBias}, kw, w_ref) = b
 
 # The opacities of a run: lengths in the plan's units, or in cm without a parameter set.

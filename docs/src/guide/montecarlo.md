@@ -65,7 +65,9 @@ of a hot accretion flow needs `b0` of 10³–10⁴. Children follow the photon w
 the top of a scattered spectrum is fed by seeds of high frequency, whose packets carry few
 photons, the state bias gives them few children, and a child's own bias is near 1, so the
 light scattered two and three times is sampled less: those bins show a small effective
-photon number in `nuLnu_sigma`, and a larger `b0` or the constant bias samples them. `bias = Bias(b0)` is the constant bias
+photon number in `nuLnu_sigma`. `bias_order = f` multiplies the bias of a photon scattered
+`n` times by `fⁿ`, which samples the higher orders and the tail they make; a larger `b0`
+or the constant bias also samples them. `bias = Bias(b0)` is the constant bias
 `b0 (n + 1)²` of order `n`, `bias_max` caps the bias, and `split = m` spawns up to `m`
 lighter children for an event whose bias was capped. The result holds the ledger of the
 run: `w_children + w_unspawned` estimates `scatter_loss`, the weight scattered out of the

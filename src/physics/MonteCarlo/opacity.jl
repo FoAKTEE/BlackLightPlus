@@ -122,38 +122,42 @@ gain of one Thomson scattering off a Maxwell–Jüttner population,
 @inline amplification(theta_e) = 1.0 + theta_e * (4.0 + 16.0 * theta_e)
 
 """
-    StateBias(b0, w_ref, b_max, split)
+    StateBias(b0, w_ref, b_max, split = 1, order = 1)
 
 Importance bias of the scattering events that follows the plasma and the photon: at a
-step of a photon of weight `w` through gas of temperature `Θₑ`,
-`b = clamp(b0 A(Θₑ) w/w_ref, 1, b_max)` ([`amplification`](@ref)), so a child, of weight
-about `w/b`, carries about `w_ref/(b0 A)` photons and the energy weight `w_ref E/b0`
-whatever the gas that scattered it; `b_max` bounds the events per step. With
-`split > 1`, an event whose uncapped bias `b0 A w/w_ref` exceeds `b_max` spawns
-`m = min(split, ⌈b0 A w/(w_ref b_max)⌉)` children of `1/m` of the event weight, each
-with its own kick. Any positive `b` chosen from the state before the step's draws, and
-any split, leave the estimator unbiased.
+step of a photon of weight `w`, scattered `n` times, through gas of temperature `Θₑ`,
+`b = clamp(b0 A(Θₑ) (w/w_ref) order^n, 1, b_max)` ([`amplification`](@ref)). With
+`order = 1` a child, of weight about `w/b`, carries about `w_ref/(b0 A)` photons and the
+energy weight `w_ref E/b0` whatever the gas that scattered it, and its own bias is near 1,
+so the light scattered two and three times is sampled little; `order > 1` raises the bias
+of every later generation by that factor per scattering, which samples the higher orders
+and the high-frequency tail they make. `b_max` bounds the events per step. With
+`split > 1`, an event whose uncapped bias exceeds `b_max` spawns
+`m = min(split, ⌈b_uncapped/b_max⌉)` children of `1/m` of the event weight, each with its
+own kick. Any positive `b` chosen from the state before the step's draws, and any split,
+leave the estimator unbiased.
 """
 struct StateBias
     b0::Float64
     w_ref::Float64
     b_max::Float64
     split::Int
+    order::Float64
 end
-StateBias(b0::Real, w_ref::Real, b_max::Real, split::Integer = 1) =
-    StateBias(Float64(b0), Float64(w_ref), Float64(b_max), Int(split))
+StateBias(b0::Real, w_ref::Real, b_max::Real, split::Integer = 1, order::Real = 1.0) =
+    StateBias(Float64(b0), Float64(w_ref), Float64(b_max), Int(split), Float64(order))
 
 """
     event_bias(b, nscatt, theta_e, w) -> (b::Float64, copies::Int)
 
 The bias of the scattering events of a step and the children per event: for a
 [`Bias`](@ref) `(bias(b, nscatt), 1)`; for a [`StateBias`](@ref) the clamped
-`b0 A(Θₑ) w/w_ref` and its split count. `theta_e` is the temperature of the step (the
+`b0 A(Θₑ) (w/w_ref) order^nscatt` and its split count. `theta_e` is the temperature of the step (the
 larger of its two end samples; 0 for vacuum), `w` the photon weight at the step start.
 """
 @inline event_bias(b::Bias, nscatt::Integer, theta_e, w) = (bias(b, nscatt), 1)
 @inline function event_bias(b::StateBias, nscatt::Integer, theta_e, w)
-    t = b.b0 * amplification(theta_e) * (w / b.w_ref)
+    t = b.b0 * amplification(theta_e) * (w / b.w_ref) * b.order^nscatt
     t > 1.0 || return (1.0, 1)
     t < b.b_max && return (t, 1)
     c = t / b.b_max

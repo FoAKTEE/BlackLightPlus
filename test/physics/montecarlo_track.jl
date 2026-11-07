@@ -171,6 +171,33 @@ BlackLightPlus.MonteCarlo.record!(::StepSink, sph) = nothing
         bs = first.(res)
         @test minimum(bs) == 1.0 && count(<(10.0), bs) >= 24 && maximum(bs) > 50.0
         @test all(r -> abs(r[2] - 1) < 1.0e-3 && abs(r[3] - 1) < 1.0e-3 && abs(r[4] - 1) < 1.5e-3, res)
+        # the same for a photon scattered once and twice under the order factor 4 (b from the
+        # photon's order as well as its weight and gas): the expectation holds for each b
+        so = StateBias(0.3, 1.0, 1.0e6, 1, 4.0)
+        go = [(ds, da, wr, th, n) for ds in (0.1, 1.0) for da in (0.0, 1.0, 10.0)
+              for wr in (0.03, 1.0) for th in (0.05, 1.0) for n in (1, 2)]
+        ro = Vector{NTuple{4,Float64}}(undef, length(go))
+        Threads.@threads for k in eachindex(go)
+            ds, da, wr, th, n = go[k]
+            b, copies = event_bias(so, n, th, wr)
+            dt = ds + da
+            W = event_weight(wr, b, dt) / copies
+            M = ceil(Int, 3.0e7 / (b * ds))
+            m0 = 0.0; m1 = 0.0; m2 = 0.0
+            for i in 1:M
+                rng = MCRng(0x5D5D, k * 10^9 + i)
+                u = 0.0
+                while true
+                    u, f, rng = next_event(u, b * ds, dt, rng)
+                    u < 1.0 || break
+                    m0 += copies * W; m1 += copies * W * f; m2 += copies * W * f * f
+                end
+            end
+            ro[k] = (b, m0 / (M * wr * mom(0, ds, dt)), m1 / (M * wr * mom(1, ds, dt)),
+                     m2 / (M * wr * mom(2, ds, dt)))
+        end
+        @test minimum(first.(ro)) == 1.0 && maximum(first.(ro)) > 30.0
+        @test all(r -> abs(r[2] - 1) < 1.0e-3 && abs(r[3] - 1) < 1.0e-3 && abs(r[4] - 1) < 1.5e-3, ro)
         # the same through the tracker's step: kick, child streams and sink, the event fraction
         # read back from the child's position on a straight line
         thom = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
@@ -204,6 +231,15 @@ BlackLightPlus.MonteCarlo.record!(::StepSink, sph) = nothing
         sb = StateBias(2.0, 1.0e10, 1.0e5, 1)
         @test event_bias(sb, 0, 3.0, 1.0e10) == (2.0 * 157.0, 1)
         @test event_bias(sb, 2, 3.0, 2.0e10) == (4.0 * 157.0, 1)          # no order factor
+        so = StateBias(2.0, 1.0e10, 1.0e7, 1, 3.0)                            # order factor 3
+        @test event_bias(so, 0, 3.0, 1.0e10) == (2.0 * 157.0, 1)
+        @test event_bias(so, 2, 3.0, 2.0e10) == (4.0 * 157.0 * 9.0, 1)
+        @test event_bias(StateBias(2.0, 1.0e10, 1.0e3, 8, 3.0), 2, 3.0, 2.0e10) == (1.0e3, 6)
+        # an order factor of 1 is the bias without one, bit for bit
+        for n in 0:3, th in (0.1, 3.0, 50.0), w in (1.0e8, 2.0e10, 3.0e12)
+            @test event_bias(StateBias(2.0, 1.0e10, 1.0e5, 4, 1.0), n, th, w) ===
+                  event_bias(StateBias(2.0, 1.0e10, 1.0e5, 4), n, th, w)
+        end
         @test event_bias(sb, 0, 0.0, 1.0e8) == (1.0, 1)                    # floor at 1
         @test event_bias(sb, 0, 100.0, 1.0e12) == (1.0e5, 1)               # cap, no split
         @test event_bias(StateBias(2.0, 1.0e10, 1.0e5, 8), 0, 100.0, 1.0e12)[2] == 8

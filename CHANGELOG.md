@@ -7,6 +7,18 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `StateBias` takes an order factor `f` (`mc_spectrum(…; bias_order = f)`, 1 by default):
+  the bias of a photon scattered `n` times is `clamp(b0 A(Θₑ) (w/w_ref) fⁿ, 1, bias_max)`.
+  Without it a child's own bias is near 1, so the light scattered two and three times
+  and the high-frequency tail it makes are sampled little. On the AthenaK torus of the
+  paper (density unit 1e-21 g cm⁻³, stride 1, `b0 = 1e4`, 3e5 primaries) the factor 100
+  leaves the effective photon number per tracked photon of the Compton hump within 5 %
+  and raises it 9 and 30 times at 1e21 and 1e22 Hz (50° band), and that of the second
+  order 25 times; the factor 300 raises the tail 14 and 80 times for 10–15 % less in
+  the hump. `f = 1` gives every bias bit for bit as before. Tests: `event_bias` with and
+  without the factor, the one-step expectation at the biases of later generations, and
+  the escaped power of every order of a sphere of Thomson depth 0.2 equal with and
+  without the factor, absorption off and on.
 - The closed-form Kerr tracer takes its radial sn, cn and sc from `Spacetime.jacobi_sncndn`
   and the Jacobi amplitude from `Spacetime.jacobi_amplitude`, which uses the m → 1
   expansion (A&S 16.15.4) only where $(1-m)\cosh^2u<\sqrt\varepsilon$ and the AGM elsewhere.
