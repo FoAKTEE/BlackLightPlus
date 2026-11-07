@@ -7,6 +7,25 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- A precise mode for the numerical march, `Plans.precise(cfg)`, at the accuracy of the
+  closed-form Kerr tracer: the ninth-order step of Verner's 9(8) pair (`Spacetime.Verner9`,
+  beside `ClassicalRK4`) under the fixed control, the step shortened near a spinning
+  horizon to resolve the frame-dragged winding (`winding_factor`), the state carried
+  compensated, the redshift cut at 10^6 without the horizon backstop, and the camera at
+  infinity (`CameraConfig(infinity = true)`: each ray carried in from infinity through the
+  far zone of a stationary metric, `Spacetime.infinity_ray`, with the metric offset
+  `raise_index_offset` formed without cancellation on Kerr–Schild spacetimes).
+  `Products.render_crossings` images the equatorial disk by the march, the crossing found
+  to the integrator's order (`Spacetime.surface_crossing`). Against the closed form on the
+  two configurations of the code comparison the precise march reaches NMSE 10^-26–10^-22
+  per order (median residual 10^-17–10^-13 of the image maximum), where the production
+  march stops at 10^-10–10^-8. `MarchBudget` carries the integrator, the redshift cut, the
+  horizon backstop and the winding switch; `RunConfig` gains `integrator`,
+  `capture_redshift`, `horizon_eps` and `winding`. The production defaults are unchanged:
+  images, traces and shadows are those of before, bit for bit on one device.
+- The Kerr–Schild radius takes the root of max(r², 0): a device `hypot` may round below
+  |x² + y² + z² − a²| inside the ring, where a step that falls through the horizon raised a
+  `DomainError` on the GPU.
 - `Transfer.segment(IQUV)` is exact to rounding at small absorption and at any
   coefficient scale. The closed form of the eigenmode integrals carries
   $1/(\alpha_I^2-\lambda_1^2)$ and keeps a relative accuracy
