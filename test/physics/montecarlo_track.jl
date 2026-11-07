@@ -2,8 +2,8 @@
 # its absorption depth is α_ν times the path; the scattering events of one step deposit
 # the physical child weight at the physical positions for every depth and bias; the
 # biases follow their rules; every march closes its weight ledger and spawns at every
-# valid event site; the curved march captures infalling and releases outgoing photons;
-# the torus deck over Kerr gives
+# valid event site; the curved march captures infalling and releases outgoing photons
+# and stops plunging photons without changing the bins; the torus deck over Kerr gives
 # null seeds inside emitting zones, conserves energy without scattering, peaks in the
 # synchrotron band and grows a Compton tail with scattering, identically under every
 # executor.
@@ -13,10 +13,10 @@ using LinearAlgebra: dot, norm
 using BlackLightPlus.Numerics: MCRng, mc_uniform, primary_rng, MCStreamLayout, HPL, ME, CL, SIGMA_THOMSON
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
                      ETA, inverse_metric, null_covariant, proxy_distance, horizon_floor,
-                     horizon_radius, ks_radius
+                     horizon_radius, ks_radius, photon_orbit_radius, plunge_radius, PLUNGE_MARGIN
 using BlackLightPlus.Matter: UniformSphere, sample
 using BlackLightPlus.MonteCarlo: Superphoton, FlatMarch, CurvedMarch, Opacities, Bias, StateBias, NullSink,
-                      VectorSink, track!, escaped, captured, escape_direction,
+                      VectorSink, track!, escaped, captured, plunging, escape_direction,
                       alpha_nu, generate, GenerationTables, zone_nsuperphotons, event_weight,
                       next_event, bias, event_bias, amplification, HotcrossTable, NW, NT,
                       ESCAPED_MARCH, CAPTURED_MARCH, DROPPED_MARCH, SPHERE_STEP_FRAC
@@ -191,15 +191,33 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
         rout = track!(ctl, st, UniformSphere(R = 0.5), plasma, Superphoton(x, pout, 1.0),
                       MCRng(1, 1), NullSink(); absorb = Val(false))
         @test rin.sph.E > 0 && rout.sph.E > 0
-        @test !rin.recorded && ks_radius(st, rin.sph.x) < ctl.r_h + 1e-2
+        @test !rin.recorded && ks_radius(st, rin.sph.x) < ctl.r_plunge     # stopped plunging
         lin = VectorSink(MCStreamLayout(10, 10, 1))
-        track!(ctl, st, UniformSphere(R = 0.5), plasma, Superphoton(x, pin, 1.0), MCRng(1, 1), lin;
-               absorb = Val(false))
+        nop = CurvedMarch(st; C = 40.0, escape = 200.0, R_em = 30.0, plunge = false)
+        rnp = track!(nop, st, UniformSphere(R = 0.5), plasma, Superphoton(x, pin, 1.0),
+                     MCRng(1, 1), lin; absorb = Val(false))
+        @test !rnp.recorded && ks_radius(st, rnp.sph.x) < ctl.r_h + 1e-2
         @test lin.ledger[1][2].outcome == CAPTURED_MARCH
         @test rout.recorded && 30.0 < ks_radius(st, rout.sph.x) < 32.0
         k = inverse_metric(st, rout.sph.x) * rout.sph.p
         @test escape_direction(ctl, rout.sph) ≈ SVector(k[2], k[3], k[4]) rtol = 1e-14
         @test rout.sph.p[1] ≈ pout[1] rtol = 1e-8                # conserved energy
+    end
+
+    @testset "plunge radius" begin
+        for a in (0.0, 0.5, 0.9, -0.9, 0.998)
+            st = KerrSchildCartesian(a)
+            @test plunge_radius(st) == photon_orbit_radius(abs(a); prograde = true) - PLUNGE_MARGIN
+            @test plunge_radius(st) < 3.0
+            abs(a) <= 0.9 && @test plunge_radius(st) > horizon_radius(st)
+        end
+        @test plunge_radius(KerrSchildCartesian(0.9)) ≈ 1.5578 - 0.02 atol = 1e-4
+        @test plunge_radius(Minkowski()) == -Inf
+        st = KerrSchildCartesian(0.9)
+        c = CurvedMarch(st); cn = CurvedMarch(st; plunge = false)
+        @test c.r_plunge == plunge_radius(st) && cn.r_plunge == -Inf
+        @test plunging(c, 1.5, 1.52) && !plunging(c, 1.5, 1.49) && !plunging(c, 1.5, Inf)
+        @test !plunging(c, 1.55, 1.6) && !plunging(cn, 1.5, 1.52) && !plunging(FlatMarch(SPH), 0.0, 1.0)
     end
 
     snap = DK.amr_deck()
@@ -270,6 +288,10 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
         nu, L, cnt = nuLnu_total(s0)
         ip = peak_bin(L, cnt)
         @test L[ip] > 0.0 && 1.0e9 <= nu[ip] <= 1.0e18
+        # stopping the plunging photons changes no bin and no emitted or escaped power
+        bp, lp, _, _ = DK.torus_run(exec, blocks, sites, 1_500, 0xC0FFEE; plunge = false)
+        @test bp.count == b0.count && bp.sumw == b0.sumw && bp.sumwE == b0.sumwE && bp.sumwE2 == b0.sumwE2
+        @test scalar(lp, 5) === scalar(l0, 5) && scalar(lp, 6) === scalar(l0, 6)
         if isfile(HOTCROSS_DAT)
             table = load_hotcross(HOTCROSS_DAT)
             b1, l1, n1, layers = DK.torus_run(exec, blocks, sites, 1_500, 0xC0FFEE;
@@ -280,6 +302,10 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
             p_scat = sum(L1[i] for i in eachindex(L1) if nu1[i] > hi)
             p_dir = sum(L[i] for i in eachindex(L) if nu[i] > hi)
             @test p_scat > p_dir && p_scat > 0.0
+            bq, lq, _, layq = DK.torus_run(exec, blocks, sites, 1_500, 0xC0FFEE; scattering = true,
+                                           table = table, bias0 = 1.0e5, plunge = false)
+            @test bq.count == b1.count && bq.sumwE == b1.sumwE && bq.sumwE2 == b1.sumwE2
+            @test [length(first(l)) for l in layq] == [length(first(l)) for l in layers]
             # the same run on the device path and with other chunkings: identical bits
             for ex in (ThreadedExecutor(chunk = 7), PoolExecutor(DK.hosts(3); chunk = 50))
                 b, l, n, lay = DK.torus_run(ex, blocks, sites, 1_500, 0xC0FFEE; scattering = true,

@@ -4,8 +4,7 @@
 # spectrum on the block deck against the transport-tier template with its per-order split
 # and power budget, bitwise agreement across executors, device counts, chunks and
 # child-buffer capacities (the overflow rerun), the emission zones, the programs' device
-# contract, the hot-cross table the plan builds once, the backend keyword and the run
-# record.
+# contract, the process's hot-cross table, the backend keyword and the run record.
 using Test, BlackLightPlus, StaticArrays
 using BlackLightPlus.Plans: RunConfig, Plan, prepare, hotcross_table
 using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
@@ -273,6 +272,7 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test same(mc_spectrum(ps, 300; kw..., table = t), r1)
         @test prepare(ss).hotcross[] === nothing
         @test mc_spectrum(prepare(ss), 300; kw..., table = THOMSON).plan.hotcross[] === nothing
+        @test hotcross_table(prepare(ss)) === t                  # one table per process
     end
 
     @testset "backend keyword and run record" begin

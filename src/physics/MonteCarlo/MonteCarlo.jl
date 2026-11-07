@@ -12,7 +12,7 @@ using ..Numerics: CL, EE, ME, MP, HPL, SQRT2, SIGMA_THOMSON, MCRng, MCStreamLayo
                   sample_direction, chi_square, child_rng, event_capacity, loglinear_at, bessel_k2,
                   position, momentum, raystate
 using ..Spacetime: Minkowski, MarchStep, HORIZON_EPS_SAMPLED, metric_and_inverse,
-                   inverse_metric, proxy_distance, horizon_floor, rk4_step
+                   inverse_metric, proxy_distance, horizon_floor, plunge_radius, rk4_step
 using ..Matter: PlasmaState, PlasmaProvider, EmissionZone, UniformSphere, sample, emission_zone
 using ..Transfer: thermal_synchrotron, TransferParams
 import ..Transfer: march_control, max_steps, geodesic_step
@@ -53,6 +53,6 @@ export Sink, record!, child_stream, spawn!, tally!, MarchLedger, ESCAPED_MARCH, 
        DROPPED_MARCH, NullSink, VectorSink
 # the tracker
 export SPHERE_STEP_FRAC, SPHERE_MAX_STEPS, CURVED_MAX_STEPS, FlatMarch, CurvedMarch, escaped,
-       captured, escape_direction, event_weight, next_event, scatter_site, track!
+       captured, plunging, escape_direction, event_weight, next_event, scatter_site, track!
 
 end # module

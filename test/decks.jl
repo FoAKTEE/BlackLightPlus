@@ -535,7 +535,7 @@ end
 """
     torus_run(exec, blocks, sites, Ns, seed; scattering = false, table = nothing, bias0 = 1.0,
               max_scatt = 3, C = 32.0, incl_deg = (17.0, 50.0, 90.0), half_width_deg = 10.0,
-              n_ebins = 120, capacity) -> (bins, ledger, n_gen, layers)
+              n_ebins = 120, capacity, plunge = true) -> (bins, ledger, n_gen, layers)
 
 The Monte Carlo of the torus deck on the Kerr hole of `TORUS_A` from the `ZoneSite`s
 `sites`: the weight table of the zones for about `Ns` primaries over [1e8, 1e16] Hz (`Data.zone_tables`), per-zone
@@ -543,12 +543,12 @@ counts rounded
 stochastically on the stream `MCRng(seed, 0)`, a `CurvedMarch` whose emission radius is
 the larger of 100 and 1.2 times the outermost zone radius, absorption always and
 scattering on request (constant `Bias(bias0)`), binned by inclination band over
-[1e8, 1e24] Hz.
+[1e8, 1e24] Hz; `plunge` is the `CurvedMarch` keyword.
 """
 function torus_run(exec, blocks, zones::AbstractVector{<:ZoneSite}, Ns, seed;
                    scattering = false, table = nothing,
                    bias0 = 1.0, max_scatt = 3, C = 32.0, incl_deg = (17.0, 50.0, 90.0),
-                   half_width_deg = 10.0, n_ebins = 120, capacity = 1024)
+                   half_width_deg = 10.0, n_ebins = 120, capacity = 1024, plunge = true)
     st = KerrSchildCartesian(TORUS_A)
     params = torus_params()
     wgt, Nsz, dnmax = zone_tables(zones, Float64(Ns) / (log(1.0e16) - log(1.0e8));
@@ -562,7 +562,7 @@ function torus_run(exec, blocks, zones::AbstractVector{<:ZoneSite}, Ns, seed;
     end
     N = offset[end]
     R_em = max(100.0, maximum(z -> 1.2 * ks_radius(st, z.x), zones))
-    ctl = CurvedMarch(st; C = C, escape = 1.0e3, R_em = R_em)
+    ctl = CurvedMarch(st; C = C, escape = 1.0e3, R_em = R_em, plunge = plunge)
     opac = Opacities(params; table = table, bias = Bias(bias0), max_scatt = max_scatt)
     mk() = (ExactBins(InclinationBands(incl_deg, half_width_deg); nu_min = 1.0e8,
                       nu_max = 1.0e24, n_ebins = n_ebins),)

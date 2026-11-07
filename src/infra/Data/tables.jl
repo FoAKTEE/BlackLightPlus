@@ -156,8 +156,14 @@ function emission_sites(blocks::FluidBlocks, st, params; stride::Integer = 1,
         end
         per_block[mb] = out
     end
-    sites = reduce(vcat, per_block; init = ZoneSite{Float64}[])
-    length(sites) > max_zones && resize!(sites, max(0, Int(max_zones)))
+    n = min(sum(length, per_block; init = 0), max(0, Int(max_zones)))
+    sites = Vector{ZoneSite{Float64}}(undef, n)
+    k = 0
+    for v in per_block
+        m = min(length(v), n - k)
+        m > 0 && copyto!(sites, k + 1, v, 1, m)
+        k += m
+    end
     return sites
 end
 

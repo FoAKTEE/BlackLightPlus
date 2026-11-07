@@ -215,6 +215,23 @@ end
     return R, R
 end
 
+"Margin (M) between the prograde photon orbit and the plunge radius of [`plunge_radius`](@ref)."
+const PLUNGE_MARGIN = 0.02
+
+"""
+    plunge_radius(st) -> Float64
+
+The radius below which a photon moving inward is certain to be captured: on
+`KerrSchildCartesian` the prograde equatorial photon orbit `2(1 + cos(⅔ arccos(−|a|)))`,
+the innermost spherical photon orbit, less `PLUNGE_MARGIN`. Inside every spherical
+photon orbit the radial potential of a photon has no root between the horizon and its
+radius when it moves inward (Teo 2003; Gralla & Lupsasca 2020), so it reaches the
+horizon. `-Inf` (no plunge) on every other spacetime.
+"""
+@inline plunge_radius(st::KerrSchildCartesian) =
+    Float64(photon_orbit_radius(abs(st.a); prograde = true)) - PLUNGE_MARGIN
+@inline plunge_radius(::Spacetime) = -Inf
+
 """
     horizon_floor(st) -> Real
 

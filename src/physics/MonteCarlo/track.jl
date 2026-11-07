@@ -43,8 +43,9 @@ FlatMarch(s::UniformSphere; step_frac::Real = SPHERE_STEP_FRAC, nmax::Integer = 
     FlatMarch(Float64(s.R), Float64(step_frac), Int(nmax))
 
 """
-    CurvedMarch{S,T}(st, r_h, C, escape, R_em, nmax)
-    CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS)
+    CurvedMarch{S,T}(st, r_h, C, escape, R_em, nmax, r_plunge)
+    CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS,
+                plunge = true)
 
 Geodesic march for Monte Carlo transport on the spacetime `st`, whose horizon proxy
 `r_h` is `horizon_floor(st)` in the keyword form: with `(d, r) = proxy_distance(st, x)`
@@ -56,7 +57,9 @@ coordinate advance is about `d/C` whatever the photon energy (grmonty `stepsize`
 state advances by `rk4_step`. The photon is captured at `d < HORIZON_EPS_SAMPLED` (or a
 non-finite `d`) and escapes at `r > escape`, or at `r > R_em` while outbound: beyond the
 emission-confinement radius `R_em` it meets no more plasma. At most `nmax` steps; the
-`R` of its decisions is `r`.
+`R` of its decisions is `r`. A photon that may spawn no more children is captured once
+a step moves it inward below `r_plunge` ([`plunging`](@ref)): `plunge_radius(st)` with
+`plunge = true`, `-Inf` (never) otherwise.
 """
 struct CurvedMarch{S,T}
     st::S
@@ -65,11 +68,12 @@ struct CurvedMarch{S,T}
     escape::T
     R_em::T
     nmax::Int
+    r_plunge::T
 end
 CurvedMarch(st; C::Real = 80.0, escape::Real = 1.0e3, R_em::Real = 100.0,
-            nmax::Integer = CURVED_MAX_STEPS) =
+            nmax::Integer = CURVED_MAX_STEPS, plunge::Bool = true) =
     CurvedMarch(st, Float64(horizon_floor(st)), Float64(C), Float64(escape),
-                Float64(R_em), Int(nmax))
+                Float64(R_em), Int(nmax), plunge ? plunge_radius(st) : -Inf)
 
 @inline max_steps(c::FlatMarch) = c.nmax + 1
 @inline max_steps(c::CurvedMarch) = c.nmax
@@ -124,6 +128,17 @@ for a [`CurvedMarch`](@ref).
 """
 @inline captured(c::FlatMarch, s::MarchStep) = false
 @inline captured(c::CurvedMarch, s::MarchStep) = !escaped(c, s)
+
+"""
+    plunging(ctl, r, r_prev) -> Bool
+
+Whether a photon at the decision radius `r` after a step from `r_prev` is moving inward
+below the control's plunge radius, hence certain to be captured: a finite `r_prev`,
+`r < r_prev` and `r < ctl.r_plunge` on a [`CurvedMarch`](@ref); never on a
+[`FlatMarch`](@ref). The emission point alone (`r_prev = Inf`) never plunges.
+"""
+@inline plunging(c::FlatMarch, r, r_prev) = false
+@inline plunging(c::CurvedMarch, r, r_prev) = isfinite(r_prev) && r < r_prev && r < c.r_plunge
 
 """
     escape_direction(ctl, sph::Superphoton) -> SVector{3}
@@ -252,7 +267,8 @@ weight at the step start), each spawning children of weight [`event_weight`](@re
 in `copies`) at its event point, kicked by `scatter_superphoton` off the plasma of
 [`scatter_site`](@ref) on the [`child_stream`](@ref) of its ordinal, with `nscatt + 1` and
 the depths at the step start, handed to `spawn!`; an event whose site is not valid
-spawns nothing. The returned photon has the final state and depths; if the control
+spawns nothing. A photon that may spawn no more stops captured when it plunges
+([`plunging`](@ref)). The returned photon has the final state and depths; if the control
 reports an escape it is also handed to `record!(sink, sph)`, and its [`MarchLedger`](@ref)
 goes to `tally!`. `rng` is the advanced stream; without scattering it is not drawn from.
 Allocation-free for `isbits` arguments and sink.
@@ -278,6 +294,10 @@ function track!(ctl, st, provider, opac::Opacities, sph::Superphoton, rng::MCRng
         if d.stop
             outcome = escaped(ctl, d) ? ESCAPED_MARCH :
                       (captured(ctl, d) ? CAPTURED_MARCH : DROPPED_MARCH)
+            break
+        end
+        if !spawning && plunging(ctl, d.R, r_prev)
+            outcome = CAPTURED_MARCH
             break
         end
         r_prev = d.R

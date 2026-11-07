@@ -1,6 +1,7 @@
 # The plan: everything a product needs, derived once from a configuration, a spacetime
 # and a matter source. Immutable and backend-free: the same plan runs on any executor.
-# The one value computed later is the Monte Carlo hot-cross table, memoised on first use.
+# The one value set later is the Monte Carlo hot-cross table, the process's table, taken
+# on first use.
 
 """
     Plan
@@ -36,7 +37,7 @@ hand. Fields:
   Kerr and the identity elsewhere); `rescue`, the ascending pixels
   marched on the `Float64` lane under `MixedLanes` (empty otherwise);
 - `hotcross`, the memo of [`hotcross_table`](@ref): empty until a Monte Carlo
-  scattering run of the plan first needs the table.
+  scattering run of the plan first needs the table, then the process-wide table.
 """
 struct Plan{S,Sg,P,M,T,Bg,H,L}
     config::RunConfig
@@ -61,18 +62,26 @@ struct Plan{S,Sg,P,M,T,Bg,H,L}
     hotcross::Base.RefValue{Union{Nothing,HotcrossTable{Matrix{Float64}}}}
 end
 
+# The process-wide hot-cross table: built at the first request of any plan, then shared.
+const PROCESS_HOTCROSS = Ref{Union{Nothing,HotcrossTable{Matrix{Float64}}}}(nothing)
+const PROCESS_HOTCROSS_LOCK = ReentrantLock()
+
 """
     hotcross_table(plan::Plan) -> HotcrossTable
 
-The hot-cross-section table of the plan's Monte Carlo scattering, `build_hotcross_table()`,
-built at the first request and kept in the plan, so later runs of the plan reuse the
-same table (and its device copies). Concurrent first requests may each build it; the
-tables are identical.
+The hot-cross-section table of the plan's Monte Carlo scattering: the one table of the
+process, `build_hotcross_table()` at the first request of any plan (under a lock, so it
+is built once), kept in the plan at the plan's first request; every plan of the process
+shares the same table object, and so its device copies.
 """
 function hotcross_table(plan::Plan)
     t = plan.hotcross[]
     t === nothing || return t
-    t = build_hotcross_table()
+    t = @lock PROCESS_HOTCROSS_LOCK begin
+        p = PROCESS_HOTCROSS[]
+        p === nothing && (p = PROCESS_HOTCROSS[] = build_hotcross_table())
+        p
+    end
     plan.hotcross[] = t
     return t
 end
