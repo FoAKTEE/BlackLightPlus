@@ -66,8 +66,8 @@ src/
 │   └── MonteCarlo/    MonteCarlo.jl superphoton.jl emissivity.jl hotcross.jl tables.jl
 │                      generate.jl scatter.jl opacity.jl sinks.jl track.jl
 ├── infra/
-│   ├── Data/          Data.jl fluid_blocks.jl athenak_hdf5.jl athenak_bin.jl uniform_grid.jl
-│   │                  series.jl npy.jl tables.jl
+│   ├── Data/          Data.jl fluid_blocks.jl ghost_cells.jl athenak_hdf5.jl athenak_bin.jl
+│   │                  uniform_grid.jl series.jl npy.jl tables.jl
 │   └── Execution/     Execution.jl devices.jl pool.jl residency.jl kernel.jl executor.jl
 │                      backend.jl ray_sources.jl schedule.jl worklist.jl accumulators.jl
 │                      children.jl cascade.jl
@@ -275,7 +275,8 @@ caches, and implements the physics protocols over its containers.
 
 ```julia
 struct FluidBlocks{A5,A2,L} <: GridProvider    # one struct for host and device
-    data::A5        # (8, ni, nj, nk, nmb) Float32, feature fastest, PRIM_NAMES order
+    data::A5        # (8, ni+2, nj+2, nk+2, nmb) Float32, feature fastest, PRIM_NAMES order,
+                    # each block's cells inside one layer of ghost cells
     x_left::A2; dx::A2; lo::A2; hi::A2          # (3, nmb) Float64
     ni::Int; nj::Int; nk::Int; nmb::Int
     locate::L       # LeafTable | LevelHash | BlockScan
@@ -296,8 +297,12 @@ blend(sa::PlasmaPrimitives, sb::PlasmaPrimitives, w)          # the one time ble
   `LeafTable` (dense finest-block grid), a `LevelHash` for meshes beyond 8,000,000
   finest-block cells or not aligned to the finest grid, or a `BlockScan`. A `LevelHash`
   is host only: `Adapt.adapt` turns it into the `BlockScan` every device runs.
-- `primitives(blocks, x)` is the clamped trilinear sample in the owning block, in
-  `Float64`. `FluidBlocks` (index `(x − x_left)/dx`) and `UniformGrid` (index
+- The snapshot constructors then fill the ghost layer of every block (`fill_ghosts!`,
+  threaded over blocks) from `mesh_value`: a copy from a block of the same level, the mean
+  of the finer cells, the minmod-limited prolongation of the coarser cell, one-sided
+  linear extrapolation outside the mesh ([Sampling the meshblock hierarchy](@ref)).
+- `primitives(blocks, x)` is the trilinear sample in the owning block extended by its
+  ghost layer, in `Float64`. `FluidBlocks` (index `(x − x_left)/dx`) and `UniformGrid` (index
   `(x − xo) inv_dx`, vacuum outside the node box) share `lerp8`.
 - `FrameWindow{P}` samples both frames and blends the interpolated results at the
   emission time `t_obs + X⁰`; `P` is `FluidBlocks` or `UniformGrid`, the frames share the
@@ -535,7 +540,7 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
 | `render(plan, coords; backend)` | `4 × n` `Matrix{Float64}`, rows I, Q, U, V | no `MixedLanes` |
 | `render_amr(plan; block = 16, max_level = 2, refine, backend)` | `(image, levels, nrays)` | no `MixedLanes`; `resolution % block == 0` |
 | `render_analytic(plan, disk; bands = (0, 1, 2), ro, backend)` | `(I, Ib, rs, ts, phis, redshift_sign, bands, plan, run)` | Kerr plan with the disk's spin |
-| `photon_ring_layers(plan, disk; bands, dx, box, npts, ro, fudge, backend)` | `(I, Ib, masks, grid, N, box, dx, bands, plan, run)` | Kerr plan with the disk's spin |
+| `photon_ring_layers(plan, disk; bands, dx, box, npts, ro, fudge, backend)` | `(I, Ib, masks, grid, N, box, dx, dxs, points, bands, plan, run)` | Kerr plan with the disk's spin |
 | `trace(plan; backend, adaptive = false)` | `Trajectories` | no `MixedLanes`; `adaptive` on threads only |
 | `shadow(plan; backend)` | `(fate, steps, null_error, radius, final, plan, run)` | no `MixedLanes` |
 | `sensitivity(plan, param; backend)` | `(image, derivative, flux, dflux, param)` | `param` is `:mass_scale` or `:rat_high` |
@@ -814,6 +819,7 @@ comment or module docstring.
 | `physics/MonteCarlo/track.jl` | The one superphoton tracker and its two march controls | `FlatMarch`, `CurvedMarch`, `track!` |
 | `infra/Data/Data.jl` | Containers and files | includes, exports |
 | `infra/Data/fluid_blocks.jl` | AthenaK meshblocks as a grid provider | `FluidBlocks`, `LeafTable`, `LevelHash`, `BlockScan` |
+| `infra/Data/ghost_cells.jl` | The ghost layer of every meshblock, from its neighbours | `mesh_value`, `fill_ghosts!`, `MeshBox` |
 | `infra/Data/athenak_hdf5.jl` | AthenaK `.athdf` snapshots | `AthenaKSnapshot`, `same_mesh`, `share_mesh` |
 | `infra/Data/athenak_bin.jl` | AthenaK `.bin` dumps: reader, Z4c to ADM, GRMHD adapter | `read_athenak_bin`, `resample_z4c_adm` |
 | `infra/Data/uniform_grid.jl` | The fluid resampled onto a uniform node grid | `UniformGrid`, `resample` |

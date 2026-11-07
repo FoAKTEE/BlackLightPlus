@@ -130,44 +130,80 @@ end
 
 The layered photon-ring image of the equatorial disk on the Bardeen screen: the grid of
 spacing `dx` over `[-box, box]²` of lensing band 0 (`band_grid`), and for each order
-`n ∈ bands` its own lensing band (`lensing_band(a, θo, n; npts, box)`), whose in-band
-grid points alone are traced to their order-`n` landing and painted with the disk
+`n ∈ bands` its own lensing band (`lensing_band(a, θo, n; npts, box)`), whose in-band grid
+points alone are traced to their order-`n` landing and painted with the disk
 intensity ([`AnalyticProgram`](@ref) over the band's points). Confining each order to
-its band keeps the `n ≥ 1` rings thin. The plan's spacetime must be Kerr with the disk's
-spin. Returns `(I, Ib, masks, grid, N, box, dx, bands, plan, run)`: per band the `N × N`
-image `Ib[b]` (rows `β`) and `masks[b]` (painted and positive), the composite
-`I = Σ_b w_b Ib[b]` with `w = 1` for `n = 0` and `fudge` otherwise, and the shared
-grid.
+its band keeps the `n ≥ 1` rings thin. `dx` may be a tuple with one spacing per band (AART's
+per-order resolution): a band with a finer spacing than the first is traced on its own grid
+(`band_points`, enumerated within the band, so the cost follows the band's area) and its
+image deposited on the common grid, each fine node weighted by the ratio of the fine to the
+common cell area, which keeps the ring flux of the fine grid. The plan's spacetime
+must be Kerr with the disk's spin. Returns `(I, Ib, masks, grid, N, box, dx, dxs, points,
+bands, plan, run)`: per band the `N × N` image `Ib[b]` (rows `β`) on the common grid of
+spacing `dx = dxs[1]` and `masks[b]` (painted and positive), the composite
+`I = Σ_b w_b Ib[b]` with `w = 1` for `n = 0` and `fudge` otherwise, the shared grid, and per
+band its fine samples `points[b] = (α, β, I)` (empty for a band on the common grid).
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
 function photon_ring_layers(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
-                            dx::Real = 0.02, box::Real = 12.0, npts::Integer = 100,
+                            dx = 0.02, box::Real = 12.0, npts::Integer = 100,
                             ro::Real = plan.camera.d, fudge::Real = 1.0, backend = nothing)
     t0 = time_ns()
     exec = resolve(backend)
     a = analytic_spin(plan, disk)
     θo = plan.theta_o
+    dxs = dx isa Real ? ntuple(_ -> Float64(dx), length(bands)) : map(Float64, Tuple(dx))
+    length(dxs) == length(bands) ||
+        throw(ArgumentError("photon_ring_layers: $(length(dxs)) spacings for $(length(bands)) bands"))
     kw = (npts = Int(npts), box = Float64(box))
-    grid, _, N = band_grid(lensing_band(a, θo, 0; kw...)...; dx = Float64(dx), box = kw.box)
+    dx0 = dxs[1]
+    grid, _, N = band_grid(lensing_band(a, θo, 0; kw...)...; dx = dx0, box = kw.box)
     gen = CoordList(grid[:, 1], grid[:, 2])
     Ib = [zeros(N, N) for _ in bands]
     masks = [fill(false, N, N) for _ in bands]
+    points = [(α = Float64[], β = Float64[], I = Float64[]) for _ in bands]
     for (b, n) in enumerate(bands)
-        _, bmask, _ = band_grid(lensing_band(a, θo, Int(n); kw...)...; dx = Float64(dx),
-                                box = kw.box)
-        items = findall(vec(bmask))
-        outs = analytic_outputs(1, N * N)
-        prog = AnalyticProgram(gen, θo, a, Float64(ro), disk, (Int(n),))
-        foreach_item!(exec, prog, items; outs)
-        paint_band!(Ib[b], masks[b], outs[1], outs[2], items, N)
+        band = lensing_band(a, θo, Int(n); kw...)
+        if dxs[b] == dx0
+            _, bmask, _ = band_grid(band...; dx = dx0, box = kw.box)
+            items = findall(vec(bmask))
+            outs = analytic_outputs(1, N * N)
+            prog = AnalyticProgram(gen, θo, a, Float64(ro), disk, (Int(n),))
+            foreach_item!(exec, prog, items; outs)
+            paint_band!(Ib[b], masks[b], outs[1], outs[2], items, N)
+        else
+            pts = band_points(band...; dx = dxs[b], box = kw.box)
+            m = length(pts.α)
+            outs = analytic_outputs(1, m)
+            prog = AnalyticProgram(CoordList(pts.α, pts.β), θo, a, Float64(ro), disk, (Int(n),))
+            foreach_item!(exec, prog, 1:m; outs)
+            points[b] = (α = pts.α, β = pts.β, I = outs[1])
+            bin_band!(Ib[b], masks[b], pts, outs[1], pts.N, N)
+        end
     end
     I = zeros(N, N)
     for (b, n) in enumerate(bands)
         I .+= (n == 0 ? 1.0 : Float64(fudge)) .* Ib[b]
     end
     return (I = I, Ib = Ib, masks = masks, grid = grid, N = N, box = Float64(box),
-            dx = Float64(dx), bands = collect(bands), plan = plan, run = run_record(exec, plan, t0))
+            dx = dx0, dxs = collect(dxs), points = points, bands = collect(bands), plan = plan,
+            run = run_record(exec, plan, t0))
+end
+
+# A fine band image deposited on the common N × N grid: each fine node adds its value
+# times the ratio of the fine to the common cell area, (h_f/h_c)² with h = 2 box/(n − 1), to
+# the cell of its nearest common node, so a cell holds the mean intensity over its area and
+# the sum Σ I h² of every band is the fine one.
+function bin_band!(img, mask, pts, vals, Nf, N)
+    w = ((N - 1) / (Nf - 1))^2
+    cell(k) = clamp(round(Int, (k - 1) * (N - 1) / (Nf - 1)) + 1, 1, N)
+    for (j, v) in enumerate(vals)
+        (isfinite(v) && v > 0) || continue
+        img[cell(pts.iy[j]), cell(pts.ix[j])] += w * v
+    end
+    mask .= img .> 0
+    return img
 end
 
 # Paint the valid landings of the band's grid points: point `idx` is pixel

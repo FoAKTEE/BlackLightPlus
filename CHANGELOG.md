@@ -7,6 +7,14 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `photon_ring_layers(...; dx = (dx0, dx1, dx2, …))` takes one spacing per band (AART's
+  per-order resolution): a band finer than the first is traced on its own grid, enumerated
+  within the band by `Analysis.band_points` (the in-band nodes of `band_grid`, row by row from
+  the polygon crossings, so the cost follows the band's area), and deposited on the common
+  grid by cell-area weights, keeping its ring flux; the result gains `dxs` and the fine
+  samples `points`. On the a = 0.94, 17° disk, dx = (0.02, 0.01, 0.005) gives the n = 1 and
+  n = 2 ring fluxes of a uniform 0.01 and 0.005 grid with 2.0e6 rays instead of 6.1e6 and
+  2.5e7.
 - Closed-form movies and light curves of time-dependent equatorial sources:
   `Matter.EquatorialSpot` (a profile f(t, x, y), by default the orbiting `GaussianSpot` of
   AART's flare model, times g^p of the g-disk flow) evaluated at the emission time of every

@@ -22,7 +22,7 @@ include("interferometry.jl")
 export RefinementIndicator, RelativeGradient, RelativeLaplacian, AbsoluteGradient, AnyOf,
        refinement_indicator, needs_refinement
 # lensing bands
-export polygon_area, in_polygon, apparent_horizon, lensing_band, band_grid
+export polygon_area, in_polygon, apparent_horizon, lensing_band, band_grid, band_points
 # interferometry
 export MUAS_TO_RAD, tukey_window, radon_cut, visamp, visamp_minima
 

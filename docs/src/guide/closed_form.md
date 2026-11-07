@@ -61,6 +61,14 @@ l = band_landing(pixel_prep(1.00001α0, 1.00001β0, θo, a; ro = Inf), 4)   # or
 ```
 
 `lensing_band(a, θo, n)` returns the inner and outer edges of band `n` for any order.
+`photon_ring_layers` traces each order within its band; a tuple of spacings refines the thin
+bands only and deposits them on the common grid with their flux:
+
+```julia
+layers = photon_ring_layers(plan, EquatorialDisk(0.94); bands = (0, 1, 2), dx = (0.02, 0.005, 0.00125))
+layers.Ib[3]                  # order 2 on the common 0.02 grid, from 0.00125 sampling
+layers.points[3]              # its fine samples (α, β, I)
+```
 
 ## Movies and light curves
 

@@ -63,5 +63,15 @@ const FIELDS = (:I, :Ib, :rs, :ts, :phis, :redshift_sign)
         f = photon_ring_layers(p, disk; dx = 0.25, fudge = 2.0, backend = :host_pool)
         @test Decks.bits(f.Ib) == Decks.bits(l.Ib)
         @test f.I == l.Ib[1] + 2.0 .* l.Ib[2] + 2.0 .* l.Ib[3]
+        @test l.dxs == [0.25, 0.25, 0.25] && all(isempty(pt.α) for pt in l.points)
+        # per-order resolution: finer grids in the thin bands, deposited on the common grid
+        q = photon_ring_layers(p, disk; dx = (0.25, 0.125, 0.0625), backend = :cpu)
+        @test Decks.bits(q.Ib[1]) == Decks.bits(l.Ib[1]) && q.dxs == [0.25, 0.125, 0.0625]
+        @test length(q.points[2].α) > 3 * count(l.masks[2]) && length(q.points[3].α) > 3 * count(l.masks[3])
+        h(N) = 24.0 / (N - 1)
+        Nf = 2 * round(Int, 12.0 / 0.125)
+        @test sum(q.Ib[2]) * h(q.N)^2 ≈ sum(filter(isfinite, q.points[2].I)) * h(Nf)^2 rtol = 1e-12
+        @test isapprox(sum(q.Ib[2]), sum(l.Ib[2]); rtol = 0.05)            # the same ring flux
+        @test_throws ArgumentError photon_ring_layers(p, disk; dx = (0.25, 0.1), backend = :cpu)
     end
 end

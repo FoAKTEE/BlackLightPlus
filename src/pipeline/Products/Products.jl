@@ -32,7 +32,7 @@ using ..Execution: ThreadedExecutor, resolve, describe, foreach_item!, ray, imag
                    band, gather!, children, overflow, scalar, addends, nu_centers, nuLnu_solid
 import ..Execution: workgroupsize, stack_bytes
 using ..Plans: Plan, Lanes, MixedLanes, geodesic_type, transfer_params, hotcross_table
-using ..Analysis: refinement_indicator, needs_refinement, lensing_band, band_grid
+using ..Analysis: refinement_indicator, needs_refinement, lensing_band, band_grid, band_points
 
 "Version of the package that produced a result."
 const PACKAGE_VERSION = pkgversion(@__MODULE__)

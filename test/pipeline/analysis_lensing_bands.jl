@@ -3,7 +3,7 @@
 # the apparent horizon lies inside the critical curve; band grids equal the per-point
 # winding test; the θo > π/2 mirror; the outer edge at high inclination.
 using Test, BlackLightPlus
-using BlackLightPlus.Analysis: polygon_area, in_polygon, apparent_horizon, lensing_band, band_grid
+using BlackLightPlus.Analysis: polygon_area, in_polygon, apparent_horizon, lensing_band, band_grid, band_points
 using BlackLightPlus.Spacetime: critical_curve
 
 # Membership of every grid point in the band, by the per-point winding test.
@@ -121,5 +121,15 @@ end
         inner, outer = lensing_band(a, θo, 1; npts = 60)
         @test polygon_area(inner) < Ac < polygon_area(outer)
         @test polygon_area(outer) > 10 * Ac
+    end
+    @testset "band_points: the in-band nodes of band_grid, enumerated by rows" begin
+        for n in (0, 1, 2), dx in (0.1, 0.0473)
+            inner, outer = lensing_band(0.94, deg2rad(17.0), n; npts = 60, box = 12.0)
+            g = band_grid(inner, outer; dx = dx, box = 12.0)
+            p = band_points(inner, outer; dx = dx, box = 12.0)
+            @test p.N == g.N
+            @test sort([(p.iy[k] - 1) * p.N + p.ix[k] for k in eachindex(p.ix)]) == findall(g.mask)
+            @test all(p.α .== g.grid[(p.iy .- 1) .* p.N .+ p.ix, 1])
+        end
     end
 end

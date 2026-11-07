@@ -349,3 +349,53 @@ function band_grid(inner::AbstractMatrix, outer::AbstractMatrix; dx::Float64 = 0
     end
     return (grid = grid, mask = mask, N = N)
 end
+
+"""
+    band_points(inner, outer; dx, box) -> (α, β, ix, iy, N)
+
+The nodes of the grid `range(-box, box; length = N)` on each axis (`N = 2 round(box/dx)`)
+that lie in the band between the polygons `inner` and `outer`, the membership of
+[`band_grid`](@ref), enumerated row by row from the crossings of each row with the polygon
+edges, so the cost follows the band's area rather than the grid's: the screen
+coordinates `α`, `β` of the in-band nodes and their column and row indices `ix`, `iy`.
+"""
+function band_points(inner::AbstractMatrix, outer::AbstractMatrix; dx::Float64, box::Float64)
+    N = 2 * cld(round(Int, box / dx), 1)
+    xs = range(-box, box; length = N)
+    h = step(xs)
+    oxs = view(outer, :, 1); oys = view(outer, :, 2)
+    ixs = view(inner, :, 1); iys = view(inner, :, 2)
+    test_inner = size(inner, 1) >= 3
+    α = Float64[]; β = Float64[]; ix = Int[]; iy = Int[]
+    oedges = NTuple{4,Float64}[]; iedges = NTuple{4,Float64}[]
+    cuts = Float64[]
+    inband(x, y) = _winding_on_row(x, y, oedges) && !(test_inner && _winding_on_row(x, y, iedges))
+    for (j, y) in enumerate(xs)
+        _row_edges!(oedges, oxs, oys, y)
+        isempty(oedges) && continue
+        test_inner && _row_edges!(iedges, ixs, iys, y)
+        empty!(cuts)
+        for e in Iterators.flatten((oedges, test_inner ? iedges : NTuple{4,Float64}[]))
+            xi, yi, xj, yj = e
+            push!(cuts, xi + (y - yi) * (xj - xi) / (yj - yi))
+        end
+        sort!(cuts)
+        # membership is constant between consecutive crossings: test one node per run and
+        # every node next to a crossing, where rounding decides
+        k1 = 1
+        for c in Iterators.flatten((cuts, (Inf,)))
+            k2 = isfinite(c) ? clamp(floor(Int, (c + box) / h) + 1, 0, N) : N
+            if k2 >= k1
+                inside_run = k2 - k1 >= 2 ? inband(xs[(k1 + k2) ÷ 2], y) : false
+                for k in k1:k2
+                    edge = k <= k1 + 1 || k >= k2 - 1
+                    if edge ? inband(xs[k], y) : inside_run
+                        push!(α, xs[k]); push!(β, y); push!(ix, k); push!(iy, j)
+                    end
+                end
+            end
+            k1 = max(k1, k2 + 1)
+        end
+    end
+    return (α = α, β = β, ix = ix, iy = iy, N = N)
+end
