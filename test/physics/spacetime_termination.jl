@@ -6,7 +6,8 @@ using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, Boost
                      CircularOrbit, Minkowski, MarchBudget, MarchStep,
                      march_control, march_captured, march_escaped, march_stop, normal_frame_energy,
                      ks_radius_energy, ks_radius, horizon_radius, rk4_step, PlaneParallelCamera,
-                     HORIZON_EPS_SAMPLED, CAPTURE_REDSHIFT, lane, proxy_distance, horizon_floor
+                     HORIZON_EPS_SAMPLED, CAPTURE_REDSHIFT, lane, proxy_distance, horizon_floor,
+                     inverse_metric
 const Decks = Main.Decks
 
 @testset "march termination" begin
@@ -119,5 +120,54 @@ const Decks = Main.Decks
         ncap = count(s -> march_control(st, s[1], Inf, b).stop, states)
         @test ncap > 0
         @test all(length(s) < 6000 for s in states)
+    end
+
+    @testset "a state inside a hole captures, in every lane" begin
+        # where g^{tt} ≥ 0 (or NaN) there is no normal observer: E_n = +Inf in the state's type
+        y = SVector(0.0, 1.2, 0.8, 0.3, 1.0, 0.4, -0.3, 0.2)
+        for gtt in (0.5, 0.0, NaN)
+            gi = SMatrix{4,4}(Diagonal(SVector(gtt, 1.0, 1.0, 1.0)))
+            @test normal_frame_energy(gi, y) === Inf
+            @test march_captured(1.0, normal_frame_energy(gi, y))
+            @test normal_frame_energy(SMatrix{4,4,Float32}(gi), SVector{8,Float32}(y)) === Inf32
+        end
+        gk = inverse_metric(KerrSchildCartesian(0.9), SVector(y[1], y[2], y[3], y[4]))
+        tdot = gk[1, 1] * y[5] + gk[1, 2] * y[6] + gk[1, 3] * y[7] + gk[1, 4] * y[8]
+        @test normal_frame_energy(gk, y) === abs(tdot) / sqrt(-gk[1, 1])     # g^{tt} < 0: the closed form
+
+        # a coarse step (C = 10) of a camera ray on the moving binary lands inside hole 1,
+        # where the superposed g^{tt} = 8.46 > 0
+        orbit = CircularOrbit((0.5, 0.5), 8.0; phase = π / 2 + sqrt(1 / 512) * 1000)
+        mov = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.3), (0.0, 0.0, -0.15)], orbit)
+        yin = SVector(-1039.0093503904188, 3.5587455655486293, -0.8426052903638208, -0.06925534795815685,
+                      -131.94767819471522, -479.0533403055948, 846.9352023004734, -56.446539681903204)
+        xin = SVector(yin[1], yin[2], yin[3], yin[4])
+        @test inverse_metric(mov, xin)[1, 1] > 0 && proxy_distance(mov, xin)[1] < 0
+        b = MarchBudget(10.0, 1100.0, Inf, 10^6)
+        @test normal_frame_energy(mov, yin) === Inf
+        m = march_control(mov, yin, Inf, b)
+        @test m.stop && m.h == proxy_distance(mov, xin)[1] / 10.0 && isfinite(m.R)
+        m32 = march_control(lane(mov, Float32), SVector{8,Float32}(yin), Inf32, lane(b, Float32))
+        @test m32 isa MarchStep{Float32} && m32.stop
+        @test normal_frame_energy(lane(mov, Float32), SVector{8,Float32}(yin)) === Inf32
+
+        # the whole march of that ray ends captured on both lanes, every state finite
+        rays = Decks.camera_rays(mov, PlaneParallelCamera(inc_deg = 60.0, d = 1000.0, fov = 24.0, npix = 32))
+        for T in (Float64, Float32)
+            stT = lane(mov, T)
+            states, _ = Decks.sampled_trace(stT, [SVector{8,T}(rays[656])]; C = 10.0, escape = 1100.0,
+                                            nmax = 10^6)
+            s = states[1]
+            xe = SVector(s[1][1], s[1][2], s[1][3], s[1][4])
+            @test eltype(s) == SVector{8,T} && all(all(isfinite, v) for v in s)
+            @test length(s) < 1000 && !(inverse_metric(stT, xe)[1, 1] < 0)
+            @test march_control(stT, s[1], T(Inf), lane(b, T)).stop
+        end
+
+        # single Kerr: g^{tt} = -(1 + f) < 0 inside the horizon too, so E_n stays finite and d captures
+        st = KerrSchildCartesian(0.9)
+        yk = SVector(0.0, 0.8, 0.3, 0.2, 1.0, 0.4, -0.3, 0.2)
+        r, En = ks_radius_energy(yk, st.a)
+        @test r < st.r_h && isfinite(En) && march_control(st, yk, Inf, b).stop
     end
 end

@@ -61,11 +61,15 @@ All arguments share one type: a `Float64` scalar in a `Float32` march is a
     normal_frame_energy(st, y::RayState)
 
 Photon energy in the local normal (Eulerian) frame, `|g^{tμ} p_μ| / √(-g^{tt})`,
-in units of the camera energy.
+in units of the camera energy. Where `g^{tt} ≥ 0` (or is NaN) there is no normal
+observer, as deep inside a hole of a superposed metric: the energy is `+Inf` in the
+state's number type, the limit `g^{tt} → 0⁻`, so the redshift cut captures there on
+the host and on a device alike, never through the square root of a negative number.
 """
 @inline function normal_frame_energy(gi::SMatrix{4,4}, y::SVector{8})
     tdot = gi[1, 1] * y[5] + gi[1, 2] * y[6] + gi[1, 3] * y[7] + gi[1, 4] * y[8]
-    return abs(tdot) / sqrt(-gi[1, 1])
+    gtt = gi[1, 1]
+    return gtt < zero(gtt) ? abs(tdot) / sqrt(-gtt) : oftype(tdot, Inf)
 end
 @inline normal_frame_energy(st, y::SVector{8}) = normal_frame_energy(inverse_metric(st, position(y)), y)
 
@@ -123,7 +127,8 @@ decision, `Inf` at the first):
   `stop = march_stop(d, E_n, r, r_prev, escape, R_em)`, `h = d / C`, `R = r`;
 - `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`: `d = min_A(r_A - r_h,A)`
   (`-Inf` on a non-finite `r_A`; the moving holes' `r_A` at the ray's time), the
-  same rule on the coordinate radius `R`, `h = d / C`;
+  same rule on the coordinate radius `R`, `h = d / C`; a state where `g^{tt} ≥ 0`
+  (a coarse step into a hole) captures through `E_n = Inf`;
 - `ADMGrid`: `d` is the lapse `1/√(-g^{tt})` minus `alpha_min` (lapse 1 and no
   redshift cut where `g^{tt} ≥ 0`), capture at `d < 0`, `h = max(R, 1)/C` on the
   coordinate radius `R`; a non-finite `R` captures;

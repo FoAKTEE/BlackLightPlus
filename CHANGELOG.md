@@ -23,6 +23,12 @@ While the version is `0.x`, a bump of `x` may break that API.
   the emission-zone culling read it, so `mc_spectrum` runs on binaries.
 - `Matter.decode` returns vacuum where the metric has no normal observer (`g^{tt} ≥ 0`,
   deep inside a hole of a superposed metric) instead of failing on the four-velocity.
+- The fixed-control march on `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`
+  captures a state without a normal observer (`g^{tt} ≥ 0`, as after a coarse step into a
+  hole): `normal_frame_energy` is `+Inf` there, in the lane's number type, so the redshift
+  cut ends the ray on the CPU and on GPUs alike, where the CPU raised a `DomainError` and
+  a GPU captured on a NaN. The adaptive tracer's redshift event reads the same energy. A
+  ray that never reaches such a state is bitwise unchanged.
 - Figure generators under `figures/`: the paper's figures, the dynamic-ray figures and the
   reproductions of the Mahakala, KPolaris and Blacklight papers' figures, each with its
   standing table.
