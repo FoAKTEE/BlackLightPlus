@@ -121,3 +121,16 @@ every scalar converted from the values held in `st`, never recomputed in `T`.
 Grid data is untouched.
 """
 function lane end
+
+"""
+    helical_symmetry(st, omega) -> Bool
+
+Whether the map `t → t + τ`, `(x, y) → R_z(ωτ)(x, y)` (a rotation about `z` by `ωτ`, with
+the spatial components of every tensor rotated alike) carries `st` onto itself for every
+`τ`: the helical Killing vector `∂_t + ω ∂_φ`. A stationary spacetime has it at `ω = 0`;
+`Minkowski` and `KerrSchildCartesian` (spin along `z`) at every `ω`; a
+`BoostedSuperposedKerrSchild` on a `CircularOrbit` at the orbit's frequency when every
+spin lies along `z`. Every other case answers `false`.
+"""
+helical_symmetry(st::Spacetime, omega::Real) = false
+helical_symmetry(st::StationarySpacetime, omega::Real) = iszero(omega)

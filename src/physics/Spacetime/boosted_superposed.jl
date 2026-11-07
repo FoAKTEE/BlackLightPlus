@@ -155,3 +155,9 @@ end
     _superposed_raise(_hole_terms(st, x), p)
 @inline raise_and_norm(st::BoostedSuperposedKerrSchild, x::SVector{4}, p::SVector{4}) =
     _superposed_raise_and_norm(_hole_terms(st, x), p)
+
+# A circular orbit advances by a rotation about z; the superposition is covariant under
+# rotations when every spin lies along z.
+helical_symmetry(st::BoostedSuperposedKerrSchild, omega::Real) =
+    st.trajectory isa CircularOrbit && omega == st.trajectory.omega &&
+    all(a -> a[1] == 0 && a[2] == 0, st.spin)

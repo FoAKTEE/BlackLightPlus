@@ -2,7 +2,8 @@
 # superposition; a hole in uniform motion keeps a null covector, is vacuum, and is the
 # rest-frame Kerr metric carried by the boost; its time derivative is -v·∇g; the circular
 # orbit's velocities are the derivatives of its positions; rays are captured by a moving
-# hole at the hole's position at the time of passage, and the march stops there.
+# hole at the hole's position at the time of passage, and the march stops there; the orbit
+# is a helical symmetry, g(R x, t + τ) = R g(x, t) Rᵀ, at its own frequency.
 using Test, BlackLightPlus, StaticArrays, LinearAlgebra
 import ForwardDiff
 using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, BoostedSuperposedKerrSchild,
@@ -10,7 +11,7 @@ using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, Boost
                      metric_and_inverse, lower_index, raise_index, raise_and_norm,
                      inverse_metric_gradient, christoffel, geodesic_rhs, geodesic_transport_rhs,
                      nullify_covariant, null_error, trace_geodesic, ks_radius, horizon_radius, lane,
-                     MarchBudget, march_control
+                     MarchBudget, march_control, helical_symmetry, Minkowski
 
 at_rest(centers) = t -> ntuple(A -> (SVector{3,Float64}(centers[A]...), zero(SVector{3,Float64})),
                                length(centers))
@@ -159,6 +160,25 @@ end
         # a Dual position keeps its partials through the trajectory, the time column included
         dg = ForwardDiff.jacobian(xx -> vec(metric(st64, xx)), SVector{4,Float64}(x32))
         @test size(dg) == (16, 4) && all(isfinite, dg) && any(!=(0), dg[:, 1])
+    end
+
+    @testset "helical symmetry of the orbit" begin
+        o = CircularOrbit((0.5, 0.5), 9.0; phase = 0.4)
+        st = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.3), (0.0, 0.0, -0.2)], o)
+        @test helical_symmetry(st, o.omega) && !helical_symmetry(st, 1.1 * o.omega)
+        @test !helical_symmetry(BoostedSuperposedKerrSchild([0.5, 0.5], [(0.1, 0.0, 0.0), (0.0, 0.0, 0.0)], o),
+                                o.omega)
+        @test helical_symmetry(KerrSchildCartesian(0.9), 0.37) && helical_symmetry(Minkowski(), -2.0)
+        @test helical_symmetry(SuperposedKerrSchild([0.5, 0.5], [0.0, 0.0], [(4.0, 0.0, 0.0), (-4.0, 0.0, 0.0)]), 0.0)
+        @test !helical_symmetry(SuperposedKerrSchild([0.5, 0.5], [0.0, 0.0], [(4.0, 0.0, 0.0), (-4.0, 0.0, 0.0)]), 0.1)
+        L4(R) = SMatrix{4,4}(1.0, 0, 0, 0, 0, R[1, 1], R[2, 1], 0, 0, R[1, 2], R[2, 2], 0, 0, 0, 0, 1.0)
+        for (x, τ) in ((SVector(3.0, 7.0, -2.0, 1.5), 40.0), (SVector(-11.0, 1.0, 12.0, -3.0), -333.0))
+            θ = o.omega * τ
+            R = @SMatrix [cos(θ) -sin(θ); sin(θ) cos(θ)]
+            xr = SVector(x[1] + τ, R[1, 1] * x[2] + R[1, 2] * x[3], R[2, 1] * x[2] + R[2, 2] * x[3], x[4])
+            Λ = L4(R)
+            @test metric(st, xr) ≈ Λ * metric(st, x) * Λ' atol = 1e-13
+        end
     end
 
     @testset "rays captured by a moving hole, escape, and the march" begin

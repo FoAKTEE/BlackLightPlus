@@ -115,3 +115,7 @@ lane(::Minkowski, ::Type{T}) where {T} = Minkowski{T}()
 @inline lower_index(::Minkowski, x::SVector{4}, v::SVector{4}) = _eta_apply(v)
 @inline raise_index(::Minkowski, x::SVector{4}, p::SVector{4}) = _eta_apply(p)
 @inline raise_index_offset(::Minkowski, x::SVector{4}, p::SVector{4}) = zero(p)
+
+# Stationary and axisymmetric about z: every rotation rate is a helical symmetry.
+helical_symmetry(::KerrSchildCartesian, omega::Real) = true
+helical_symmetry(::Minkowski, omega::Real) = true
