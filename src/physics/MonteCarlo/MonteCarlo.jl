@@ -34,7 +34,8 @@ export Superphoton, photon_position, photon_momentum, photon_weight, photon_ener
 # emissivity
 export j_nu, alpha_nu, jmax, int_jnu_simpson, N_ZONE_THETA, EmissivityTable, build_emissivity_table,
        EMISSIVITY_TABLE, F_TABLE_THETA, F_TABLE_KMIN, F_TABLE_KMID, F_TABLE_KMAX, F_TABLE_DL1,
-       F_TABLE_DL2, synchrotron_F, int_jnu, int_jnu_zone, emission_tetrad, SMALL_VECTOR
+       F_TABLE_DL2, synchrotron_F, int_jnu, int_jnu_zone, emission_tetrad, SMALL_VECTOR,
+       TETRAD_MIN_RESIDUAL
 # hot cross section
 export MINW, MAXW, MINT, MAXT, NW, NT, DMUE, DGAMMAE, MAXGAMMA, N_MUE, N_GAMMAE,
        kn_total, boostcross, juttner_norm, dNdgamma_e, total_compton_cross_num, HotcrossTable,

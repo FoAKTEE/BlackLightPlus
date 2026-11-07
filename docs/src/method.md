@@ -711,7 +711,10 @@ $\sim4\times$ in rays over a uniform image at the finest pixel.
 
 The Monte Carlo module implements the grmonty scheme [Dolence2009](@citep):
 superphoton packets sample the synchrotron emissivity zone-by-zone with
-frequency and pitch-angle rejection sampling and a log-frequency weight table;
+frequency and pitch-angle rejection sampling and a log-frequency weight table, in an emission
+tetrad whose first spatial vector is the field and whose other two come from the coordinate axes by
+Gram–Schmidt, an axis nearly parallel to the vectors before it giving way to the best-conditioned
+one (a field along $x^3$ would otherwise leave no direction for the last vector);
 packets carry covariant momentum and decay by Kirchhoff absorption along
 geodesics. Compton scattering uses the thermally averaged ("hot") Klein–Nishina
 cross section tabulated on a log-log $(\varepsilon,\Theta_e)$ grid, scattering

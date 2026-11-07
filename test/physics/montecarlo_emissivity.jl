@@ -2,15 +2,16 @@
 # emissivity times ν², jmax envelopes the pitch-angle distribution, the angle integral
 # F(K) of the table matches the Simpson rule over its whole range and through it the zone
 # integral matches independent quadratures, the emission tetrad is orthonormal with
-# e₍₀₎ = u and e₍₁₎ along b, and the weight interpolant clamps to the last node at the
-# band top.
+# e₍₀₎ = u and e₍₁₎ along b, for a field along any coordinate axis too, and the weight
+# interpolant clamps to the last node at the band top.
 using Test, BlackLightPlus
 using StaticArrays
-using LinearAlgebra: dot
+using LinearAlgebra: dot, Diagonal
+using BlackLightPlus.Spacetime: KerrSchildCartesian, metric_and_inverse
 using BlackLightPlus.Transfer: thermal_synchrotron
 using BlackLightPlus.MonteCarlo: j_nu, alpha_nu, jmax, int_jnu_zone, int_jnu, int_jnu_simpson,
                       EMISSIVITY_TABLE, build_emissivity_table, synchrotron_F, F_TABLE_KMIN,
-                      F_TABLE_KMAX, F_TABLE_THETA, emission_tetrad, SMALL_VECTOR, weight_at,
+                      F_TABLE_KMAX, F_TABLE_THETA, emission_tetrad, SMALL_VECTOR, TETRAD_MIN_RESIDUAL, weight_at,
                       table_zone
 using BlackLightPlus.Numerics: EE, ME, CL, SQRT2
 using BlackLightPlus.Data: build_weight_table
@@ -120,6 +121,24 @@ end
                              SVector(0.0, 0.0, 0.0, 0.0), g, g)
         @test SVector(Ez[2, 1], Ez[2, 2], Ez[2, 3], Ez[2, 4]) == SVector(0.0, 1.0, 0.0, 0.0)
         @test SMALL_VECTOR == 1.0e-30
+        # a field along any coordinate axis, at rest and in a moving fluid on Kerr: the frame
+        # stays orthonormal (along x³ the x³ residual vanishes and another axis takes its place)
+        st = KerrSchildCartesian(0.9)
+        x = SVector(0.0, 5.0, -2.0, 1.5)
+        gk, _ = metric_and_inverse(st, x)
+        for v in (SVector(0.0, 0.0, 0.0), SVector(0.0, 0.3, 0.0), SVector(0.2, -0.1, 0.05))
+            u = SVector(1.0, v...)
+            u = u / sqrt(-dot(u, gk * u))
+            for b in (SVector(1.0, 0.0, 0.0), SVector(0.0, 1.0, 0.0), SVector(0.0, 0.0, 1.0),
+                      SVector(0.0, 1.0e-9, 1.0))
+                bc = SVector(0.0, b...)
+                bc = bc + dot(bc, gk * u) * u                    # b·u = 0
+                Ek = emission_tetrad(u, gk * u, bc, gk, gk)
+                @test all(isfinite, Ek)
+                @test maximum(abs.(Ek * gk * Ek' - Diagonal(SVector(-1.0, 1.0, 1.0, 1.0)))) < 1e-12
+            end
+        end
+        @test TETRAD_MIN_RESIDUAL == 1.0e-2
     end
 
     @testset "weight_at clamps to the last node at the band top" begin

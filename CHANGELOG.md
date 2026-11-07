@@ -45,6 +45,14 @@ While the version is `0.x`, a bump of `x` may break that API.
   without the factor, the one-step expectation at the biases of later generations, and
   the escaped power of every order of a sphere of Thomson depth 0.2 equal with and
   without the factor, absorption off and on.
+- The Monte Carlo emission tetrad stays orthonormal for a magnetic field along any coordinate
+  axis. Its last two vectors came from Gram–Schmidt on the x² and x³ axes; with the field along
+  x³ the x³ residual vanished, and the frame was NaN for a fluid at rest and non-orthonormal (error
+  of order one) for a moving fluid, so those zones emitted photons that were dropped or not null.
+  An axis whose residual keeps less than `TETRAD_MIN_RESIDUAL` of its squared norm now gives way
+  to the best-conditioned axis; every other zone keeps its frame bit for bit. Synthetic plasmas with
+  a purely vertical field (96 % of the zones of the tests' torus deck with a vertical field)
+  were affected; GRMHD fields meet the threshold only within a few degrees of the axis.
 - `mc_spectrum(plan, Ns; window = (t_a, t_b))` runs the Monte Carlo over an emission
   window: every superphoton is emitted at its own coordinate time, reads plasma and metric
   at its own time along the march, and is binned by its arrival time `t − n̂·x` at a

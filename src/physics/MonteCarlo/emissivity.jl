@@ -239,8 +239,11 @@ const SMALL_VECTOR = 1.0e-30
 The orthonormal emission tetrad, row `a` holding `e_(a)^μ`: `e_(0) = u`, `e_(1)` along
 the field `b` projected orthogonal to `u` (the pitch-angle axis), and `e_(2)`, `e_(3)`
 by Gram–Schmidt on the x² and x³ directions under the metric `gcov`. A field of metric
-norm at most `SMALL_VECTOR` is replaced by the x¹ direction. `ucov` and `gcon` are not
-read. Not the imaging tetrad, whose `e_(3)` is along the photon.
+norm at most `SMALL_VECTOR` is replaced by the x¹ direction. Where the part of x² (x³)
+orthogonal to the vectors before it has less than `TETRAD_MIN_RESIDUAL` of the axis's
+squared norm, as for a field along x³, the coordinate axis with the largest such part
+takes its place, so the frame stays orthonormal to rounding for any field. `ucov` and
+`gcon` are not read. Not the imaging tetrad, whose `e_(3)` is along the photon.
 """
 @inline function emission_tetrad(ucon::SVector{4}, ucov::SVector{4},
                                  bcon::SVector{4}, gcov::SMatrix{4,4},
@@ -252,12 +255,10 @@ read. Not the imaging tetrad, whose `e_(3)` is along the photon.
     e1u = project_out(trial, e0, gcov)
     e1 = e1u ./ sqrt(abs(dot(e1u, gcov * e1u)))
 
-    t2 = SVector(0.0, 0.0, 1.0, 0.0)
-    e2u = project_out(project_out(t2, e0, gcov), e1, gcov)
+    e2u = frame_axis(3, gcov, e0, e1)
     e2 = e2u ./ sqrt(abs(dot(e2u, gcov * e2u)))
 
-    t3 = SVector(0.0, 0.0, 0.0, 1.0)
-    e3u = project_out(project_out(project_out(t3, e0, gcov), e1, gcov), e2, gcov)
+    e3u = frame_axis(4, gcov, e0, e1, e2)
     e3 = e3u ./ sqrt(abs(dot(e3u, gcov * e3u)))
 
     return @inbounds SMatrix{4,4}(
@@ -271,4 +272,32 @@ end
 @inline function project_out(a::SVector{4}, b::SVector{4}, gcov::SMatrix{4,4})
     gb = gcov * b
     return a .- b .* (dot(a, gb) / dot(b, gb))
+end
+
+"Least squared norm, relative to the axis's own, of the part of a coordinate axis orthogonal to the emission tetrad's earlier vectors that `emission_tetrad` accepts before it takes the best-conditioned axis instead."
+const TETRAD_MIN_RESIDUAL = 1.0e-2
+
+# The coordinate axis `i` (index 2:4 of x^μ) with the frame vectors `es` projected out, in order.
+@inline function axis_residual(i::Int, gcov::SMatrix{4,4}, es...)
+    a = SVector(i == 1 ? 1.0 : 0.0, i == 2 ? 1.0 : 0.0, i == 3 ? 1.0 : 0.0, i == 4 ? 1.0 : 0.0)
+    for e in es
+        a = project_out(a, e, gcov)
+    end
+    return a
+end
+
+# The unnormalized next tetrad vector after the frame `es`: the residual of the axis `i`,
+# unless it keeps less than TETRAD_MIN_RESIDUAL of the axis's squared norm; then the residual
+# of the spatial axis with the largest squared norm relative to its own.
+@inline function frame_axis(i::Int, gcov::SMatrix{4,4}, es...)
+    r = axis_residual(i, gcov, es...)
+    q(v, k) = dot(v, gcov * v) / gcov[k, k]
+    q(r, i) >= TETRAD_MIN_RESIDUAL && return r
+    best = r; qb = q(r, i)
+    for k in 2:4
+        v = axis_residual(k, gcov, es...)
+        qv = q(v, k)
+        qv > qb && (best = v; qb = qv)
+    end
+    return best
 end
