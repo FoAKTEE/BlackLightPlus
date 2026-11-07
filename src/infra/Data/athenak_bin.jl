@@ -1,8 +1,9 @@
-# AthenaK `.bin` dumps: the reader, a trilinear sampler of single variables, the Z4c to
-# ADM conversion resampled onto an `ADMGrid`, and the GRMHD-fluid adapter to an
-# `AthenaKSnapshot`. Z4c to ADM (AthenaK `z4c/z4c_adm.cpp` `Z4cToADM`,
-# `chi_psi_power = -4`): `γ_ij = g̃_ij / χ` (ψ⁴ = χ^(4/chi_psi_power) = 1/χ, χ floored at
-# 1e-12), `α = z4c_alpha`, `β^i = z4c_beta{x,y,z}`. AthenaK: Stone et al. (2024).
+# AthenaK `.bin` dumps: the reader, a trilinear sampler of its columns in each block
+# extended by a ghost layer, the Z4c to ADM conversion resampled onto an `ADMGrid`, and
+# the GRMHD-fluid adapter to an `AthenaKSnapshot`. Z4c to ADM (AthenaK
+# `z4c/z4c_adm.cpp` `Z4cToADM`, `chi_psi_power = -4`): `γ_ij = g̃_ij / χ`
+# (ψ⁴ = χ^(4/chi_psi_power) = 1/χ, χ floored at 1e-12), `α = z4c_alpha`,
+# `β^i = z4c_beta{x,y,z}`. AthenaK: Stone et al. (2024).
 
 """
     AthenaKBin
@@ -123,8 +124,42 @@ function _locate_block(s::AthenaKBin, x, y, z)
     return hit
 end
 
+"""
+    BinColumns{F}(s::AthenaKBin, cols::NTuple{F,Int})
+
+The columns `cols` of the dump `s` as a block mesh of the ghost-cell machinery
+([`mesh_value`](@ref), [`ghost_value`](@ref)): block `m` has `nx1 × nx2 × nx3` cells of
+widths `(x1max − x1min)/nx1, …`, the first centred half a width above the low face; a
+cell's value is the `F` columns there in `Float64`; a point belongs to the finest block
+whose closed face box contains it (the first in storage order among equals).
+"""
+struct BinColumns{F}
+    s::AthenaKBin
+    cols::NTuple{F,Int}
+end
+
+_cells(b::BinColumns) = SVector(b.s.nx1, b.s.nx2, b.s.nx3)
+_width(b::BinColumns, m) = (s = b.s; SVector((s.x1max[m] - s.x1min[m]) / s.nx1,
+                                             (s.x2max[m] - s.x2min[m]) / s.nx2,
+                                             (s.x3max[m] - s.x3min[m]) / s.nx3))
+_low(b::BinColumns, m) = SVector(b.s.x1min[m], b.s.x2min[m], b.s.x3min[m])
+_left(b::BinColumns, m) = _low(b, m) + _width(b, m) / 2
+@inline function _cell_value(b::BinColumns{F}, m, c) where {F}
+    d = b.s.data
+    i, j, k = c[1], c[2], c[3]
+    return SVector{F,Float64}(ntuple(f -> Float64(@inbounds d[i, j, k, b.cols[f], m]), Val(F)))
+end
+_value_type(::BinColumns{F}) where {F} = SVector{F,Float64}
+locate(b::BinColumns, x, y, z) = _locate_block(b.s, x, y, z)
+function MeshBox(b::BinColumns)
+    s = b.s
+    return MeshBox(SVector(minimum(s.x1min), minimum(s.x2min), minimum(s.x3min)),
+                   SVector(maximum(s.x1max), maximum(s.x2max), maximum(s.x3max)))
+end
+
 # Trilinear stencil at one point, shared by every variable read there: owning block `b`
-# (0 off the mesh), 1-based lower corner and blend fractions.
+# (0 off the mesh), lower corner in `0:nx` (`0` and `nx + 1` are the ghost layer) and
+# blend fractions.
 struct _BinStencil
     b::Int
     i0::Int; j0::Int; k0::Int
@@ -140,18 +175,18 @@ end
     fi = (x - s.x1min[b]) / dx1 - 0.5 + 1
     fj = (y - s.x2min[b]) / dx2 - 0.5 + 1
     fk = (z - s.x3min[b]) / dx3 - 0.5 + 1
-    i0 = clamp(floor(Int, fi), 1, s.nx1 - 1); ti = clamp(fi - i0, 0.0, 1.0)
-    j0 = clamp(floor(Int, fj), 1, s.nx2 - 1); tj = clamp(fj - j0, 0.0, 1.0)
-    k0 = clamp(floor(Int, fk), 1, s.nx3 - 1); tk = clamp(fk - k0, 0.0, 1.0)
+    i0 = clamp(floor(Int, fi), 0, s.nx1); ti = clamp(fi - i0, 0.0, 1.0)
+    j0 = clamp(floor(Int, fj), 0, s.nx2); tj = clamp(fj - j0, 0.0, 1.0)
+    k0 = clamp(floor(Int, fk), 0, s.nx3); tk = clamp(fk - k0, 0.0, 1.0)
     return _BinStencil(b, i0, j0, k0, ti, tj, tk)
 end
 
-# The blend is `a (1 - t) + b t` per axis, i, then j, then k.
-@inline function _sample_stencil(s::AthenaKBin, st::_BinStencil, v::Int)
+# The columns of `cols` blended over the stencil `st` in its block extended by the ghost
+# layer: `a (1 - t) + b t` per axis, i, then j, then k.
+@inline function _sample_stencil(cols::BinColumns, box::MeshBox, st::_BinStencil)
     b = st.b; i0 = st.i0; j0 = st.j0; k0 = st.k0
     ti = st.ti; tj = st.tj; tk = st.tk
-    d = s.data
-    @inline g(i, j, k) = Float64(d[i, j, k, v, b])
+    @inline g(i, j, k) = ghost_value(cols, box, b, SVector(i, j, k))
     c00 = g(i0, j0, k0) * (1 - ti) + g(i0 + 1, j0, k0) * ti
     c10 = g(i0, j0 + 1, k0) * (1 - ti) + g(i0 + 1, j0 + 1, k0) * ti
     c01 = g(i0, j0, k0 + 1) * (1 - ti) + g(i0 + 1, j0, k0 + 1) * ti
@@ -166,26 +201,34 @@ end
 
 Trilinear sample of variable column `v` (1-based) at `(x, y, z)`, or `NaN` off the
 mesh. The owning block is the finest whose closed face box contains the point (the
-first in storage order among equals); cell centres sit at `x1min + (i - ½) dx1`, the
-lower corner is clamped to `1:nx-1` and the fraction to `[0, 1]`, and each axis blends
-as `a (1 - t) + b t`.
+first in storage order among equals), extended by one ghost layer: cell centres sit at
+`x1min + (i - ½) dx1` for `i = 0 … nx1 + 1`, a ghost holds [`ghost_value`](@ref) of
+`BinColumns(s, (v,))` (the field of the mesh about its centre: a copy at the same level,
+restriction from a finer block, limited prolongation from a coarser one, linear
+extrapolation outside the mesh), the lower corner is clamped to `0:nx` and the fraction
+to `[0, 1]`, and each axis blends as `a (1 - t) + b t`. Between the outermost cell centre
+and the block face the sample blends the outermost cell with the ghost beyond the face,
+so it is continuous across faces between blocks of one level; elsewhere the stencil
+reads interior cells only.
 """
 function sample_var(s::AthenaKBin, v::Int, x, y, z)
     st = _point_stencil(s, x, y, z)
     st.b == 0 && return NaN
-    return _sample_stencil(s, st, v)
+    cols = BinColumns(s, (v,))
+    return _sample_stencil(cols, MeshBox(cols), st)[1]
 end
 
 const _Z4C_CHI_PSI_POWER = -4.0
 const _CHI_FLOOR = 1.0e-12
 
-# Columns of the eleven Z4c variables of the ADM reconstruction.
+# The eleven Z4c variables of the ADM reconstruction, in the order χ, g̃_xx, g̃_xy, g̃_xz,
+# g̃_yy, g̃_yz, g̃_zz, α, β^x, β^y, β^z, as columns of the dump.
+const _Z4C_VARS = ("z4c_chi", "z4c_gxx", "z4c_gxy", "z4c_gxz", "z4c_gyy", "z4c_gyz",
+                   "z4c_gzz", "z4c_alpha", "z4c_betax", "z4c_betay", "z4c_betaz")
+
 function _z4c_cols(s::AthenaKBin)
     idx(n) = (i = _varidx(s, n); i === nothing && error("missing z4c var $n"); i)
-    return (chi = idx("z4c_chi"), gxx = idx("z4c_gxx"), gxy = idx("z4c_gxy"),
-            gxz = idx("z4c_gxz"), gyy = idx("z4c_gyy"), gyz = idx("z4c_gyz"),
-            gzz = idx("z4c_gzz"), alpha = idx("z4c_alpha"), betax = idx("z4c_betax"),
-            betay = idx("z4c_betay"), betaz = idx("z4c_betaz"))
+    return BinColumns(s, map(idx, _Z4C_VARS))
 end
 
 """
@@ -194,46 +237,44 @@ end
 The ADM fields of a Z4c dump resampled onto the uniform `n³` node box `[-half, half]³`
 (`range(-half, half; length = n)` per axis) as an `ADMGrid` with capture lapse
 `alpha_min`. Each node locates its block once and samples the eleven variables with
-[`sample_var`](@ref)'s stencil: `α`, `β^i` directly, `γ_ij = ψ⁴ g̃_ij` with
+[`sample_var`](@ref)'s stencil, ghost layer included (so the nodes are continuous across
+block faces): `α`, `β^i` directly, `γ_ij = ψ⁴ g̃_ij` with
 `ψ⁴ = max(χ, 1e-12)^(4/(-4))`. Nodes off the mesh, or where `χ` is `NaN`, get Minkowski
 values (`α = 1`, `β = 0`, `γ = δ`). Threaded over `z` slabs.
 """
 function resample_z4c_adm(s::AthenaKBin, half::Float64, n::Int; alpha_min::Real = 0.15)
-    c = _z4c_cols(s)
+    cols = _z4c_cols(s)
+    box = MeshBox(cols)
     axis = range(-half, half; length = n)
     data = Array{Float64,4}(undef, 10, n, n, n)
     Threads.@threads for k in 1:n
         for j in 1:n, i in 1:n
-            _adm_node!(data, s, c, axis, i, j, k)
+            _adm_node!(data, cols, box, axis, i, j, k)
         end
     end
     return ADMGrid(axis, axis, axis, data; alpha_min = alpha_min)
 end
 
 # The ten ADM values (α, β^x, β^y, β^z, γ_xx, γ_xy, γ_xz, γ_yy, γ_yz, γ_zz) at node
-# (axis[i], axis[j], axis[k]).
-function _adm_node!(data, s, c, axis, i, j, k)
-    st = _point_stencil(s, axis[i], axis[j], axis[k])
-    chi = st.b == 0 ? NaN : _sample_stencil(s, st, c.chi)
-    if isnan(chi)
+# (axis[i], axis[j], axis[k]) from the eleven columns `cols` (order of `_Z4C_VARS`).
+function _adm_node!(data, cols, box, axis, i, j, k)
+    st = _point_stencil(cols.s, axis[i], axis[j], axis[k])
+    z = st.b == 0 ? nothing : _sample_stencil(cols, box, st)
+    if z === nothing || isnan(z[1])
         data[1, i, j, k] = 1.0
         data[2, i, j, k] = data[3, i, j, k] = data[4, i, j, k] = 0.0
         data[5, i, j, k] = data[8, i, j, k] = data[10, i, j, k] = 1.0
         data[6, i, j, k] = data[7, i, j, k] = data[9, i, j, k] = 0.0
         return nothing
     end
-    chi = max(chi, _CHI_FLOOR)
-    psi4 = chi^(4.0 / _Z4C_CHI_PSI_POWER)
-    data[1, i, j, k] = _sample_stencil(s, st, c.alpha)
-    data[2, i, j, k] = _sample_stencil(s, st, c.betax)
-    data[3, i, j, k] = _sample_stencil(s, st, c.betay)
-    data[4, i, j, k] = _sample_stencil(s, st, c.betaz)
-    data[5, i, j, k] = psi4 * _sample_stencil(s, st, c.gxx)
-    data[6, i, j, k] = psi4 * _sample_stencil(s, st, c.gxy)
-    data[7, i, j, k] = psi4 * _sample_stencil(s, st, c.gxz)
-    data[8, i, j, k] = psi4 * _sample_stencil(s, st, c.gyy)
-    data[9, i, j, k] = psi4 * _sample_stencil(s, st, c.gyz)
-    data[10, i, j, k] = psi4 * _sample_stencil(s, st, c.gzz)
+    psi4 = max(z[1], _CHI_FLOOR)^(4.0 / _Z4C_CHI_PSI_POWER)
+    data[1, i, j, k] = z[8]
+    data[2, i, j, k] = z[9]
+    data[3, i, j, k] = z[10]
+    data[4, i, j, k] = z[11]
+    for q in 1:6
+        data[4 + q, i, j, k] = psi4 * z[1 + q]
+    end
     return nothing
 end
 

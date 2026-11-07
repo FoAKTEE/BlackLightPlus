@@ -1,13 +1,16 @@
-# The ghost layer of every meshblock, built once from the mesh at load time. The ghost at
-# centre `p` of a block whose cells have widths `h` takes the field of the mesh on the
-# cell of widths `h` about `p` (`mesh_value`): a copy where a block of the same level
-# covers `p`, the mean of the finer cells inside the ghost cell where a finer block does
-# (restriction), the minmod-limited piecewise-linear prolongation of the coarse cell that
-# contains `p` where a coarser block does (AthenaK `ProlongCC`), and the one-sided linear
-# extrapolation along each axis on which `p` lies outside the mesh. A ghost value depends
-# on `p` and `h` alone, never on the block that asks, so blocks of one level that share a
-# face see the same nodes along it. The method page states the scheme and its order.
-# AthenaK: Stone et al. (2024), ApJS 271, 9.
+# The ghost layer of every meshblock. The ghost at centre `p` of a block whose cells have
+# widths `h` takes the field of the mesh on the cell of widths `h` about `p`
+# (`mesh_value`): a copy where a block of the same level covers `p`, the mean of the finer
+# cells inside the ghost cell where a finer block does (restriction), the minmod-limited
+# piecewise-linear prolongation of the coarse cell that contains `p` where a coarser block
+# does (AthenaK `ProlongCC`), and the one-sided linear extrapolation along each axis on
+# which `p` lies outside the mesh. A ghost value depends on `p` and `h` alone, never on
+# the block that asks, so blocks of one level that share a face see the same nodes along
+# it. Two meshes are read: the fluid blocks, whose layers are stored once at load time
+# (`fill_ghosts!`), and columns of a `.bin` dump (`BinColumns`, athenak_bin.jl), whose
+# ghosts are evaluated where a stencil needs them. A mesh provides `_cells`, `_width`,
+# `_low`, `_left`, `_cell_value`, `_value_type`, `MeshBox` and `locate`. The method page
+# states the scheme and its order. AthenaK: Stone et al. (2024), ApJS 271, 9.
 
 # Relative tolerance of a cell-width comparison (widths of one level agree to rounding).
 const _WIDTH_RTOL = 1.0e-6
@@ -29,24 +32,28 @@ end
 MeshBox(b::FluidBlocks) = (bb = _bounding_box(b.lo, b.hi, b.nmb);
                            MeshBox(SVector(bb[1], bb[2], bb[3]), SVector(bb[4], bb[5], bb[6])))
 
+# Cells per block, cell widths, low face and first cell centre of block `m`, the value of
+# interior cell `c` and its type.
 _cells(b::FluidBlocks) = SVector(b.ni, b.nj, b.nk)
 _width(b::FluidBlocks, m) = SVector(b.dx[1, m], b.dx[2, m], b.dx[3, m])
+_low(b::FluidBlocks, m) = SVector(b.lo[1, m], b.lo[2, m], b.lo[3, m])
 _left(b::FluidBlocks, m) = SVector(b.x_left[1, m], b.x_left[2, m], b.x_left[3, m])
+_cell_value(b::FluidBlocks, m, c) = corner(b, c[1], c[2], c[3], m)
+_value_type(::FluidBlocks) = SVector{8,Float64}
 
 # The interior cell of block `m` that contains `p` (1-based, clamped to the block).
-function _containing_cell(b::FluidBlocks, m, p)
+function _containing_cell(b, m, p)
     n = _cells(b)
-    return SVector(ntuple(a -> clamp(floor(Int, (p[a] - b.lo[a, m]) / b.dx[a, m]) + 1, 1, n[a]),
-                          Val(3)))
+    lo = _low(b, m)
+    H = _width(b, m)
+    return SVector(ntuple(a -> clamp(floor(Int, (p[a] - lo[a]) / H[a]) + 1, 1, n[a]), Val(3)))
 end
 
-_cell_value(b::FluidBlocks, m, c) = corner(b, c[1], c[2], c[3], m)
-
 """
-    mesh_value(b::FluidBlocks, box::MeshBox, p, h; depth = 0)
-        -> Union{SVector{8,Float64}, Nothing}
+    mesh_value(b, box::MeshBox, p, h; depth = 0) -> Union{SVector{F,Float64}, Nothing}
 
-The eight primitives of the mesh `b` on the cell of widths `h` centred at `p` (the
+The field of the mesh `b` (a [`FluidBlocks`](@ref), its eight primitives, or a
+[`BinColumns`](@ref), its `F` columns) on the cell of widths `h` centred at `p` (the
 interior cells of every block are read; ghost layers never are), or `nothing` where no
 block covers `p` inside `box` (a mesh with a hole). With `m` the block that covers `p`
 and `H` its cell widths:
@@ -66,8 +73,8 @@ and `H` its cell widths:
   `r = H_a/h_a`;
 - otherwise, or past a recursion depth of 16: `u_c`.
 """
-function mesh_value(b::FluidBlocks, box::MeshBox, p::SVector{3,Float64},
-                    h::SVector{3,Float64}; depth::Int = 0)
+function mesh_value(b, box::MeshBox, p::SVector{3,Float64}, h::SVector{3,Float64};
+                    depth::Int = 0)
     for a in 1:3
         s = p[a] > box.hi[a] ? 1 : p[a] < box.lo[a] ? -1 : 0
         s == 0 && continue
@@ -98,7 +105,7 @@ end
 # Restriction: the mean of the children of the cell (h, p) along the `finer` axes.
 function _restrict(b, box, p, h, finer, depth)
     hc = SVector(ntuple(a -> finer[a] ? h[a] / 2 : h[a], Val(3)))
-    acc = zero(SVector{8,Float64})
+    acc = zero(_value_type(b))
     n = 0
     for o3 in (finer[3] ? (-1, 1) : (0,)), o2 in (finer[2] ? (-1, 1) : (0,)),
         o1 in (finer[1] ? (-1, 1) : (0,))
@@ -155,25 +162,34 @@ function _neighbour_value(b, box, m, c, a, s, q, H, depth)
 end
 
 """
+    ghost_value(b, box::MeshBox, m, c) -> SVector{F,Float64}
+
+The value of cell `c = (i, j, k)` of block `m` of the mesh `b` extended by one ghost layer
+(`0 ≤ i ≤ n + 1` per axis): the interior cell where `1 ≤ c ≤ n` on every axis, else
+[`mesh_value`](@ref) at the ghost centre `x_left + (c − 1) h` with the block's widths `h`,
+the nearest interior cell of `m` where that is `nothing` (a hole in the mesh).
+"""
+function ghost_value(b, box::MeshBox, m::Integer, c::SVector{3,Int})
+    n = _cells(b)
+    all(a -> 1 <= c[a] <= n[a], 1:3) && return _cell_value(b, m, c)
+    h = _width(b, m)
+    v = mesh_value(b, box, _left(b, m) + (c .- 1) .* h, h)
+    return v === nothing ? _cell_value(b, m, clamp.(c, 1, n)) : v
+end
+
+"""
     fill_ghosts!(b::FluidBlocks, box::MeshBox, m) -> b
 
 Write the ghost layer of block `m` of `b` (the cells with an index `0` or `n + 1` on some
-axis of `b.data`) from [`mesh_value`](@ref) at each ghost centre `x_left + (i − 1) dx`
-with the block's widths `dx`, rounded once to `Float32`; where `mesh_value` is `nothing`
-(a hole in the mesh) the nearest interior cell of `m` is held. Reads only interior cells,
-so the blocks may be filled concurrently.
+axis of `b.data`) from [`ghost_value`](@ref), rounded once to `Float32`. Reads only
+interior cells, so the blocks may be filled concurrently.
 """
 function fill_ghosts!(b::FluidBlocks, box::MeshBox, m::Integer)
     n = _cells(b)
-    h = _width(b, m)
-    xl = _left(b, m)
     data = b.data
     for k in 0:(n[3] + 1), j in 0:(n[2] + 1), i in 0:(n[1] + 1)
         (1 <= i <= n[1] && 1 <= j <= n[2] && 1 <= k <= n[3]) && continue
-        p = xl + SVector(i - 1, j - 1, k - 1) .* h
-        v = mesh_value(b, box, p, h)
-        v === nothing && (v = _cell_value(b, m, SVector(clamp(i, 1, n[1]), clamp(j, 1, n[2]),
-                                                          clamp(k, 1, n[3]))))
+        v = ghost_value(b, box, m, SVector(i, j, k))
         @inbounds for f in 1:8
             data[f, i + 1, j + 1, k + 1, m] = Float32(v[f])
         end

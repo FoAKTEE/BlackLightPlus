@@ -88,9 +88,10 @@ metric never needs hand-coded derivatives.
   v1.1 `.bin` AMR dumps, as written by its numerical-relativity solver
   [Zhu2025](@citep); `resample_z4c_adm` / `z4c_grid_spacetime` map the
   conformal Z4c variables to physical ADM
-  ($\gamma_{ij}=\tilde g_{ij}/\chi$, $\alpha$, $\beta^i$ passed through) and
-  build an `ADMGrid`. A real binary-black-hole merger dump
-  reconstructs with $g\,g^{-1}=\mathbb 1$ to $4\times10^{-16}$ and lenses into
+  ($\gamma_{ij}=\tilde g_{ij}/\chi$, $\alpha$, $\beta^i$ passed through),
+  sampled on blocks extended by ghost layers
+  ([Sampling the meshblock hierarchy](@ref)), and build an `ADMGrid`. A real
+  binary-black-hole merger dump reconstructs with $g\,g^{-1}=\mathbb 1$ to $4\times10^{-16}$ and lenses into
   two puncture shadows. The frozen slice sets $\partial_t g=0$, valid while the
   light-crossing time of the imaged volume is short compared to the spacetime's
   evolution timescale.
@@ -453,6 +454,19 @@ $64^3$); the ghost layers travel with the block data to every device, so threads
 kernels run the same stencil. Imaging, the slow-light windows (each frame carries its own
 ghost layers), the uniform resample and the Monte Carlo march all sample this field; the
 Monte Carlo emission zones sit at cell centres, where the sample is the cell value.
+
+The Z4c slices of the numerical-relativity solver are sampled by the same rule:
+`Data.sample_var` and the ADM resample `Data.resample_z4c_adm` blend, in the finest
+block that contains the point, its cells with the ghost layer beyond its faces, each
+ghost the value $V(\mathbf p,\mathbf h)$ of the dump's columns (`Data.ghost_value` on
+`Data.BinColumns`), evaluated where the stencil reaches it instead of stored. The nodes
+of the `ADMGrid` are then continuous across faces between blocks of one level and exact
+for a linear field everywhere, and inside a block they are the in-block trilinear
+samples. A node that held the outermost cell would put a whole cell step $h\,\partial_a f$
+between the two nodes on either side of a face, a slope $h/\Delta$ times the field's for
+a node spacing $\Delta<h$, and the Catmull–Rom interpolant differentiates that slope into
+the Christoffel symbols: on the $192^3$ grid of the head-on slice ($\Delta=24/191\,M$,
+$h=1/4\,M$) the factor is $1.99$ in a slab about each face.
 
 ## Radiative transfer
 

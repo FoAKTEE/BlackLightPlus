@@ -311,7 +311,9 @@ blend(sa::PlasmaPrimitives, sb::PlasmaPrimitives, w)          # the one time ble
   any emission time through the series on the host, loading under the series lock.
 - `.bin` dumps: `read_athenak_bin`, `sample_var`, `resample_z4c_adm(s, half, n;
   alpha_min)` onto an `ADMGrid`, `z4c_grid_spacetime`, `athenak_bin_snapshot(binfile;
-  gamma)`. `write_npy(path, a)` writes `.npy` version 1.0.
+  gamma)`. `sample_var` and the resample blend each block extended by its ghost layer,
+  whose values `ghost_value` takes from `mesh_value` on the dump's columns (`BinColumns`)
+  where the stencil reaches them. `write_npy(path, a)` writes `.npy` version 1.0.
 - `tables.jl` holds the threaded builders `load_hotcross`, `build_hotcross_table`,
   `build_weight_table`, `emission_sites` (the emission zones of a block mesh as compact
   `ZoneSite` records, one randomly drawn owned cell per group of `stride³` cells) and
@@ -820,9 +822,9 @@ comment or module docstring.
 | `physics/MonteCarlo/track.jl` | The one superphoton tracker and its two march controls | `FlatMarch`, `CurvedMarch`, `track!` |
 | `infra/Data/Data.jl` | Containers and files | includes, exports |
 | `infra/Data/fluid_blocks.jl` | AthenaK meshblocks as a grid provider | `FluidBlocks`, `LeafTable`, `LevelHash`, `BlockScan` |
-| `infra/Data/ghost_cells.jl` | The ghost layer of every meshblock, from its neighbours | `mesh_value`, `fill_ghosts!`, `MeshBox` |
+| `infra/Data/ghost_cells.jl` | The ghost layer of every meshblock, from its neighbours | `mesh_value`, `ghost_value`, `fill_ghosts!`, `MeshBox` |
 | `infra/Data/athenak_hdf5.jl` | AthenaK `.athdf` snapshots | `AthenaKSnapshot`, `same_mesh`, `share_mesh` |
-| `infra/Data/athenak_bin.jl` | AthenaK `.bin` dumps: reader, Z4c to ADM, GRMHD adapter | `read_athenak_bin`, `resample_z4c_adm` |
+| `infra/Data/athenak_bin.jl` | AthenaK `.bin` dumps: reader, Z4c to ADM, GRMHD adapter | `read_athenak_bin`, `BinColumns`, `resample_z4c_adm` |
 | `infra/Data/uniform_grid.jl` | The fluid resampled onto a uniform node grid | `UniformGrid`, `resample` |
 | `infra/Data/series.jl` | Slow light: series, two-frame windows, series provider | `SnapshotSeries`, `FrameWindow`, `SeriesProvider` |
 | `infra/Data/npy.jl` | NumPy `.npy` writer | `write_npy` |

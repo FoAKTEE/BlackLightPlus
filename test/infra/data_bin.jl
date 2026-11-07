@@ -1,8 +1,11 @@
 # The AthenaK `.bin` reader on synthetic v1.1 dumps: declared header sizes, the GRMHD
 # fluid adapter (bit passthrough, eint from press, temperature dropped, geometry and
-# derived logical locations, non-finite zeroing), and the Z4c resample onto an ADM grid
-# (one stencil per node, identical to per-variable `sample_var`; Minkowski off the mesh).
-using Test, BlackLightPlus, StaticArrays
+# derived logical locations, non-finite zeroing), the sampler of the dump's columns in
+# blocks extended by ghost layers (a linear field exact across faces between and within
+# levels, continuity across same-level faces, the in-block stencil inside a block), and
+# the Z4c resample onto an ADM grid (one stencil per node, identical to per-variable
+# `sample_var`; Minkowski off the mesh).
+using Test, BlackLightPlus, StaticArrays, Random
 using BlackLightPlus.Data: AthenaKBin, read_athenak_bin, sample_var, resample_z4c_adm,
                 z4c_grid_spacetime, athenak_bin_snapshot, PRIM_NAMES
 using BlackLightPlus.Spacetime: ADMGrid
@@ -84,6 +87,76 @@ end
     end
 end
 
+# A two-level leaf mesh on [-2, 2]³: 2³ root blocks of n³ cells, the block [-2, 0]³ replaced
+# by its eight children, so level-1 blocks meet each other and level-0 blocks across
+# faces, edges and corners. Variable `v` of every cell holds `f(v, centre)`.
+function two_level_bin(f, nv; n = 4)
+    boxes = NTuple{4,Float64}[]                       # (x1min, x2min, x3min, width), level
+    level = Int[]
+    for o in Iterators.product(0:1, 0:1, 0:1)
+        o == (0, 0, 0) && continue
+        push!(boxes, (-2.0 + 2o[1], -2.0 + 2o[2], -2.0 + 2o[3], 2.0)); push!(level, 0)
+    end
+    for o in Iterators.product(0:1, 0:1, 0:1)
+        push!(boxes, (-2.0 + o[1], -2.0 + o[2], -2.0 + o[3], 1.0)); push!(level, 1)
+    end
+    nmb = length(boxes)
+    data = Array{Float32,5}(undef, n, n, n, nv, nmb)
+    for (m, (x, y, z, w)) in enumerate(boxes), v in 1:nv, k in 1:n, j in 1:n, i in 1:n
+        h = w / n
+        data[i, j, k, v, m] = Float32(f(v, SVector(x + (i - 0.5) * h, y + (j - 0.5) * h,
+                                                   z + (k - 0.5) * h)))
+    end
+    lo(a) = [b[a] for b in boxes]
+    hi(a) = [b[a] + b[4] for b in boxes]
+    return AthenaKBin(nmb, n, n, n, ["v$q" for q in 1:nv], level, lo(1), hi(1), lo(2), hi(2),
+                      lo(3), hi(3), data, 0.0)
+end
+
+@testset "dump columns sampled across block faces through ghost layers" begin
+    # dyadic coefficients: every cell value, ghost and sample of the linear field is exact
+    coef = [SVector(0.75, 0.0625, -0.125, 0.03125) .* q for q in (1.0, 2.0, -0.5)]
+    lin(v, x) = coef[v][1] + coef[v][2] * x[1] + coef[v][3] * x[2] + coef[v][4] * x[3]
+    s = two_level_bin(lin, 3)
+    rng = MersenneTwister(7)
+    # every face plane of the mesh (multiples of 1/2 hold the level-1 faces and the
+    # level-0 ones), each sampled just inside both sides, and random points
+    pts = SVector{3,Float64}[]
+    for a in 1:3, f in -2.0:1.0:2.0, side in (-1e-9, 1e-9), _ in 1:40
+        p = SVector{3,Float64}(ntuple(q -> q == a ? clamp(f + side, -2.0, 2.0) : 4rand(rng) - 2, 3))
+        push!(pts, p)
+    end
+    append!(pts, [SVector{3,Float64}(4rand(rng, 3) .- 2) for _ in 1:2000])
+    err = maximum(abs(sample_var(s, v, p...) - lin(v, p)) for p in pts, v in 1:3)
+    @test err <= 1e-12
+
+    # random data: continuous across every same-level face, a jump of one cell step across
+    # a face between levels is allowed only there
+    srand = two_level_bin((v, x) -> rand(rng), 1)
+    jumps = Float64[]
+    for _ in 1:400, (a, f) in ((1, 0.0), (2, 0.0), (3, 0.0), (1, -1.0), (2, -1.0), (3, -1.0))
+        q = SVector{3,Float64}(ntuple(k -> k == a ? f : 4rand(rng) - 2, 3))
+        same = f == 0.0 ? any(k -> k != a && q[k] > 0, 1:3) : all(k -> k == a || q[k] < 0, 1:3)
+        same || continue
+        e = SVector{3,Float64}(ntuple(k -> k == a ? 1e-9 : 0.0, 3))
+        push!(jumps, abs(sample_var(srand, 1, (q - e)...) - sample_var(srand, 1, (q + e)...)))
+    end
+    @test length(jumps) > 600 && maximum(jumps) <= 1e-6
+
+    # inside a block the stencil reads its own cells: a point between interior centres
+    m = 1                                           # root block [0, 2] × [-2, 0] × [-2, 0]
+    p = SVector(0.8, -1.3, -0.6)
+    h = 0.5
+    g = (p - SVector(s.x1min[m], s.x2min[m], s.x3min[m])) ./ h .- 0.5 .+ 1
+    c = floor.(Int, g); t = g - c
+    cell(i, j, k) = Float64(srand.data[i, j, k, 1, m])
+    l1(i, j, k) = cell(i, j, k) * (1 - t[1]) + cell(i + 1, j, k) * t[1]
+    l2(j, k) = l1(c[1], j, k) * (1 - t[2]) + l1(c[1], j + 1, k) * t[2]
+    want = l2(c[2], c[3]) * (1 - t[3]) + l2(c[2], c[3] + 1) * t[3]
+    @test (s.x1min[m], s.x2min[m], s.x3min[m]) == (0.0, -2.0, -2.0)
+    @test sample_var(srand, 1, p...) === want
+end
+
 @testset "Z4c resample: one stencil per node == per-variable sample_var" begin
     zvars = ["z4c_chi", "z4c_gxx", "z4c_gxy", "z4c_gxz", "z4c_gyy", "z4c_gyz",
              "z4c_gzz", "z4c_alpha", "z4c_betax", "z4c_betay", "z4c_betaz"]
@@ -129,9 +202,12 @@ end
     @test nbad == 0 && saw_offmesh
     @test isnan(sample_var(s, 1, 100.0, 0.0, 0.0))
     @test !isnan(sample_var(s, 1, 0.0, 0.0, 0.0))
-    # the finest block owns the centre: its cell values, not the root's
+    # the finest block owns the centre: its cell values, not the root's (the centre of the
+    # cell next to the face rounds into its outer half cell, a blend of weight 1e-16 with
+    # the ghost)
     c = 1 - 0.5 * 2.0 / nx
-    @test sample_var(s, 8, -c, -c, -c) == Float64(data[1, 1, 1, 8, 2])
+    @test sample_var(s, 8, -c, -c, -c) ≈ Float64(data[1, 1, 1, 8, 2]) rtol = 1e-14
+    @test abs(Float64(data[1, 1, 1, 8, 2]) - Float64(data[3, 3, 3, 8, 1])) > 1e-3
 end
 
 @testset "z4c_grid_spacetime returns the grid and the dump" begin

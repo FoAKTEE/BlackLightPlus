@@ -142,8 +142,11 @@ them onto a uniform node box as an `ADMGrid`:
 st, dump = z4c_grid_spacetime("bbh.z4c.00001.bin", 12.0, 192; alpha_min = 0.55)
 ```
 
-The grid reassembles the 4-metric through the 3+1 decomposition and interpolates the ten
-fields with a $C^1$ Catmull–Rom stencil, because the geodesic equation differentiates
+Each node is the trilinear sample of the finest block of the dump that contains it,
+extended across its faces by a ghost layer as the GRMHD blocks are
+([Sampling the meshblock hierarchy](@ref)), so the nodes are continuous across block
+faces. The grid reassembles the 4-metric through the 3+1 decomposition and interpolates
+the ten fields with a $C^1$ Catmull–Rom stencil, because the geodesic equation differentiates
 through the interpolant and a trilinear interpolant would give discontinuous
 Christoffel symbols at the cell faces. Rays end where the interpolated lapse falls below
 `alpha_min` (the numerical horizon) or on the escape sphere inside the grid; off the grid

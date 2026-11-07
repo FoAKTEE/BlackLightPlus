@@ -7,6 +7,24 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- The Z4c to ADM resample (`resample_z4c_adm`, `z4c_grid_spacetime`) and `sample_var`
+  interpolate across meshblock faces through ghost layers, by the rule of the GRMHD
+  blocks: in the outer half cell of a block the stencil blends the outermost cell with the
+  ghost beyond the face, the field of the mesh about the ghost centre (`Data.ghost_value`
+  on the dump's columns, `Data.BinColumns`; copy, restriction, limited prolongation,
+  linear extrapolation), where it held the outermost cell. The nodes are continuous across
+  faces between blocks of one level and exact for a linear field everywhere; inside a
+  block they are unchanged, bit for bit. On the head-on slice of the capture figure
+  (192³ nodes over $|x_i|\le12\,M$, cells of $1/4\,M$, same-level faces at $-8$, $0$,
+  $8\,M$) the 9.1 % of nodes within half a cell of a face change by up to
+  $2.5\times10^{-3}$ of $\alpha$ and $5\times10^{-3}$ of $\gamma_{ii}$, and the slope
+  between the two nodes on either side of each face, 1.99 times the field's before,
+  follows the field. 75 of $301^2$ image points of the capture map change class, all on a
+  class boundary; the bisected capture boundary moves by $3\times10^{-3}\,M$ (median of
+  24 radial scans, at most $1.3\times10^{-2}\,M$) and the outer capture edges of the deck
+  row by $2.5\times10^{-3}$ and $1.7\times10^{-3}\,M$. The ghost machinery
+  (`Data.mesh_value`) reads any block mesh that provides its cells, widths, cell values
+  and locate rule.
 - A precise mode for the numerical march, `Plans.precise(cfg)`, at the accuracy of the
   closed-form Kerr tracer: the ninth-order step of Verner's 9(8) pair (`Spacetime.Verner9`,
   beside `ClassicalRK4`) under the fixed control, the step shortened near a spinning

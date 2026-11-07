@@ -3,12 +3,13 @@
 # and corners, extrapolation at the outer boundary. A linear field is reproduced exactly
 # everywhere, a quadratic one to second order; the sample is continuous across faces
 # between blocks of one level; positive data stay positive inside the mesh; the device
-# form, the pool executor, the uniform resample and the frame window sample the same
-# field.
+# form, the pool executor, the uniform resample, the frame window and the columns of a
+# `.bin` dump on the same mesh sample the same field.
 using Test, BlackLightPlus, StaticArrays, Random
 using Adapt: Adapt
 using BlackLightPlus.Data: AthenaKSnapshot, FluidBlocks, FrameWindow, LeafTable, block_sample,
-                           corner, locate, resample, scale_density, MeshBox, mesh_value
+                           corner, locate, resample, scale_density, MeshBox, mesh_value,
+                           AthenaKBin, BinColumns, ghost_value, sample_var
 using BlackLightPlus.Matter: primitives
 const Decks = Main.Decks
 
@@ -236,6 +237,27 @@ end
     w = FrameWindow(s.blocks, s2.blocks, 0.0, 10.0; t_obs = 10.0)
     x = SVector(-5.0, 3.2, 1.0)
     @test primitives(w, SVector(-5.0, x...)).rho ≈ 2.0 * linear(x)[1] rtol = 1e-12
+end
+
+@testset "the columns of a .bin dump on the same mesh: the same ghosts and samples" begin
+    rng = Xoshiro(23)
+    s = mesh_snap(LEAVES3, 4, x -> SVector{8,Float64}(rand(rng, 8)))
+    b = s.blocks
+    n = b.ni
+    raw = permutedims(b.data[:, 2:(n + 1), 2:(n + 1), 2:(n + 1), :], (2, 3, 4, 1, 5))
+    row(M, a) = M[a, :]
+    bin = AthenaKBin(b.nmb, n, n, n, ["v$q" for q in 1:8], s.levels, row(b.lo, 1), row(b.hi, 1),
+                     row(b.lo, 2), row(b.hi, 2), row(b.lo, 3), row(b.hi, 3), raw, 0.0)
+    cols = BinColumns(bin, ntuple(identity, 8))
+    box = MeshBox(cols)
+    # every ghost evaluated on the dump is the stored ghost of the snapshot, to its rounding
+    bad = 0
+    for m in 1:b.nmb, k in 0:(n + 1), j in 0:(n + 1), i in 0:(n + 1)
+        bad += Float32.(ghost_value(cols, box, m, SVector(i, j, k))) != Float32.(corner(b, i, j, k, m))
+    end
+    @test bad == 0
+    pts = [SVector{3}((2 .* rand(rng, 3) .- 1) .* 7.999) for _ in 1:3000]
+    @test maximum(abs(sample_var(bin, v, x...) - sample(s, x)[v]) for x in pts, v in 1:8) <= 1e-6
 end
 
 @testset "a multi-level torus on the pool executor" begin
