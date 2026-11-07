@@ -182,4 +182,19 @@ end
             @test l.valid && isfinite(l.r) && isfinite(l.φ) && isfinite(l.t)
         end
     end
+
+    @testset "case II with every root inside the horizon" begin
+        # a = 0.99, i = 80 deg: the four radial roots are real and r4 < r+, so the ray from
+        # the camera falls into the black hole without a turning point and has no image of order >= 1
+        a, θo = 0.99, deg2rad(80.0)
+        p = pixel_prep(-1.4512, 0.03, θo, a; ro = 1e15)
+        r4 = real(p.roots[4])
+        @test abs(imag(p.roots[4])) < 1e-12 && r4 < 1 + sqrt(1 - a^2)
+        for n in 0:2
+            @test !band_landing(p, n).valid
+        end
+        # a neighbouring ray with r4 outside the horizon keeps its images
+        q = pixel_prep(-4.0, 0.03, θo, a; ro = 1e15)
+        @test band_landing(q, 0).valid
+    end
 end

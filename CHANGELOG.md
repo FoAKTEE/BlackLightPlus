@@ -7,6 +7,13 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- The closed-form Kerr tracer gives no image of order n >= 1 to a ray whose four real radial
+  roots all lie inside the outer horizon (Gralla-Lupsasca region II): its Mino-time budget
+  ends at the horizon, where it counted a turning point at r4 and returned spurious n = 1, 2
+  images inside the shadow at high spin and inclination. The radial roots take the
+  cancellation-free branch of the resolvent cubic (w- = -P/(3 w+)), which removes a loss of
+  precision where P -> 0, and the case-II antiderivative is exactly zero at the turning point
+  for dual numbers too.
 - The package moved to the repository root under the name `BlackLightPlus` (formerly the
   module `BLP` under `BLP/`); the CUDA extension is `BlackLightPlusCUDAExt`; environment
   variables keep the `BLP_` prefix.

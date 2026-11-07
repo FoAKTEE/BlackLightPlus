@@ -54,8 +54,10 @@ and `r3, r4` a complex-conjugate pair.
 
     disc = Complex((P / 3)^3 + (Q / 2)^2, z0)
     sq = sqrt(disc)
+    # the larger of -Q/2 ± sq, then w_m from w_p w_m = -P/3: no cancellation where P → 0
+    sq = real(Complex(-Q / 2, z0) * conj(sq)) >= 0 ? sq : -sq
     w_p = _cuberoot(Complex(-Q / 2, z0) + sq)
-    w_m = _cuberoot(Complex(-Q / 2, z0) - sq)
+    w_m = abs2(w_p) > 0 ? -Complex(P / 3, z0) / w_p : w_p    # value test: a Dual zero may carry partials
 
     z = sqrt((w_p + w_m) / 2 - Complex(A / 6, z0))               # P2 Eq. A6
     u = sqrt(Complex(-A / 2, z0) - z * z + Complex(B / 4, z0) / z)
@@ -151,7 +153,10 @@ end
     r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2; r43 = r4 - r3
     rp3 = rph - r3; rm3 = rmh - r3; rp4 = rph - r4; rm4 = rmh - r4
     k = real(r32 * r41 / (r31 * r42))
-    x2 = real(sqrt((r - r4) * r31 / ((r - r3) * r41)))
+    q = (r - r4) * r31 / ((r - r3) * r41)
+    # at the turning point r = r4 the argument is exactly zero (every leg vanishes there);
+    # the value test keeps the complex square root away from a dual zero with partials
+    x2 = abs2(q) > 0 ? real(sqrt(q)) : zero(T)
     arg = asin(clamp(x2, -one(T), one(T)))
     sr = real(sqrt(r31 * r42))
     F2 = 2 / sr * JacobiElliptic.F(arg, k)
@@ -282,7 +287,8 @@ horizon `rph`, `λ`, `η`, `is_case2` (four real radial roots), `roots`, `ang` (
 angular elliptic terms), the radial modulus `kr` and observer amplitude `Fr`,
 `τturn` (Mino time from the observer to the case-II turning point, the I0
 antiderivative at `ro`), `τtot` (the ray's Mino budget: observer → turn →
-infinity in case II, observer → horizon in case III), and the observer
+infinity in case II with r4 outside the horizon, observer → horizon in case II
+with all four roots inside it and in case III), and the observer
 antiderivatives `po`, `pt`. Consumed by [`band_landing`](@ref).
 """
 @inline function pixel_prep(α::T, β, θo, a; ro = T(1000)) where {T}
@@ -324,6 +330,13 @@ antiderivatives `po`, `pt`. Consumed by [`band_landing`](@ref).
         Fr = JacobiElliptic.F(asin(clamp(x2, -one(T), one(T))), kr)
         τturn = po[1]                                  # observer → turn
         τtot = po[1] + _tau_max_case2(r1, r2, r3, r4, T)   # observer → turn → infinity
+        if real(r4) <= rph
+            # four real roots, all inside the horizon (P2 region II): the ray reaches the
+            # horizon before r4, so its budget is observer → horizon
+            x2h = real(sqrt((rph - r4) * r31 / ((rph - r3) * r41)))
+            τtot = τturn - 2 / real(sqrt(r31 * r42)) *
+                   JacobiElliptic.F(asin(clamp(x2h, -one(T), one(T))), kr)
+        end
     else
         r21 = r2 - r1; r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
         A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
