@@ -224,7 +224,7 @@ generate(zone::EmissionZone, tables::GenerationTables, rng) -> (Superphoton, rng
 generate(sphere::UniformSphere, tables, rng)                 # uniform point, then the zone method
 GenerationTables(weights::WeightTable, dnmax[, emissivity::EmissivityTable])
 int_jnu(t::EmissivityTable, n_e, theta_e, B, nu)             # 4π n_e e² ν_c/c (√2π/27) F(K)
-zone_count(n_e, theta_e, B, dV, wgt, emis) -> (N_s, dnmax)   # trapezoid over the nodes
+zone_count(n_e, theta_e, B, dV, nodes, emis) -> (N_s, dnmax) # trapezoid over the nodes (ZoneNodes)
 
 rate_frame(provider) -> FluidFrame() | StaticFrame()         # StaticFrame for UniformSphere
 absorption_rate(state, p); absorption_rate(::StaticFrame, state, kcon)   # ν α_ν
@@ -321,7 +321,10 @@ blend(sa::PlasmaPrimitives, sb::PlasmaPrimitives, w)          # the one time ble
   `zone_tables` (the weight table and the per-zone counts in two streaming passes over
   the zones, the zone × frequency matrix never stored). Each threaded loop writes
   disjoint slots or merges exact partial sums, so every table is independent of the
-  thread count.
+  thread count. A Monte Carlo run on a pool builds the zone and hot-cross tables on its
+  devices instead (`Products.grid_tables`, `Products.hotcross_build`): the same per-zone
+  and per-node arithmetic, whose logarithms and exponentials are `tang_log` and
+  `tang_exp`, and the same exact sums, so the tables are bitwise these.
 
 ### 4.2 Execution
 
@@ -779,6 +782,7 @@ comment or module docstring.
 | `physics/Numerics/stencils.jl` | Trilinear blend, Catmull-Rom stencil, log-linear lookup | `lerp8`, `corner_weights`, `cr_axis`, `loglinear_at` |
 | `physics/Numerics/exactsum.jl` | Order-independent exact summation in integer limbs | `xsum_add!`, `xsum_atomic_add!`, `xsum_round` |
 | `physics/Numerics/philox.jl` | Counter-based random numbers and the Monte Carlo samplers | `MCRng`, `MCStreamLayout`, `child_rng` |
+| `physics/Numerics/elementary.jl` | The exponential and logarithm with the same bits on every device | `tang_exp`, `tang_log` |
 | `physics/Numerics/special.jl` | Special functions of the synchrotron fits | `bessel_k2`, `hypergeometric_2f1` |
 | `physics/Spacetime/Spacetime.jl` | Spacetimes and null geodesics | includes, exports |
 | `physics/Spacetime/protocol.jl` | The spacetime protocol; every method but `metric` defaulted | `Spacetime`, `metric`, `lane`, `horizon_radius` |
@@ -861,6 +865,7 @@ comment or module docstring.
 | `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `AnalyticProgram`, `render_analytic`, `photon_ring_layers` |
 | `pipeline/Products/amr.jl` | Adaptive image-plane refinement | `render_amr` |
 | `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, the scattering cascade, exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
+| `pipeline/Products/montecarlo_tables.jl` | The zone, generation and hot-cross tables on the run's executor; the zones kept across runs | `ZoneSums`, `ZoneCounts`, `HotcrossSigma`, `grid_tables`, `grid_zones`, `hotcross_build` |
 | `BlackLightPlusCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice` | extension module |
 
 ## 9. Exports and internal interfaces

@@ -10,7 +10,7 @@ using LinearAlgebra: dot, norm, cross
 import Adapt
 using ..Numerics: CL, EE, ME, MP, HPL, SQRT2, SIGMA_THOMSON, MCRng, MCStreamLayout, mc_uniform,
                   sample_direction, chi_square, child_rng, event_capacity, loglinear_at, bessel_k2,
-                  position, momentum, raystate
+                  position, momentum, raystate, tang_exp, tang_log
 using ..Spacetime: Minkowski, MarchStep, HORIZON_EPS_SAMPLED, metric_and_inverse,
                    inverse_metric, proxy_distance, horizon_floor, plunge_radius, rk4_step
 using ..Matter: PlasmaState, PlasmaProvider, EmissionZone, UniformSphere, sample, emission_zone
@@ -36,11 +36,12 @@ export j_nu, alpha_nu, jmax, int_jnu_simpson, N_ZONE_THETA, EmissivityTable, bui
        F_TABLE_DL2, synchrotron_F, int_jnu, int_jnu_zone, emission_tetrad, SMALL_VECTOR
 # hot cross section
 export MINW, MAXW, MINT, MAXT, NW, NT, DMUE, DGAMMAE, MAXGAMMA, N_MUE, N_GAMMAE,
-       kn_total, boostcross, dNdgamma_e, total_compton_cross_num, HotcrossTable,
+       kn_total, boostcross, juttner_norm, dNdgamma_e, total_compton_cross_num, HotcrossTable,
+       hotcross_nodes,
        hotcross_lookup, kappa_es, alpha_inv_scatt
 # generation tables and generation
 export MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP, WEIGHT_FLOOR, WeightTable, weight_at, node_weight,
-       mean_weight, zone_count, zone_nsuperphotons, REJECT_MAX_ITER, GenerationTables, generate,
+       mean_weight, ZoneNodes, zone_count, zone_nsuperphotons, REJECT_MAX_ITER, GenerationTables, generate,
        table_zone
 # the Compton kick
 export lorentz_boost, sample_y, sample_electron_gamma, sample_mu, sample_electron,

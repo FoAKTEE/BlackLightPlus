@@ -219,11 +219,12 @@ Generation: the weight table over `[nu_min, nu_max]` on `n_esamp` intervals for 
 against `∫ j_ν dΩ` from the process's `EmissivityTable`. Primary `g` draws the stream
 `primary_rng(seed, g)`. Transport: absorption (`absorption`), Compton scattering
 (`scattering`) with the hot-cross `table` (`nothing`: `hotcross_table(plan)`, the
-process's table), at most `max_scatt` scatterings per photon, every step's scattering
-events a Poisson process under the importance `bias`: `nothing` or a number `b0` (1 by
-default) for the `StateBias` `b = clamp(b0 A(Θₑ) (w/w_ref) bias_order^n, 1, bias_max)` of
-a photon scattered `n` times, with `w_ref` the mean primary weight, `bias_order` the factor
-per scattering order (1: none; larger samples the light scattered two and three times and
+process's table, built on the run's executor at the process's first request), at most
+`max_scatt` scatterings per photon, every step's scattering events a Poisson process
+under the importance `bias`: `nothing` or a number `b0` (1 by default) for the
+`StateBias` `b = clamp(b0 A(Θₑ) (w/w_ref) bias_order^n, 1, bias_max)` of a photon
+scattered `n` times, with `w_ref` the mean primary weight, `bias_order` the factor per
+scattering order (1: none; larger samples the light scattered two and three times and
 the high-frequency tail it makes) and `split` the most children per capped event (1: no
 splitting), or a `Bias`/`StateBias` used as given. Every choice leaves the spectrum unbiased; the
 bias and `split` set its variance and cost. Lengths in `plan.params.units.L_unit` cm (one
@@ -271,7 +272,7 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
                 Ns = Float64(Ns)),
          grid = (nu_min = Float64(spec_nu_min), nu_max = Float64(spec_nu_max),
                  n_ebins = Int(n_ebins)),
-         table = scattering ? hotcross(table, plan) : table,
+         table = scattering ? hotcross(table, plan, exec) : table,
          bias = (b = bias, b_max = Float64(bias_max), split = Int(split),
                  order = Float64(bias_order)), capacity = capacity,
          march = (C = Float64(C), escape = Float64(escape), R_em = Float64(R_em)),
@@ -280,9 +281,10 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
     return mc_run(plan.provider, plan, exec, bands, o, t0)
 end
 
-# The hot-cross table of a run: the one given, or the plan's.
-hotcross(::Nothing, plan) = hotcross_table(plan)
-hotcross(table, plan) = table
+# The hot-cross table of a run: the one given, or the plan's, built on the run's executor
+# at the process's first request.
+hotcross(::Nothing, plan, exec) = hotcross_table(plan, () -> hotcross_build(exec))
+hotcross(table, plan, exec) = table
 
 # The importance bias of a run whose mean primary weight is `w_ref`.
 mc_bias(b::Nothing, kw, w_ref) = StateBias(1.0, w_ref, kw.b_max, kw.split, kw.order)
@@ -339,15 +341,10 @@ function mc_run(provider, plan, exec, bands, o, t0)
         throw(ArgumentError("the spectrum of a plasma grid is binned by InclinationBands; " *
                             "got $(nameof(typeof(rows)))"))
     st = plan.spacetime
-    sites = emission_sites(zone_blocks(provider), st, plan.params; seed = o.seed, o.zones...)
-    isempty(sites) &&
-        throw(ArgumentError("mc_spectrum: no emitting zones (check the matter and the cuts)"))
-    g = o.gen
-    wgt, Nsz, dnmax = zone_tables(sites, g.Ns / (log(g.nu_max) - log(g.nu_min));
-                                  n_esamp = g.n_esamp, nu_min = g.nu_min, nu_max = g.nu_max)
+    sites, r_em, wgt, Nsz, dnmax = grid_zones(zone_blocks(provider), st, plan.params, exec, o)
     offset = zone_offsets(Nsz, o.seed)
     N = offset[end]
-    R_em = max(o.march.R_em, maximum(z -> 1.2 * proxy_distance(st, z.x)[2], sites))
+    R_em = max(o.march.R_em, r_em)
     ctl = CurvedMarch(st; C = o.march.C, escape = o.march.escape, R_em = R_em)
     transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, o, mean_weight(wgt)),
                             Val(o.absorption), Val(o.scattering))

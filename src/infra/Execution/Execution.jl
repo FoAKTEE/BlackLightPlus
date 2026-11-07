@@ -46,7 +46,7 @@ export cost_order, rescue_pixels, mixed_partition, march_sort_order, queue_items
 export Bands, PolarBands, InclinationBands, ExactBins, record!, gather!, Spectrum, band,
        nu_centers, nuLnu, nuLnu_total, nuLnu_solid, nuLnu_sigma, total_power, total_weight,
        mean_energy,
-       ExactScalars, add!, scalar, addends
+       ExactScalars, add!, add_limbs!, scalar, addends
 # the cascade and its children
 export ChildBuffer, Generation, child_stream, spawn!, capacity, overflow, children,
        foreach_cascade!, cascade_chunk

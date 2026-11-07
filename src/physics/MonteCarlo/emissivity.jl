@@ -175,14 +175,15 @@ const EMISSIVITY_TABLE = build_emissivity_table()
 `F(K)` of the table `t`: cubic Hermite interpolation of `ln F` in `ln K` between the
 two nodes that bracket `ln K`, with the node slopes; below the first node `ln F`
 continues along the first node's slope (the `K^{1/3}` limit), above the last node
-`F = 0`, and `F = 0` for `K ≤ 0`.
+`F = 0`, and `F = 0` for `K ≤ 0`. The logarithm and exponential are `tang_log` and `tang_exp`, so a
+device kernel computes the host's bits.
 """
 @inline function synchrotron_F(t::EmissivityTable, K)
     K > 0.0 || return 0.0
-    l = log(K)
+    l = tang_log(K)
     l < t.l2 || return 0.0
     @inbounds if l < t.l0
-        return exp(t.lnF[1] + t.slope[1] * (l - t.l0))
+        return tang_exp(t.lnF[1] + t.slope[1] * (l - t.l0))
     end
     if l < t.l1
         f = (l - t.l0) / t.h1
@@ -200,8 +201,8 @@ continues along the first node's slope (the `K^{1/3}` limit), above the last nod
     end
     u2 = u * u
     u3 = u2 * u
-    return exp((2.0 * u3 - 3.0 * u2 + 1.0) * y0 + (u3 - 2.0 * u2 + u) * m0 +
-               (3.0 * u2 - 2.0 * u3) * y1 + (u3 - u2) * m1)
+    return tang_exp((2.0 * u3 - 3.0 * u2 + 1.0) * y0 + (u3 - 2.0 * u2 + u) * m0 +
+                    (3.0 * u2 - 2.0 * u3) * y1 + (u3 - u2) * m1)
 end
 
 """

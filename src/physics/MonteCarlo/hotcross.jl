@@ -33,7 +33,7 @@ const N_GAMMAE = 240
 
 Klein–Nishina total cross section over the Thomson value, `σ_KN(ε_e)/σ_T`, for a photon
 of rest-frame energy `eps_e` (mₑc²): `1 − 2ε_e` below `ε_e = 10⁻³` (the expansion that
-avoids the cancellation of the closed form), the closed form above.
+avoids the cancellation of the closed form), the closed form above, with `tang_log`.
 """
 @inline function kn_total(eps_e)
     w = eps_e
@@ -41,7 +41,7 @@ avoids the cancellation of the closed form), the closed form above.
         return 1.0 - 2.0 * w
     end
     return 0.75 * (2.0 / (w * w) +
-                   (1.0 / (2.0 * w) - (1.0 + w) / (w * w * w)) * log(1.0 + 2.0 * w) +
+                   (1.0 / (2.0 * w) - (1.0 + w) / (w * w * w)) * tang_log(1.0 + 2.0 * w) +
                    (1.0 + w) / ((1.0 + 2.0 * w) * (1.0 + 2.0 * w)))
 end
 
@@ -59,30 +59,38 @@ The flux-weighted boosted cross section over `σ_T` for a lab-frame photon of en
 end
 
 """
-    dNdgamma_e(theta_e, gamma_e) -> Float64
+    juttner_norm(theta_e) -> Float64
+
+The normalisation `K₂f = K₂(1/Θ) e^{1/Θ}` of the Maxwell–Jüttner distribution above
+`Θ = 10⁻²`, and its large-argument series `√(πΘ/2)(1 + 15Θ/8 + 105Θ²/128)` (A&S 9.7.2)
+below, where the product of Bessel function and exponential overflows.
+"""
+@inline juttner_norm(theta_e) =
+    theta_e > 1.0e-2 ? bessel_k2(1.0 / theta_e) * exp(1.0 / theta_e) :
+    sqrt(π * theta_e / 2.0) * (1.0 + theta_e * (15.0 / 8.0 + theta_e * (105.0 / 128.0)))
+
+"""
+    dNdgamma_e(theta_e, gamma_e[, K2f = juttner_norm(theta_e)]) -> Float64
 
 Maxwell–Jüttner distribution `dN/dγ_e` per electron (unit integral over `γ_e ≥ 1`),
-`γ √(γ² − 1) e^{−(γ−1)/Θ} / (Θ K₂f)` with `K₂f = K₂(1/Θ) e^{1/Θ}` above `Θ = 10⁻²` and
-the large-argument series `√(πΘ/2)(1 + 15Θ/8 + 105Θ²/128)` (A&S 9.7.2) below, where the
-product of Bessel function and exponential overflows.
+`γ √(γ² − 1) e^{−(γ−1)/Θ} / (Θ K₂f)` with the normalisation `K2f` of
+[`juttner_norm`](@ref); the exponential is `tang_exp`.
 """
-@inline function dNdgamma_e(theta_e, gamma_e)
-    K2f = theta_e > 1.0e-2 ? bessel_k2(1.0 / theta_e) * exp(1.0 / theta_e) :
-          sqrt(π * theta_e / 2.0) *
-              (1.0 + theta_e * (15.0 / 8.0 + theta_e * (105.0 / 128.0)))
+@inline function dNdgamma_e(theta_e, gamma_e, K2f = juttner_norm(theta_e))
     return (gamma_e * sqrt(gamma_e * gamma_e - 1.0) / (theta_e * K2f)) *
-           exp(-(gamma_e - 1.0) / theta_e)
+           tang_exp(-(gamma_e - 1.0) / theta_e)
 end
 
 """
-    total_compton_cross_num(eps, theta_e) -> Float64
+    total_compton_cross_num(eps, theta_e[, K2f = juttner_norm(theta_e)]) -> Float64
 
 Hot Compton cross section `σ_h(ε, Θₑ)` (cm²) by the midpoint rule over `μ_e ∈ [−1, 1]`
 (`N_MUE` nodes) and `γ_e ∈ [1, 1 + MAXGAMMA Θₑ]` (`N_GAMMAE` nodes) of
-`boostcross × dN/dγ_e / 2`. Cold corners: `σ_T` for `Θₑ < MINT` and `ε < MINW`,
-`kn_total(ε) σ_T` for `Θₑ < MINT`.
+`boostcross × dN/dγ_e / 2`, the Jüttner normalisation `K2f`. Cold corners: `σ_T` for
+`Θₑ < MINT` and `ε < MINW`, `kn_total(ε) σ_T` for `Θₑ < MINT`. Given `K2f` (from the
+host), a device computes the host's bits.
 """
-@inline function total_compton_cross_num(eps, theta_e)
+@inline function total_compton_cross_num(eps, theta_e, K2f = juttner_norm(theta_e))
     if theta_e < MINT && eps < MINW
         return SIGMA_THOMSON
     end
@@ -96,7 +104,7 @@ Hot Compton cross section `σ_h(ε, Θₑ)` (cm²) by the midpoint rule over `μ
         mue = -1.0 + (im + 0.5) * DMUE
         for ig in 0:(N_GAMMAE - 1)
             gammae = 1.0 + (ig + 0.5) * dgammae
-            f = 0.5 * dNdgamma_e(theta_e, gammae)
+            f = 0.5 * dNdgamma_e(theta_e, gammae, K2f)
             cross += DMUE * dgammae * boostcross(eps, mue, gammae) * f
         end
     end
@@ -115,6 +123,21 @@ struct HotcrossTable{M<:AbstractMatrix{Float64}}
     logsigma::M
 end
 Adapt.@adapt_structure HotcrossTable
+
+"""
+    hotcross_nodes() -> (eps, theta)
+
+The nodes of the hot-cross table: the photon energies `ε_i = 10^(log₁₀ MINW + i Δw)`,
+`i ∈ 0:NW`, and the temperatures `Θ_j = 10^(log₁₀ MINT + j ΔT)`, `j ∈ 0:NT`
+(`Δw = log₁₀(MAXW/MINW)/NW`, `ΔT = log₁₀(MAXT/MINT)/NT`), as two vectors.
+"""
+function hotcross_nodes()
+    dlw = log10(MAXW / MINW) / NW
+    dlT = log10(MAXT / MINT) / NT
+    lminw = log10(MINW)
+    lmint = log10(MINT)
+    return [10.0^(lminw + i * dlw) for i in 0:NW], [10.0^(lmint + j * dlT) for j in 0:NT]
+end
 
 """
     hotcross_lookup(table, eps, theta_e) -> Float64

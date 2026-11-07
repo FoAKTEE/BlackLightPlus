@@ -10,7 +10,7 @@ using LinearAlgebra: dot, det
 import Adapt
 using ForwardDiff: Dual, value, partials
 using ..Numerics: position, momentum, MCRng, MCStreamLayout, widest_layout, mc_uniform, primary_rng,
-                  ME, CL
+                  ME, CL, HPL, XSUM_NSLOT, XSUM_MAX_ADDENDS, xsum_add!
 using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step, march_step,
                    inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance,
                    radius_prep, band_radius,
@@ -24,7 +24,9 @@ using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
                     CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
                     generate, track!, table_zone, zone_nsuperphotons, mean_weight, int_jnu_zone,
-                    EMISSIVITY_TABLE, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP
+                    EMISSIVITY_TABLE, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP, WeightTable, ZoneNodes,
+                    zone_count, int_jnu, WEIGHT_FLOOR, HotcrossTable, hotcross_nodes, juttner_norm,
+                    total_compton_cross_num
 import ..MonteCarlo: record!, child_stream, spawn!, tally!
 using ..Data: FluidBlocks, AthenaKSnapshot, locate, build_weight_table, emission_sites, zone_tables,
               build_hotcross_table
@@ -50,6 +52,7 @@ include("analytic_movie.jl")
 include("crossings.jl")
 include("amr.jl")
 include("montecarlo.jl")
+include("montecarlo_tables.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,

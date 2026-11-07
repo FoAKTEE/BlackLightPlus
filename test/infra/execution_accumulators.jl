@@ -6,13 +6,13 @@
 using Test, BlackLightPlus, Random
 using StaticArrays
 using BlackLightPlus.Numerics: MCRng, MCStreamLayout, child_rng, stream_id, primary_rng, ME, CL, HPL,
-                    SIGMA_THOMSON, xsum_round
+                    SIGMA_THOMSON, xsum_round, xsum_add!, XSUM_NSLOT
 using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: Superphoton, HotcrossTable, NW, NT
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, foreach_item!, ExactBins, ExactScalars,
                      ChildBuffer, PolarBands, InclinationBands, Spectrum, band, gather!,
                      nu_centers, nuLnu, nuLnu_total, nuLnu_solid, nuLnu_sigma, total_power, total_weight,
-                     mean_energy, add!, scalar, addends, capacity, overflow, children
+                     mean_energy, add!, add_limbs!, scalar, addends, capacity, overflow, children
 import BlackLightPlus.Execution
 
 const DK = Main.Decks
@@ -112,6 +112,12 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
         m = ExactScalars(1); foreach(p -> merge!(m, p), parts)
         ref = setprecision(BigFloat, 2400) do; Float64(sum(BigFloat.(w))); end
         @test scalar(all1, 1) === ref === scalar(m, 1) && addends(m, 1) == 20_000
+        # sums kept in local limbs and merged once give the same scalar
+        loc = [zero(MVector{XSUM_NSLOT,Int64}) for _ in 1:3]
+        foreach(((k, x),) -> xsum_add!(loc[1 + k % 3], x), enumerate(w))
+        ml = ExactScalars(2)
+        foreach(((k, a),) -> add_limbs!(ml, 2, a, count(j -> j % 3 == k - 1, 1:20_000)), enumerate(loc))
+        @test scalar(ml, 2) === ref && addends(ml, 2) == 20_000 && scalar(ml, 1) === 0.0
         b1 = ExactBins(PolarBands(2)); b2 = similar(b1); b3 = similar(b1)
         for (k, x) in enumerate(w[1:2000])
             d = SVector(1.0, 0.0, iseven(k) ? 0.1 : 3.0)

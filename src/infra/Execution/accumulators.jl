@@ -428,6 +428,24 @@ Add `x` to scalar `k`. Atomic; device-safe.
     return nothing
 end
 
+"""
+    add_limbs!(s::ExactScalars, k, limbs, n) -> nothing
+
+Add the exact sum held in the `XSUM_NSLOT` limbs `limbs` (a local accumulator that
+`xsum_add!` filled with `n` addends) to scalar `k`: one atomic integer addition per
+nonzero limb, so a program that sums many values in its own limbs merges them with a few
+atomics, and the scalar is the exact sum of every addend whatever the grouping. Atomic;
+device-safe.
+"""
+@inline function add_limbs!(s::ExactScalars, k::Int, limbs, n::Integer)
+    @inbounds for j in 1:XSUM_NSLOT
+        v = limbs[j]
+        v == 0 || (Atomix.@atomic s.acc[j, k] += v)
+    end
+    Atomix.@atomic s.n[k] += Int64(n)
+    return nothing
+end
+
 "Add the sums and addend counts of `src` into the host scalars `dst`."
 function Base.merge!(dst::ExactScalars, src::ExactScalars)
     dst.acc .+= Array(src.acc)

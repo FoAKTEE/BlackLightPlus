@@ -68,19 +68,20 @@ const PROCESS_HOTCROSS = Ref{Union{Nothing,HotcrossTable{Matrix{Float64}}}}(noth
 const PROCESS_HOTCROSS_LOCK = ReentrantLock()
 
 """
-    hotcross_table(plan::Plan) -> HotcrossTable
+    hotcross_table(plan::Plan[, build = build_hotcross_table]) -> HotcrossTable
 
 The hot-cross-section table of the plan's Monte Carlo scattering: the one table of the
-process, `build_hotcross_table()` at the first request of any plan (under a lock, so it
-is built once), kept in the plan at the plan's first request; every plan of the process
-shares the same table object, and so its device copies.
+process, `build()` at the first request of any plan (under a lock, so it is built once;
+a builder must return the table `build_hotcross_table()` returns, as the device builder
+of `mc_spectrum` does), kept in the plan at the plan's first request; every plan of the
+process shares the same table object, and so its device copies.
 """
-function hotcross_table(plan::Plan)
+function hotcross_table(plan::Plan, build = build_hotcross_table)
     t = plan.hotcross[]
     t === nothing || return t
     t = @lock PROCESS_HOTCROSS_LOCK begin
         p = PROCESS_HOTCROSS[]
-        p === nothing && (p = PROCESS_HOTCROSS[] = build_hotcross_table())
+        p === nothing && (p = PROCESS_HOTCROSS[] = build())
         p
     end
     plan.hotcross[] = t

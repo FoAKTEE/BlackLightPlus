@@ -68,27 +68,47 @@ function mean_weight(wgt::WeightTable)
 end
 
 """
+    ZoneNodes{V}(nu, wf, dlnu)
+    ZoneNodes(wgt::WeightTable)
+
+The nodes of a weight table as the per-zone count reads them, evaluated once on the host:
+`nu[m + 1] = exp(m dlnu + lnu_min)`, `wf[m + 1] = exp(lwgt[m + 1]) + WEIGHT_FLOOR`
+(`m = 0:n`) and the spacing `dlnu`. `isbits` after `Adapt.adapt` to a device.
+"""
+struct ZoneNodes{V<:AbstractVector{Float64}}
+    nu::V
+    wf::V
+    dlnu::Float64
+end
+Adapt.@adapt_structure ZoneNodes
+ZoneNodes(wgt::WeightTable) =
+    ZoneNodes([exp(m * wgt.dlnu + wgt.lnu_min) for m in 0:(length(wgt.lwgt) - 1)],
+              [exp(l) + WEIGHT_FLOOR for l in wgt.lwgt], wgt.dlnu)
+
+"""
+    zone_count(n_e, theta_e, B, dV, nodes::ZoneNodes, emis::EmissivityTable) -> (N_s, dnmax)
     zone_count(n_e, theta_e, B, dV, wgt::WeightTable, emis::EmissivityTable) -> (N_s, dnmax)
 
 Expected superphoton count and frequency-rejection envelope of a zone of plasma
-`(n_e, Θₑ, B)` and proper volume `dV` (cm³) on the nodes `ν_m` of `wgt`:
+`(n_e, Θₑ, B)` and proper volume `dV` (cm³) on the nodes `ν_m` of a weight table:
 `N_s = (dV/h) dlnu Σ_m c_m ∫j_ν dΩ(ν_m)/(w_m + WEIGHT_FLOOR)` with the trapezoid
 weights `c_m` and `dnmax = max_m ∫j_ν dΩ(ν_m)/(w_m + WEIGHT_FLOOR)`, `∫j_ν dΩ` from
-[`int_jnu`](@ref) with `emis`.
+[`int_jnu`](@ref) with `emis`. The `WeightTable` form evaluates the nodes first
+([`ZoneNodes`](@ref)). Device-safe in the `ZoneNodes` form.
 """
-function zone_count(n_e, theta_e, B, dV, wgt::WeightTable, emis::EmissivityTable)
-    n = length(wgt.lwgt) - 1
+function zone_count(n_e, theta_e, B, dV, nodes::ZoneNodes, emis::EmissivityTable)
+    n = length(nodes.nu) - 1
     dnmax = 0.0
     ninterp = 0.0
     @inbounds for m in 0:n
-        nu = exp(m * wgt.dlnu + wgt.lnu_min)
-        w = exp(wgt.lwgt[m + 1])
-        dn = int_jnu(emis, n_e, theta_e, B, nu) / (w + WEIGHT_FLOOR)
+        dn = int_jnu(emis, n_e, theta_e, B, nodes.nu[m + 1]) / nodes.wf[m + 1]
         dnmax = max(dnmax, dn)
         ninterp += node_weight(m, n) * dn
     end
-    return dV / HPL * (wgt.dlnu * ninterp), dnmax
+    return dV / HPL * (nodes.dlnu * ninterp), dnmax
 end
+zone_count(n_e, theta_e, B, dV, wgt::WeightTable, emis::EmissivityTable) =
+    zone_count(n_e, theta_e, B, dV, ZoneNodes(wgt), emis)
 
 """
     zone_nsuperphotons(zone::EmissionZone, wgt::WeightTable[, emis = EMISSIVITY_TABLE])

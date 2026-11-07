@@ -10,9 +10,9 @@ using ..Numerics: HPL, xsum_zeros, xsum_add!, xsum_round, XSUM_MAX_ADDENDS, run_
                   MCRng
 using ..Spacetime: proxy_distance, HORIZON_EPS_SAMPLED
 using ..Matter: EmissionZone, ZoneSite, sample
-using ..MonteCarlo: HotcrossTable, NW, NT, MINW, MAXW, MINT, MAXT, total_compton_cross_num,
+using ..MonteCarlo: HotcrossTable, NW, NT, total_compton_cross_num, hotcross_nodes,
                     WeightTable, EmissivityTable, EMISSIVITY_TABLE, int_jnu, int_jnu_zone,
-                    zone_count, WEIGHT_FLOOR, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP
+                    ZoneNodes, zone_count, WEIGHT_FLOOR, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP
 
 """
     load_hotcross(path) -> HotcrossTable
@@ -39,19 +39,15 @@ end
     build_hotcross_table() -> HotcrossTable
 
 The hot-cross table from `total_compton_cross_num` at every node of the
-`(NW + 1) × (NT + 1)` log-log grid, threaded over the energy nodes.
+`(NW + 1) × (NT + 1)` log-log grid (`MonteCarlo.hotcross_nodes`), threaded over the
+energy nodes.
 """
 function build_hotcross_table()
     logsigma = Matrix{Float64}(undef, NW + 1, NT + 1)
-    dlw = log10(MAXW / MINW) / NW
-    dlT = log10(MAXT / MINT) / NT
-    lminw = log10(MINW)
-    lmint = log10(MINT)
+    eps, theta = hotcross_nodes()
     Threads.@threads for i in 0:NW
-        lw = lminw + i * dlw
         @inbounds for j in 0:NT
-            lT = lmint + j * dlT
-            logsigma[i + 1, j + 1] = log10(total_compton_cross_num(10.0^lw, 10.0^lT))
+            logsigma[i + 1, j + 1] = log10(total_compton_cross_num(eps[i + 1], theta[j + 1]))
         end
     end
     return HotcrossTable(logsigma)
@@ -215,12 +211,13 @@ function zone_tables(sites::AbstractVector, Ns::Real; n_esamp::Integer = MC_N_ES
         lwgt[m] = log(xsum_round(total, m) / hNs + WEIGHT_FLOOR)
     end
     wgt = WeightTable(lnu_min, lnu_max, dlnu, lwgt)
+    nodes = ZoneNodes(wgt)
     Nz = Vector{Float64}(undef, nz)
     dnmax = Vector{Float64}(undef, nz)
     Threads.@threads for c in 1:nchunks
         @inbounds for z in (div((c - 1) * nz, nchunks) + 1):div(c * nz, nchunks)
             zs = sites[z]
-            Nz[z], dnmax[z] = zone_count(zs.n_e, zs.theta_e, zs.B, zs.dV, wgt, emissivity)
+            Nz[z], dnmax[z] = zone_count(zs.n_e, zs.theta_e, zs.B, zs.dV, nodes, emissivity)
         end
     end
     return wgt, Nz, dnmax

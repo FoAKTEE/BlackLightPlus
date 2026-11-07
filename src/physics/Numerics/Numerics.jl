@@ -1,7 +1,7 @@
 """
     Numerics
 
-Number-type-generic building blocks shared by every tier: CGS constants, units, ray-state accessors, interpolation stencils, exact integer-limb sums, the Philox counter RNG and the special functions of the synchrotron fits. Pure, allocation-free, `isbits` values only.
+Number-type-generic building blocks shared by every tier: CGS constants, units, ray-state accessors, interpolation stencils, exact integer-limb sums, the Philox counter RNG, the exponential and logarithm with the same bits on every device and the special functions of the synchrotron fits. Pure, allocation-free, `isbits` values only.
 """
 module Numerics
 
@@ -15,6 +15,7 @@ include("raystate.jl")
 include("stencils.jl")
 include("exactsum.jl")
 include("philox.jl")
+include("elementary.jl")
 include("special.jl")
 
 export CL, EE, ME, MP, KB, HPL, GNEWT, MSUN, SQRT2, SIGMA_THOMSON
@@ -26,6 +27,7 @@ export XSUM_LIMB_BITS, XSUM_NLIMBS, XSUM_NSLOT, XSUM_MAX_ADDENDS,
 export philox4x32, philox_rand, MCRng, mc_uniform, mc_gauss, sample_direction,
        standard_gamma, chi_square, MCStreamLayout, widest_layout, event_capacity, stream_id,
        stream_layer, primary_rng, run_rng, child_rng
+export tang_exp, tang_log
 export bessel_i0, bessel_i1, bessel_k0, bessel_k1, bessel_k2, harmonic_bridge,
        hypergeometric_2f1
 

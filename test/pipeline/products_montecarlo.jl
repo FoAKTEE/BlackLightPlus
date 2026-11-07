@@ -9,12 +9,13 @@ using Test, BlackLightPlus, StaticArrays
 using BlackLightPlus.Plans: RunConfig, Plan, prepare, hotcross_table
 using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
-                    MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render
+                    MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render, grid_tables,
+                    grid_zones, ZoneSums, ZoneCounts, hotcross_build
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
-                     inverse_metric
+                     inverse_metric, proxy_distance
 using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Superphoton, GenerationTables, Opacities, Bias,
-                      StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE
+                      StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE, ZoneNodes
 using BlackLightPlus.Numerics: SIGMA_THOMSON, GNEWT, CL, ME, MCStreamLayout, primary_rng
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactBins, ExactScalars, ChildBuffer,
                      PolarBands, InclinationBands, band, nuLnu_total, nuLnu_solid, total_power,
@@ -186,6 +187,41 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test_throws ArgumentError emission_zones(grid)
     end
 
+    @testset "zone tables on every executor, and kept across runs" begin
+        sites = emission_sites(snap.blocks, pt.spacetime, pt.params)
+        ref = zone_tables(sites, 100.0)
+        tbits(t) = (DK.bits(t[1].lwgt), DK.bits(t[2]), DK.bits(t[3]))
+        for exec in (ThreadedExecutor(chunk = 5), POOLS..., PoolExecutor(DK.devices(1)))
+            @test tbits(grid_tables(exec, sites, 100.0)) == tbits(ref)
+        end
+        @test tbits(grid_tables(PoolExecutor(DK.devices(1)), sites, 7.0e3; n_esamp = 37,
+                                nu_max = 1.0e14)) ==
+              tbits(zone_tables(sites, 7.0e3; n_esamp = 37, nu_max = 1.0e14))
+        nodes = ZoneNodes(ref[1])
+        @test DK.device_isbits(ZoneSums(sites, nodes.nu, EMISSIVITY_TABLE, 256, ExactScalars(401)))
+        @test DK.device_isbits(ZoneCounts(sites, nodes, EMISSIVITY_TABLE))
+        o = (seed = UInt32(5), zones = (stride = 1, r_emit_max = Inf, max_zones = typemax(Int)),
+             gen = (nu_min = 1.0e8, nu_max = 1.0e16, n_esamp = 400, Ns = 1.0e3))
+        b = snap.blocks
+        a = grid_zones(b, pt.spacetime, pt.params, ThreadedExecutor(), o)
+        @test a[1] == sites && a[2] == maximum(z -> 1.2 * proxy_distance(pt.spacetime, z.x)[2], sites)
+        nsp(Ns) = Ns / (log(1.0e16) - log(1.0e8))
+        @test tbits(a[3:5]) == tbits(zone_tables(sites, nsp(1.0e3)))
+        h = grid_zones(b, pt.spacetime, pt.params, PoolExecutor(DK.devices(1)), (o..., seed = UInt32(6)))
+        @test h[1] === a[1] && h[3] === a[3]            # the seed draws nothing at stride 1
+        c = grid_zones(b, pt.spacetime, pt.params, ThreadedExecutor(), (o..., gen = (o.gen..., Ns = 2.0e3)))
+        @test c[1] === a[1] && c[3] !== a[3] && tbits(c[3:5]) == tbits(zone_tables(sites, nsp(2.0e3)))
+        s2 = (o..., zones = (o.zones..., stride = 2))
+        d = grid_zones(b, pt.spacetime, pt.params, ThreadedExecutor(), s2)
+        @test d[1] == emission_sites(b, pt.spacetime, pt.params; stride = 2, seed = 5)
+        @test grid_zones(b, pt.spacetime, pt.params, ThreadedExecutor(), (s2..., seed = UInt32(6)))[1] !=
+              d[1]
+        k5 = KerrSchildCartesian(0.5)
+        @test grid_zones(b, k5, pt.params, ThreadedExecutor(), o)[1] == emission_sites(b, k5, pt.params)
+        e = grid_zones(b, pt.spacetime, pt.params, ThreadedExecutor(), o)
+        @test e[1] == sites && e[1] !== a[1]
+    end
+
     @testset "torus: the template run, energy, Compton tail" begin
         g = mc_spectrum(pt, 1_500; seed = 0xC0FFEE, C = 32.0, spec_nu_max = 1.0e24, n_ebins = 120,
                         backend = :cpu)
@@ -302,6 +338,10 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test prepare(ss).hotcross[] === nothing
         @test mc_spectrum(prepare(ss), 300; kw..., table = THOMSON).plan.hotcross[] === nothing
         @test hotcross_table(prepare(ss)) === t                  # one table per process
+        # the table built on any executor is the host's
+        for exec in (ThreadedExecutor(), POOLS[2], PoolExecutor(DK.devices(1)))
+            @test hotcross_build(exec).logsigma == t.logsigma
+        end
     end
 
     @testset "backend keyword and run record" begin
