@@ -80,9 +80,9 @@ direction; the spot weight is `G = exp(−ds²/2R_spot²)` for `ds² < (4 R_spot
 zero, with `ds²` the rest-frame proper separation from the centre at `t = x⁰`. Density
 `ambient_n_e + n_e0 G`; temperature and field the density-weighted blends of the
 ambient and spot values. `vacuum` outside the cut without ambient plasma or at zero
-density. Where the circular flow at the Keplerian Ω of the Kerr-Schild radius of `x`
-is not timelike (`den > 0` in `circular_velocity`, as inside the photon orbit), the
-square root of the four-velocity throws a `DomainError`. `sigma` and `beta_inv` are
+density. `vacuum` where the circular flow at the Keplerian Ω of the Kerr-Schild radius
+of `x` is not timelike (`den ≥ 0` in `circular_velocity`, as inside the photon orbit,
+which every captured ray crosses), ambient plasma or not. `sigma` and `beta_inv` are
 zero; `params` is not read.
 """
 @inline function plasma_state(src::EquatorialHotspot, st, x::SVector{4}, g, params)

@@ -29,6 +29,10 @@ While the version is `0.x`, a bump of `x` may break that API.
   cut ends the ray on the CPU and on GPUs alike, where the CPU raised a `DomainError` and
   a GPU captured on a NaN. The adaptive tracer's redshift event reads the same energy. A
   ray that never reaches such a state is bitwise unchanged.
+- `EquatorialHotspot` and `PageThorneDisk` are vacuum where the Keplerian circular flow is
+  not timelike (inside the photon orbit, which every captured ray crosses):
+  `circular_velocity` gives `u^t = +Inf` there, where the CPU raised a `DomainError` and a
+  GPU returned vacuum on a NaN, so a hotspot image with captured rays renders on the CPU.
 - Figure generators under `figures/`: the paper's figures, the dynamic-ray figures and the
   reproductions of the Mahakala, KPolaris and Blacklight papers' figures, each with its
   standing table.

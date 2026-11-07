@@ -6,10 +6,10 @@
 using Test, BlackLightPlus, StaticArrays, ForwardDiff, Random
 using LinearAlgebra: dot
 using BlackLightPlus.Spacetime: KerrSchildCartesian, metric, metric_and_inverse, ks_radius, isco_radius,
-                     keplerian_omega, keplerian_specific_angular_momentum
+                     keplerian_omega, keplerian_specific_angular_momentum, PlaneParallelCamera
 using BlackLightPlus.Matter: PolishDoughnut, PageThorneDisk, EquatorialHotspot, PlasmaState, AnalyticProvider,
                   plasma_state, sample, domain_radius, vacuum, torus_potential, page_thorne_flux,
-                  page_thorne_temperature, hotspot_center
+                  page_thorne_temperature, hotspot_center, circular_velocity
 
 state(src, st, x) = plasma_state(src, st, x, metric_and_inverse(st, x), nothing)
 udotu(st, x, u) = dot(u, metric(st, x) * u)
@@ -129,8 +129,17 @@ end
         @test pamb.valid && isapprox(pamb.n_e, 1e3; rtol = 1e-6)
         @test pamb.theta_e ≈ 5.0 && pamb.B ≈ 1.0
 
-        # no circular orbit inside the photon orbit: the real square root throws
-        @test_throws DomainError state(spot, st, SVector(0.0, 2.5, 0.0, 0.0))
+        # no circular orbit inside the photon orbit: vacuum, with or without ambient plasma
+        xin = SVector(0.0, 2.5, 0.0, 0.0)
+        @test circular_velocity(metric(st, xin), xin, keplerian_omega(a, 2.5)).den > 0
+        @test state(spot, st, xin) === vacuum(Float64) && state(spot2, st, xin) === vacuum(Float64)
+        @test circular_velocity(metric(st, xin), xin, keplerian_omega(a, 2.5)).ucon[1] === Inf
+        # every captured ray crosses it: each sample of the march decodes, none throws
+        rays = Main.Decks.camera_rays(st, PlaneParallelCamera(inc_deg = 60.0, d = 1000.0, fov = 10.0, npix = 4))
+        states, _ = Main.Decks.sampled_trace(st, rays; C = 80.0, escape = 1100.0, nmax = 6000)
+        samples = [state(spot2, st, SVector(y[1], y[2], y[3], y[4])) for s in states for y in s]
+        @test count(p -> p === vacuum(Float64), samples) > 0
+        @test all(p -> p === vacuum(Float64) || (p.valid && finite_state(p)), samples)
     end
 
     @testset "AD through the states" begin

@@ -36,14 +36,15 @@ end
 Four-velocity `u^μ = u^t (ξ + Ω η)` of the circular flow of coordinate angular
 velocity `Omega` at `x`, normalised to `u·u = −1`, its covariant form, and
 `den = X_tt + 2Ω X_tφ + Ω² X_φφ = −1/(u^t)²`. The flow exists only where `den < 0`;
-for `den > 0` the real square root throws a `DomainError`, and `den = 0` gives an
-infinite `u^t`.
+elsewhere (as inside the photon orbit) `u^t` is `+Inf`, the limit `den → 0⁻`, the
+four-vectors are not finite and the caller returns vacuum on `den`, on the host and on
+a device alike.
 """
 @inline function circular_velocity(gcov::SMatrix{4,4}, x::SVector{4}, Omega)
     xi, eta = killing_vectors(x)
     ubar = xi + Omega * eta
     den = dot(ubar, gcov * ubar)
-    ut = 1 / sqrt(-den)
+    ut = den < zero(den) ? 1 / sqrt(-den) : oftype(den, Inf)
     ucon = ut * ubar
     ucov = gcov * ucon
     return (ucon = ucon, ucov = ucov, den = den)
