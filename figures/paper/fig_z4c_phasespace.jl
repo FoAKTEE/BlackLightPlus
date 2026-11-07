@@ -1,11 +1,13 @@
-# fig_z4c_phasespace.jl — capture/escape phase space of the AthenaK Z4c binary-black-hole
-# slice seen from one camera direction ι above the puncture axis:
+# fig_z4c_phasespace.jl — capture/escape phase space of the AthenaK Z4c slice of a
+# Brill–Lindquist head-on collision (dump at t = 2 M) seen from one camera direction ι
+# above the puncture axis:
 #   (a) capture map on NMAP × NMAP image points over |a|, |b| ≤ 7.5 M;
 #   (b) capture boundary: 4-connected captured components of the map (the 12 largest of at
 #       least 4 cells), radial scans from each component centroid at NAZ azimuths with every
 #       capture transition bisected by traced rays to 1e-4 M (anchors), and the map
 #       transitions on up to 2000 azimuths per component bisected to 1e-5 M (ring);
-#   (c) the ray deck: two plungers on the row a = A0 (b nearest the projected punctures),
+#   (c) the ray deck: two plungers on the row a = A0 (the captured samples of a b-scan at
+#       step 0.05 M nearest the projected punctures),
 #       ladders 1e-2 and 1e-4 M inside and outside the outer capture edges of that row
 #       (edges bisected to 1e-8 M) and a polar grid of radii 1.5, 3, 4.5, 6.5 M at NPSI
 #       angles, each traced with its trajectory saved.
@@ -19,16 +21,24 @@
 # alpha_min = 0.55, accepted at α ≤ 0.56), escaped at r ≥ 95 M (accepted at r ≥ 94.5 M).
 # Bending angle: the summed turning angle of the saved coordinate path. Every batch of rays
 # runs as a per-item program on the threaded executor.
+# Punctures: where χ_Z4c → 0, read from the dump itself (it carries no puncture tracker):
+# on each side of the plane x = 0, the finest-level cell with the smallest χ_Z4c in the box,
+# moved along each axis to the vertex of the parabola through χ_Z4c at that cell centre and
+# its two neighbours. They place the deck's plungers and the puncture markers of
+# paper/scripts/z4c_rays.py.
 #
-# Writes figures/paper/out/z4c_phasespace/: map.npy (NMAP × NMAP, row = a, 1 = captured),
-# anchors.npy and ring.npy (rows: component, transition index, a, b, bracket width),
-# traj_<name>.npy (columns in deck.json `traj_columns`), deck.json (setup, counts, per-ray
-# fate, bending angle, final escape direction, code SHA, threads, wall times).
+# Writes figures/paper/out/z4c_phasespace/ (BLP_FIG_OUT): punctures.json (puncture
+# positions, the minimum cells, dump time, code SHA), map.npy (NMAP × NMAP, row = a,
+# 1 = captured), anchors.npy and ring.npy (rows: component, transition index, a, b,
+# bracket width), traj_<name>.npy (columns in deck.json `traj_columns`), deck.json (setup,
+# punctures and their image-plane b, counts, per-ray fate, bending angle, final escape
+# direction, code SHA, threads, wall times).
 #
 # Run from the repository root:
 #   julia -t 48 --project=. figures/paper/fig_z4c_phasespace.jl
 # Env: BLP_Z4C (dump path), BLP_FIG_IOTA (30), BLP_FIG_NMAP (1201), BLP_FIG_NAZ (72),
-#      BLP_FIG_NPSI (8).
+#      BLP_FIG_NPSI (8), BLP_FIG_OUT (output directory), BLP_FIG_PART (all; `punctures`
+#      reads the dump and writes punctures.json only).
 using Dates
 using LinearAlgebra
 using Printf
@@ -36,9 +46,11 @@ using StaticArrays
 using BlackLightPlus
 using BlackLightPlus.Spacetime: ADMGrid, trace_geodesic, nullify_covariant, null_error, metric, sample_adm
 using BlackLightPlus.Execution: ThreadedExecutor, foreach_item!, image_coords, PixelGrid, CoordList
+using BlackLightPlus.Data: AthenaKBin, read_athenak_bin, sample_var
 
 const BIN = get(ENV, "BLP_Z4C", "/data2/haiyangw/aurora/nr_bbh_bl/bbh.z4c.00001.bin")
-const OUT = joinpath(@__DIR__, "out", "z4c_phasespace")
+const OUT = get(ENV, "BLP_FIG_OUT", joinpath(@__DIR__, "out", "z4c_phasespace"))
+const PART = get(ENV, "BLP_FIG_PART", "all")
 const ROOT = dirname(dirname(@__DIR__))
 # code version recorded in the metadata: HEAD SHA, "-dirty" if src has uncommitted edits
 const GIT_SHA = try
@@ -56,7 +68,6 @@ const LIM = 7.5
 const A0 = 0.041015625             # off-symmetry-plane deck row
 const LADDER = (1e-2, 1e-4)
 const RHOS = (1.5, 3.0, 4.5, 6.5)
-const XP = 3.3298                  # puncture |x|
 const BTOL = 1e-4                  # anchor bisection tolerance
 const BTOL_RING = 1e-5             # ring bisection tolerance
 const NAZ_MAX = 2000
@@ -132,6 +143,65 @@ function fate(st, sol)
 end
 
 captured(st, B, a, b) = fate(st, trace(st, B, a, b)) == :capture
+
+"""
+    punctures(s::AthenaKBin) -> (positions, cells)
+
+The punctures of the Z4c dump `s`, where χ_Z4c → 0: on each side of the plane x = 0, the
+cell of the finest level with the smallest χ_Z4c inside |x_i| ≤ HALF, moved along each axis
+to the vertex of the parabola through χ_Z4c at that cell centre and at the centres one cell
+width either side (`sample_var` returns the cell value at a cell centre). `positions` lists
+the +x puncture first; `cells` holds each minimum cell's centre, width and χ_Z4c.
+"""
+function punctures(s::AthenaKBin)
+    ic = findfirst(==("z4c_chi"), s.var_names)
+    ic === nothing && error("no z4c_chi in the dump")
+    lmax = maximum(s.level)
+    positions = SVector{3,Float64}[]
+    cells = Dict{String,Any}[]
+    for side in (1, -1)
+        vmin = Inf; c = SVector(0.0, 0.0, 0.0); h = 0.0
+        for m in 1:s.n_mb
+            s.level[m] == lmax || continue
+            dx = SVector((s.x1max[m] - s.x1min[m]) / s.nx1, (s.x2max[m] - s.x2min[m]) / s.nx2,
+                         (s.x3max[m] - s.x3min[m]) / s.nx3)
+            for k in 1:s.nx3, j in 1:s.nx2, i in 1:s.nx1
+                x = SVector(s.x1min[m], s.x2min[m], s.x3min[m]) + (SVector(i, j, k) .- 0.5) .* dx
+                (sign(x[1]) == side && maximum(abs, x) <= HALF) || continue
+                v = Float64(s.data[i, j, k, ic, m])
+                v < vmin && ((vmin, c, h) = (v, x, dx[1]))
+            end
+        end
+        isfinite(vmin) || error("no finest-level cell with x of sign $side inside the box")
+        chi(p) = sample_var(s, ic, p[1], p[2], p[3])
+        f0 = chi(c)
+        p = SVector(ntuple(3) do a
+            e = SVector(ntuple(b -> b == a ? h : 0.0, 3))
+            fm = chi(c - e); fp = chi(c + e)
+            c[a] + h * (fm - fp) / (2 * (fm - 2 * f0 + fp))
+        end)
+        push!(positions, p)
+        push!(cells, Dict{String,Any}("centre" => collect(c), "width" => h, "chi" => vmin))
+    end
+    return positions, cells
+end
+
+"write punctures.json for the dump `s` and return the puncture positions"
+function write_punctures(s::AthenaKBin)
+    P, cells = punctures(s)
+    rec = Dict{String,Any}(
+        "dataset" => BIN, "dump_time" => s.time, "punctures" => [collect(p) for p in P],
+        "min_cells" => cells, "git_sha" => GIT_SHA, "when" => string(now()),
+        "method" => "per side of x = 0: the finest-level cell of least z4c_chi in |x_i| <= " *
+                    "$(HALF), moved along each axis to the vertex of the parabola through " *
+                    "z4c_chi at that cell centre and its two neighbours")
+    open(joinpath(OUT, "punctures.json"), "w") do io
+        write(io, json_str(rec))
+    end
+    logf("punctures at t = %.3f: %s\n", s.time,
+         join((@sprintf("(%.4f, %.4f, %.4f)", p[1], p[2], p[3]) for p in P), ", "))
+    return P
+end
 
 """
     CaptureProgram(st, basis, gen)
@@ -380,19 +450,22 @@ function ray_bundle(st, B, name, a, b)
 end
 
 """
-    DeckProgram(st, basis, deck)
+    DeckProgram(st, basis, deck, bundles)
 
-Per-item program: the saved trajectory and diagnostics of deck ray `item`.
+Per-item program for the threaded executor: the saved trajectory and diagnostics of deck
+ray `item`, stored in `bundles[item]`. The bundles (a matrix and a name per ray) have no
+fixed size, so they are not an executor output.
 """
 struct DeckProgram{S,Bs,D} <: Function
     st::S
     basis::Bs
     deck::D
+    bundles::Vector{Any}
 end
 
-function (p::DeckProgram)(item, i, out)
+function (p::DeckProgram)(item, i)
     name, a, b, _ = p.deck[item]
-    @inbounds out[i] = ray_bundle(p.st, p.basis, name, a, b)
+    @inbounds p.bundles[item] = ray_bundle(p.st, p.basis, name, a, b)
     return nothing
 end
 
@@ -411,8 +484,14 @@ end
 
 function main()
     mkpath(OUT)
+    if PART == "punctures"
+        write_punctures(read_athenak_bin(BIN))
+        return
+    end
+    PART == "all" || error("BLP_FIG_PART is all or punctures, not $PART")
     t0 = time()
     st, snap = z4c_grid_spacetime(BIN, HALF, NGRID; alpha_min=ALPHA_TERM)
+    P = write_punctures(snap)
     load_s = time() - t0
     logf("[ps %s] grid spacetime built in %.1fs (t=%.2f), %d threads\n",
             TAG, load_s, snap.time, Threads.nthreads())
@@ -463,7 +542,7 @@ function main()
 
     # (c) multiangle deck at this angle
     t4 = time()
-    bp = XP * (-B.eb[1])
+    bproj = sort([dot(p, B.eb) for p in P])        # image-plane b of the punctures
     bs, capm = b_scan(st, B)
     icap = findall(capm)
     isempty(icap) && error("deck $TAG: no captured samples on the b-scan")
@@ -474,11 +553,11 @@ function main()
     logf("[ps %s] outer b-edges [%.6f, %.6f] in %.0fs\n", TAG, b_lo, b_hi, edges_s)
 
     deck = Tuple{String,Float64,Float64,String}[]
-    if abs(2 * bp) < 0.05                          # aligned: projections coincide
+    if bproj[2] - bproj[1] < 0.05                  # aligned: projections coincide
         push!(deck, ("$(TAG)_plunge_front", 0.0, 0.0, "capture"))
         push!(deck, ("$(TAG)_plunge_axis2", 0.0, 0.02, "capture"))
     else
-        for (k, btgt) in enumerate((-abs(bp), abs(bp)))
+        for (k, btgt) in enumerate(bproj)
             ib = icap[argmin(abs.(bs[icap] .- btgt))]
             push!(deck, ("$(TAG)_plunge_b$(k)", A0, bs[ib], "capture"))
         end
@@ -497,8 +576,7 @@ function main()
 
     t5 = time()
     bundles = Vector{Any}(undef, length(deck))
-    foreach_item!(ThreadedExecutor(chunk = 1), DeckProgram(st, B, deck), eachindex(deck);
-                  outs=(bundles,))
+    foreach_item!(ThreadedExecutor(chunk = 1), DeckProgram(st, B, deck, bundles), eachindex(deck))
     rays = Dict{String,Any}[]
     for (k, (name, a, b, expect)) in enumerate(deck)
         rb = bundles[k]
@@ -528,9 +606,9 @@ function main()
         "escape" => ESCAPE, "lim" => LIM, "nmap" => NMAP,
         "naz_anchor" => NAZ, "naz_ring" => naz_ring,
         "btol_anchor" => BTOL, "btol_ring" => BTOL_RING, "ring_rounds" => niter,
-        "a0_row" => A0, "xp" => XP, "ladder" => collect(LADDER),
+        "a0_row" => A0, "punctures" => [collect(p) for p in P], "ladder" => collect(LADDER),
         "rhos" => collect(RHOS), "npsi" => NPSI,
-        "proj_b_abs" => abs(bp), "edge_b_lo" => b_lo, "edge_b_hi" => b_hi,
+        "proj_b" => bproj, "edge_b_lo" => b_lo, "edge_b_hi" => b_hi,
         "n_captured_cells" => ncap, "n_components" => ncomp,
         "kept_components" => collect(keep),
         "component_sizes" => sizes,

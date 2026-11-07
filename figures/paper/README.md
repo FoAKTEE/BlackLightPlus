@@ -11,7 +11,7 @@ the script defaults or the `BLP_*` environment variables named in each header.
 |---|---|---|
 | fig_analytic (exact-Kerr equatorial disk) and fig_summary (a) | `fig_examples.jl` | the analytic-disk image and a torus demonstration render |
 | fig_polarized (polarized GRMHD torus) and fig_summary (b) | `fig_pol_hires.jl` | Stokes I, Q, U, V of the torus snapshot and the run record |
-| fig_capture (Z4c binary slice) and fig_summary (c) | `fig_z4c_phasespace.jl`, `fig_z4c_amr.jl` | capture map, bisected boundary, ray deck; the class map and refinement levels of the image-plane AMR |
+| fig_capture (Z4c slice of a Brill–Lindquist head-on collision) and fig_summary (c) | `fig_z4c_phasespace.jl`, `fig_z4c_amr.jl` | the puncture positions of the slice, capture map, bisected boundary, ray deck; the class map and refinement levels of the image-plane AMR |
 | fig_binary (binary GRMHD images with EVPA ticks) and fig_summary (d) | `fig_eht_bbh.jl` | 230 GHz Stokes images of three binary snapshots |
 | fig_dynrays (rays through the orbiting binary against the frozen metric) | `fig_dynrays.jl` | the orbital-plane ray fan, the capture-class maps at four observer times and the freeze-time scan |
 | fig_dynrays_slowlight (fast and slow light of the GRMHD binary) | `fig_dynrays_slowlight.jl` | fast- and slow-light Stokes I of snapshot 00455 at i = 90°, the sky-plane crossing times, the epoch scan, the light-travel delays and the translation scan |

@@ -1,6 +1,7 @@
 # fig_z4c_amr.jl — image-plane adaptive refinement of the ray class for the AthenaK Z4c
-# binary-black-hole slice at ι = 30°, with the spacetime, rays, integrator, capture and
-# escape criteria of fig_z4c_phasespace.jl. Classes: 0 escaped with total bending ≤ 360°,
+# slice of a Brill–Lindquist head-on collision (dump at t = 2 M) at ι = 30°, with the
+# spacetime, rays, integrator, capture and escape criteria of fig_z4c_phasespace.jl.
+# Classes: 0 escaped with total bending ≤ 360°,
 # 1 captured (lapse < 0.55), 2 escaped after bending > 360°, 3 neither (affine budget
 # exhausted). Bending: summed turning angle of the saved coordinate path.
 #
