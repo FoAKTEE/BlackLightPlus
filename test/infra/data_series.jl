@@ -1,12 +1,14 @@
 # Slow light: the fast-light limit of an identity series, the exact linear blend of two
 # frames, the emission-time axis t_obs + X⁰ and its causal bracket order along a backward
 # ray, read-only sampling of a held-in-memory series, and the two-frame window (end
-# short-circuits, default epoch, advance, mesh guard, device form).
+# short-circuits, default epoch, advance, mesh guard, device form); the frame sequence at
+# the sample's own time and the co-rotating plasma.
 using Test, BlackLightPlus, StaticArrays
 using Adapt: Adapt
 using BlackLightPlus.Data: AthenaKSnapshot, SnapshotSeries, synthetic_series, scale_density,
                 bracketing_pair, get_frame, blend, FrameWindow, window, advance, SeriesProvider,
-                UniformGrid, resample, with_locate, level_hash, BlockScan, FluidBlocks
+                UniformGrid, resample, with_locate, level_hash, BlockScan, FluidBlocks, FrameSequence,
+                Corotating
 using BlackLightPlus.Matter: PlasmaPrimitives, primitives, domain_radius
 using BlackLightPlus.Spacetime: KerrSchildCartesian, PlaneParallelCamera
 const Decks = Main.Decks
@@ -186,6 +188,47 @@ end
         end
     end
     @test !Decks.device_isbits(SeriesProvider(ser))
+end
+
+
+@testset "frame sequence and co-rotating plasma" begin
+    a = tiny_snap(); b = tiny_snap(rho0 = 5.0)
+    fs = FrameSequence([0.0, 10.0, 20.0], [a.blocks, b.blocks, b.blocks])
+    @test domain_radius(fs) == domain_radius(a.blocks)
+    p(t) = primitives(fs, SVector(t, X...))
+    @test p(0.0) === primitives(a.blocks, SVector(0.0, X...)) && p(-3.0) === p(0.0)
+    @test p(10.0) === primitives(b.blocks, SVector(10.0, X...))
+    @test p(15.0) === primitives(b.blocks, SVector(15.0, X...))   # the same frame twice
+    @test p(25.0) === p(20.0)
+    sa = primitives(a.blocks, SVector(0.0, X...)); sb = primitives(b.blocks, SVector(0.0, X...))
+    @test p(2.5).rho === blend(sa, sb, 0.25).rho
+    # the series form is the imager's series at epoch t_obs = 0 (here the first frame time)
+    ser = synthetic_series(a; times = [0.0, 10.0], evolve = (s, t) -> t == 0 ? s : b, t_obs = 0.0)
+    fq = FrameSequence(ser)
+    @test fq.frames[1] === a.blocks && fq.frames[2] === b.blocks
+    @test all(primitives(fq, SVector(t, X...)) == sample_t(ser, t) for t in (0.0, 3.7, 9.9))
+    @test_throws ArgumentError FrameSequence([0.0, 0.0], [a.blocks, a.blocks])
+    @test_throws ArgumentError FrameSequence(Float64[], typeof(a.blocks)[])
+
+    # co-rotation: at x⁰ the plasma of time 0 at R(−ωx⁰)x with its vectors rotated by R(ωx⁰)
+    snap = Decks.amr_deck()
+    ω = 0.03
+    c = Corotating(snap, ω)
+    @test domain_radius(c) == domain_radius(snap) && Decks.device_isbits(Corotating(snap.blocks, ω))
+    x = SVector(0.0, 4.2, -2.5, 1.3)
+    @test primitives(c, x) === primitives(snap, x)                 # θ = 0
+    for t in (7.0, -40.0, 123.4)
+        θ = ω * t
+        R = @SMatrix [cos(θ) -sin(θ) 0.0; sin(θ) cos(θ) 0.0; 0.0 0.0 1.0]
+        xr = R * SVector(x[2], x[3], x[4])
+        q = primitives(c, SVector(t, xr...))
+        ref = primitives(snap, SVector(t, (R' * xr)...))
+        @test q.rho ≈ ref.rho rtol = 1e-12
+        @test q.eint ≈ ref.eint rtol = 1e-12
+        @test q.uu ≈ R * ref.uu rtol = 1e-12
+        @test q.bb ≈ R * ref.bb rtol = 1e-12
+    end
+    @test !primitives(c, SVector(5.0, 30.0, 0.0, 0.0)).inside
 end
 
 end

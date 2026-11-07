@@ -94,8 +94,14 @@ The frame bracket of coordinate time `t`: the lower frame `ia ∈ 1:N-1` (the la
 `ia + 1`. Clamped at the ends: `t ≤ times[1]` gives `(1, 0.0)`, `t ≥ times[N]` gives
 `(N - 1, 1.0)`; a one-frame series gives `(1, 0.0)`.
 """
-@inline function bracketing_pair(series::SnapshotSeries, t::Real)
-    ts = series.times
+@inline bracketing_pair(series::SnapshotSeries, t::Real) = bracketing_pair(series.times, t)
+
+"""
+    bracketing_pair(times::AbstractVector, t) -> (ia, w)
+
+The same bracket on the ascending frame times `times`.
+"""
+@inline function bracketing_pair(ts::AbstractVector{<:Real}, t::Real)
     N = length(ts)
     N >= 1 || error("empty SnapshotSeries")
     N == 1 && return (1, 0.0)
@@ -322,3 +328,83 @@ function domain_radius(p::SeriesProvider)
     isempty(s.paths) || return Inf
     return maximum(domain_radius(f) for f in values(s.frames))
 end
+
+"""
+    FrameSequence{P} <: GridProvider
+    FrameSequence(times, frames)
+    FrameSequence(series::SnapshotSeries)
+
+Frames held in memory at ascending coordinate times `times`, sampled at the time of the
+sample itself: `primitives(fs, x)` brackets `x⁰` with [`bracketing_pair`](@ref), returns
+the lower frame's sample when `w == 0`, the upper frame's when the two frames are the same
+object or `w == 1`, and [`blend`](@ref) of the two samples otherwise (clamped to the end
+frames outside `[times[1], times[end]]`). The series form loads every frame of `series`
+(`get_frame`, frame `k` its `AthenaKSnapshot`'s blocks), so sampling takes no lock. The
+frame times are those of the spacetime's coordinate `x⁰`, as in a Monte Carlo run, whose
+superphotons carry their own time from emission; the camera-epoch convention of slow-light
+imaging is [`SeriesProvider`](@ref)'s. Host only.
+"""
+struct FrameSequence{P} <: GridProvider
+    times::Vector{Float64}
+    frames::Vector{P}
+    function FrameSequence{P}(times::AbstractVector{<:Real}, frames::AbstractVector) where {P}
+        length(times) == length(frames) >= 1 ||
+            throw(ArgumentError("FrameSequence: times and frames must be non-empty and of one length"))
+        issorted(times; lt = <=) ||
+            throw(ArgumentError("FrameSequence: times must be strictly ascending"))
+        return new{P}(collect(Float64, times), collect(P, frames))
+    end
+end
+FrameSequence(times::AbstractVector{<:Real}, frames::AbstractVector{P}) where {P<:GridProvider} =
+    FrameSequence{P}(times, frames)
+
+FrameSequence(series::SnapshotSeries) =
+    FrameSequence(series.times, [get_frame(series, k).blocks for k in 1:length(series)])
+
+function primitives(fs::FrameSequence, x::SVector{4})
+    ia, w = bracketing_pair(fs.times, Float64(x[1]))
+    A = fs.frames[ia]
+    w == 0.0 && return primitives(A, x)
+    B = fs.frames[ia + 1]
+    (A === B || w == 1.0) && return primitives(B, x)
+    return blend(primitives(A, x), primitives(B, x), w)
+end
+
+"The largest domain radius of the frames."
+domain_radius(fs::FrameSequence) = maximum(domain_radius, fs.frames)
+
+"""
+    Corotating{P} <: GridProvider
+    Corotating(provider, omega)
+
+The plasma of `provider` (its state at coordinate time 0) carried rigidly about the `z`
+axis at angular velocity `omega`: the primitives at `x` are those of `provider` at
+`R_z(−θ) x` with the velocity and field rotated by `R_z(θ)`, `θ = ω x⁰`. On a spacetime
+with the helical symmetry `∂_t + ω ∂_φ` (`Spacetime.helical_symmetry`), such as two holes
+on a circular orbit of frequency `ω`, metric and plasma together are invariant under
+`t → t + τ`, `φ → φ + ωτ`. `isbits` after `Adapt.adapt` when `provider` is.
+"""
+struct Corotating{P} <: GridProvider
+    inner::P
+    omega::Float64
+    Corotating{P}(inner::P, omega::Real) where {P} = new{P}(inner, Float64(omega))
+end
+Corotating(p::GridProvider, omega::Real) = Corotating{typeof(p)}(p, omega)
+Adapt.@adapt_structure Corotating
+
+@inline function primitives(c::Corotating, x::SVector{4})
+    θ = c.omega * Float64(x[1])
+    cs = cos(θ); sn = sin(θ)
+    px = Float64(x[2]); py = Float64(x[3])
+    p = primitives(c.inner, SVector(Float64(x[1]), cs * px + sn * py, -sn * px + cs * py,
+                                    Float64(x[4])))
+    p.inside || return p
+    u = p.uu; b = p.bb
+    T = eltype(u)
+    return PlasmaPrimitives{T}(p.rho, SVector{3,T}(cs * u[1] - sn * u[2], sn * u[1] + cs * u[2], u[3]),
+                               p.eint, SVector{3,T}(cs * b[1] - sn * b[2], sn * b[1] + cs * b[2], b[3]),
+                               true)
+end
+
+"The domain radius of the carried provider."
+domain_radius(c::Corotating) = domain_radius(c.inner)
