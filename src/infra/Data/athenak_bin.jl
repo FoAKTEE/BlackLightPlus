@@ -262,7 +262,9 @@ snapshot. `dens, velx, vely, velz, bcc1, bcc2, bcc3` are copied bit for bit;
 `eint = press/(gamma - 1)` is computed in `Float64` and rounded once to `Float32`; a
 `temperature` column is dropped; non-finite cells are zeroed with one warning. Block
 geometry: `dx = (max - min)/n`, `x_left = min + dx/2` per axis; logical locations are
-`(min - domain_min)/width`, which must be integral within 1e-6 per block and axis.
+`(min - domain_min)/width`, which must be integral within 1e-6 per block and axis. The
+locate strategy and the ghost layers are built as by the [`AthenaKSnapshot`](@ref)
+constructors.
 """
 function athenak_bin_snapshot(binfile::AbstractString; gamma::Real)
     s = read_athenak_bin(binfile)
@@ -285,21 +287,22 @@ function athenak_bin_snapshot(binfile::AbstractString; gamma::Real)
             error("athenak_bin_snapshot: block $m axis $ax off the power-of-two " *
                   "logical grid (fractional index $f) — corrupt or unsupported mesh")
     end
-    return AthenaKSnapshot(data, lo, hi, xl, dx, s.level, ll; time = s.time)
+    return _snapshot(data, lo, hi, xl, dx, s.level, ll, PRIM_NAMES, s.time)
 end
 
-# The feature-fastest `PRIM_NAMES` block of the columns `cols`, press slot divided by `gm1`.
+# The extended feature-fastest `PRIM_NAMES` array of the columns `cols` (interior cells),
+# press slot divided by `gm1`.
 function _bin_fluid(s::AthenaKBin, cols, gm1)
     ni, nj, nk, nmb = s.nx1, s.nx2, s.nx3, s.n_mb
     src = s.data
-    data = Array{Float32,5}(undef, 8, ni, nj, nk, nmb)
+    data = _extended(ni, nj, nk, nmb)
     nbad = Threads.Atomic{Int}(0)
     Threads.@threads for m in 1:nmb
         bad = 0
         @inbounds for k in 1:nk, j in 1:nj, i in 1:ni, (prim, v) in enumerate(cols)
             val = src[i, j, k, v, m]
             isfinite(val) || (val = 0.0f0; bad += 1)
-            data[prim, i, j, k, m] = prim == 5 ? Float32(Float64(val) / gm1) : val
+            data[prim, i + 1, j + 1, k + 1, m] = prim == 5 ? Float32(Float64(val) / gm1) : val
         end
         bad > 0 && Threads.atomic_add!(nbad, bad)
     end

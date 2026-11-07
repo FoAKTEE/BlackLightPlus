@@ -1,22 +1,23 @@
 """
     Data
 
-Containers and files: AthenaK snapshots as feature-fastest fluid blocks with eager locate
-tables, the `.athdf` and `.bin` readers, uniform grids, snapshot series with their
-two-frame windows, and the npy writer. Every grid-backed `PlasmaProvider` lives here; the
-sampling structs are `isbits` after `Adapt.adapt`.
+Containers and files: AthenaK snapshots as feature-fastest fluid blocks with ghost layers
+and eager locate tables, the `.athdf` and `.bin` readers, uniform grids, snapshot series
+with their two-frame windows, and the npy writer. Every grid-backed `PlasmaProvider` lives
+here; the sampling structs are `isbits` after `Adapt.adapt`.
 """
 module Data
 
 using StaticArrays
 using HDF5: h5open, read_attribute, attributes
 import Adapt
-using ..Numerics: corner_weights, lerp8
+using ..Numerics: lerp8
 using ..Spacetime: ADMGrid
 using ..Matter: PlasmaPrimitives, GridProvider
 import ..Matter: primitives, domain_radius
 
 include("fluid_blocks.jl")
+include("ghost_cells.jl")
 include("athenak_hdf5.jl")
 include("athenak_bin.jl")
 include("uniform_grid.jl")

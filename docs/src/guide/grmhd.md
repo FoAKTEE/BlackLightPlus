@@ -10,8 +10,13 @@ and the products.
 `AthenaKSnapshot` reads an `.athdf` dump (the `mhd_w_bcc` output with a pressure column
 needs the adiabatic index `gamma`; an internal-energy column does not); `athenak_bin_snapshot`
 in the `Data` module reads the `.bin` layout. The snapshot is a grid provider: it is
-sampled on its meshblock hierarchy with a trilinear stencil, and nodes outside the mesh
-are vacuum.
+sampled on its meshblock hierarchy with a trilinear stencil on every block extended by one
+layer of ghost cells, which the reader builds from the neighbouring blocks (copied at the
+same level, averaged from a finer block, prolonged with limited slopes from a coarser
+one), so the field is continuous across faces between blocks of one level and
+second-order accurate everywhere ([Sampling the meshblock hierarchy](@ref)); points
+outside the mesh are vacuum. The ghost layers cost 20% more memory for blocks of $32^3$
+cells and 10% for $64^3$.
 
 ```julia
 using BlackLightPlus

@@ -74,9 +74,9 @@ end
             i = c % nx + 1; j = (c ÷ nx) % nx + 1; k = c ÷ nx^2 + 1
             raw = (m == 2 && prim == 5 && c == 7) ? 0.0f0 : cellval(m, prim, c)
             want = prim == 5 ? Float32(Float64(raw) / (γ - 1.0)) : raw
-            @test b.data[prim, i, j, k, m] === want
+            @test b.data[prim, i + 1, j + 1, k + 1, m] === want
         end
-        @test pgas_from_eint(Float64(b.data[5, 2, 1, 1, 1]), γ) ≈ Float64(cellval(1, 5, 1)) rtol = 2e-7
+        @test pgas_from_eint(Float64(b.data[5, 3, 2, 2, 1]), γ) ≈ Float64(cellval(1, 5, 1)) rtol = 2e-7
         s = primitives(snap, SVector(0.0, 0.5, 0.5, 0.5))
         @test s.inside && s.rho > 0 && isfinite(s.eint)
         nogas = write_bin(joinpath(dir, "nogas.bin"), ["dens", "velx"])

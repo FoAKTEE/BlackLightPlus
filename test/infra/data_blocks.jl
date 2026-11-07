@@ -1,11 +1,11 @@
-# Fluid blocks: the clamped in-block trilinear sample, the three locate strategies and
+# Fluid blocks: the trilinear sample in a block extended by its ghost layer, the three locate strategies and
 # their face rules, the eager choice of strategy (leaf table, level hash past the cell
 # cap, scan for a mesh with neither), mesh sharing, the domain radius, and the device form.
 using Test, BlackLightPlus, StaticArrays, Random
 using Adapt: Adapt
 using BlackLightPlus.Data: FluidBlocks, LeafTable, LevelHash, BlockScan, AthenaKSnapshot, leaf_table,
                 level_hash, build_locate, with_locate, locate, block_sample, same_mesh,
-                share_mesh, PRIM_NAMES
+                share_mesh, corner, PRIM_NAMES
 using BlackLightPlus.Matter: PlasmaPrimitives, primitives, domain_radius
 const Decks = Main.Decks
 
@@ -57,26 +57,29 @@ isoutside(s::PlasmaPrimitives) = !s.inside && s.rho === 0.0 && s.eint === 0.0 &&
 
 @testset "fluid blocks" begin
 
-@testset "sample: cell values, clamped shell, exterior" begin
+@testset "sample: cell values, the outer half cell, exterior" begin
     snap = Decks.amr_deck()
     b = snap.blocks
     @test b.locate isa LeafTable                                  # built in the constructor
-    @test (b.ni, b.nj, b.nk, b.nmb) == (6, 6, 6, 8) && size(b.data) == (8, 6, 6, 6, 8)
+    @test (b.ni, b.nj, b.nk, b.nmb) == (6, 6, 6, 8) && size(b.data) == (8, 8, 8, 8, 8)
     # at a cell centre the sample is the cell's eight values
     for (m, i, j, k) in ((1, 3, 4, 5), (8, 1, 6, 2), (5, 6, 6, 6))
         c = SVector(b.x_left[1, m] + (i - 1) * b.dx[1, m], b.x_left[2, m] + (j - 1) * b.dx[2, m],
                     b.x_left[3, m] + (k - 1) * b.dx[3, m])
         s = primitives(snap, SVector(0.0, c...))
-        v = Float64.(b.data[:, i, j, k, m])
+        v = corner(b, i, j, k, m)
         @test s.inside && s.rho === v[1] && s.uu === SVector(v[2], v[3], v[4]) &&
               s.eint === v[5] && s.bb === SVector(v[6], v[7], v[8])
     end
-    # inside the outer half cell the stencil is one-sided: constant along the face normal
-    m = 2; j = 3; k = 4
-    y = b.x_left[2, m] + (j - 1) * 2.0; z = b.x_left[3, m] + (k - 1) * 2.0
-    s1 = primitives(b, SVector(0.0, b.hi[1, m] - 0.2, y, z))
-    s2 = primitives(b, SVector(0.0, b.hi[1, m] - 0.9, y, z))
-    @test s1.rho === s2.rho === Float64(b.data[1, 6, j, k, m])
+    # in the outer half cell the sample blends the outermost cell with the ghost cell, the
+    # neighbour's first cell across the face x = 0 of blocks 1 (x < 0) and 2 (x > 0)
+    j = 3; k = 4
+    y = b.x_left[2, 1] + (j - 1) * 2.0; z = b.x_left[3, 1] + (k - 1) * 2.0
+    @test corner(b, 7, j, k, 1) == corner(b, 1, j, k, 2) && corner(b, 0, j, k, 2) == corner(b, 6, j, k, 1)
+    s1 = primitives(b, SVector(0.0, -0.2, y, z))
+    @test s1.rho ≈ 0.6 * corner(b, 6, j, k, 1)[1] + 0.4 * corner(b, 1, j, k, 2)[1] rtol = 1e-14
+    @test block_sample(b, 1, -0.2, y, z) ≈ block_sample(b, 2, -0.2, y, z) rtol = 1e-14
+    @test block_sample(b, 1, 0.0, y, z) ≈ block_sample(b, 2, 0.0, y, z) rtol = 1e-14
     # the time coordinate is ignored and a Float32 position samples as its Float64 value
     x = SVector(0.0, 4.3, -2.2, 1.7)
     @test primitives(b, x) === primitives(b, SVector(123.0, 4.3, -2.2, 1.7))
@@ -119,7 +122,7 @@ end
     lo = [SVector(0.0, 0.0, 0.0), SVector(0.5, 0.0, 0.0)]
     hi = [SVector(1.0, 1.0, 1.0), SVector(1.0, 0.5, 0.5)]
     t = leaf_table(reduce(hcat, lo), reduce(hcat, hi), [0, 1], [0 1; 0 0; 0 0])
-    data = zeros(Float32, 8, 2, 2, 2, 2)
+    data = zeros(Float32, 8, 4, 4, 4, 2)
     b = FluidBlocks(data, reduce(hcat, lo), fill(0.25, 3, 2), reduce(hcat, lo), reduce(hcat, hi),
                     2, 2, 2, 2, t)
     @test locate(b, 0.75, 0.25, 0.25) == 2 && locate(BlockScan(), b, 0.75, 0.25, 0.25) == 2
@@ -158,8 +161,8 @@ end
     end
     @test agree == npt
     @test all(m -> locate(b, ((b.lo[:, m] .+ b.hi[:, m]) ./ 2)...) == m, 1:b.nmb)
-    s = primitives(snap, SVector(0.0, 0.3, -0.2, 0.1))
-    @test s.inside && s.rho == Float64(locate(b, 0.3, -0.2, 0.1))
+    s = primitives(snap, SVector(0.0, 1.0, -1.0, 3.0))       # a cell centre of the finest level
+    @test s.inside && s.rho == Float64(locate(b, 1.0, -1.0, 3.0))
     @test locate(b, 5000.0, 0.0, 0.0) == 0 && locate(b, 0.0, -4097.0, 0.0) == 0
     @test isoutside(primitives(snap, SVector(0.0, 0.0, 0.0, 9000.0)))
     # a shallow nesting fits a leaf table, which agrees with the hash off faces

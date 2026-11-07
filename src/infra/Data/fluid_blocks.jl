@@ -1,10 +1,10 @@
-# AthenaK meshblocks as a grid provider: the primitives of every block in one
-# feature-fastest array, the per-block geometry, and a locate strategy that maps a point
-# to its owning block. The sampler is clamped trilinear inside the owning block (no
-# ghost cells): exact deeper than half a cell from a block face, one-sided in the outer
-# half-cell shell. One struct serves host and device; `Adapt.adapt` replaces the arrays
-# and turns the host-only `LevelHash` into the `BlockScan` that every device runs.
-# AthenaK: Stone et al. (2024), ApJS 271, 9.
+# AthenaK meshblocks as a grid provider: the primitives of every block with one layer of
+# ghost cells in one feature-fastest array, the per-block geometry, and a locate strategy
+# that maps a point to its owning block. The sampler is trilinear in the owning block
+# extended by its ghost layer (built at load time by `fill_ghosts!`), so the field is
+# interpolated across every block face. One struct serves host and device; `Adapt.adapt`
+# replaces the arrays and turns the host-only `LevelHash` into the `BlockScan` that every
+# device runs. AthenaK: Stone et al. (2024), ApJS 271, 9.
 
 "Primitive order of the fluid arrays, the AthenaK `VariableNames` of the `eint` layout."
 const PRIM_NAMES = ("dens", "velx", "vely", "velz", "eint", "bcc1", "bcc2", "bcc3")
@@ -81,19 +81,22 @@ struct BlockScan end
 
 The fluid of an AthenaK snapshot as a sampling struct. Fields:
 
-- `data`: `(8, ni, nj, nk, nmb)` `Float32` cell-centred primitives, feature fastest, in
-  the order `PRIM_NAMES = (dens, velx, vely, velz, eint, bcc1, bcc2, bcc3)`: rest-mass
-  density, normal-frame velocity `W v^i`, internal energy density, cell-centred field;
-  code units.
+- `data`: `(8, ni + 2, nj + 2, nk + 2, nmb)` `Float32` cell-centred primitives, feature
+  fastest, in the order `PRIM_NAMES = (dens, velx, vely, velz, eint, bcc1, bcc2, bcc3)`:
+  rest-mass density, normal-frame velocity `W v^i`, internal energy density, cell-centred
+  field; code units. Interior cell `(i, j, k)` (1-based) of block `m` is
+  `data[:, i + 1, j + 1, k + 1, m]`; the slices `1` and `n + 2` of each axis are the ghost
+  layer, written by [`fill_ghosts!`](@ref).
 - `x_left`, `dx`: `(3, nmb)` `Float64` first cell centre and cell width of each block.
 - `lo`, `hi`: `(3, nmb)` `Float64` face bounds of each block.
 - `ni, nj, nk`: cells per block along each axis; `nmb`: number of blocks.
 - `locate`: the strategy that finds a point's block, a [`LeafTable`](@ref),
   [`LevelHash`](@ref) or [`BlockScan`](@ref).
 
-`primitives(b, x)` is the clamped trilinear sample in the owning block, in `Float64`.
-`Adapt.adapt(to, b)` moves every array and turns a `LevelHash` into a `BlockScan`; the
-result is `isbits` on a device. Built by the [`AthenaKSnapshot`](@ref) constructors.
+`primitives(b, x)` is the trilinear sample in the owning block extended by its ghost layer,
+in `Float64`. `Adapt.adapt(to, b)` moves every array, ghost layers included, and turns a
+`LevelHash` into a `BlockScan`; the result is `isbits` on a device. Built by the
+[`AthenaKSnapshot`](@ref) constructors, which fill the ghost layers.
 """
 struct FluidBlocks{A5,A2,L} <: GridProvider
     data::A5
@@ -277,18 +280,36 @@ end
 """
     corner(b::FluidBlocks, i, j, k, mb) -> SVector{8,Float64}
 
-The eight primitives of cell `(i, j, k)` (1-based) of block `mb`, widened to `Float64`.
+The eight primitives of cell `(i, j, k)` of block `mb`, widened to `Float64`: interior
+cells are `1:ni` (and likewise per axis), the ghost layer is `0` and `ni + 1`.
 """
 @inline corner(b::FluidBlocks, i, j, k, mb) =
-    SVector{8,Float64}(ntuple(f -> Float64(@inbounds b.data[f, i, j, k, mb]), Val(8)))
+    SVector{8,Float64}(ntuple(f -> Float64(@inbounds b.data[f, i + 1, j + 1, k + 1, mb]), Val(8)))
+
+"""
+    shell_weights(g, n) -> (i0, d)
+
+Lower corner and blend fraction along one axis of the trilinear stencil of a block of `n`
+cells extended by one ghost cell on each side: `g` is the 0-based fractional cell
+coordinate (cell centres at `0 … n − 1`, block faces at `−½` and `n − ½`),
+`i0 = clamp(⌊g⌋, −1, n − 1)` and `d = clamp(g − i0, 0, 1)`; the corners are cells
+`i0 + 1` and `i0 + 2` of [`corner`](@ref). Inside the block no clamp is active; for
+`0 ≤ g < n − 1` the pair is that of `corner_weights(g, n)`, the in-block stencil.
+"""
+@inline function shell_weights(g, n::Int)
+    i0 = clamp(unsafe_trunc(Int, floor(g)), -1, n - 1)
+    return i0, clamp(g - i0, zero(g), one(g))
+end
 
 """
     block_sample(b::FluidBlocks, mb, x, y, z) -> SVector{8,Float64}
 
-Clamped trilinear sample of the eight primitives inside block `mb` at `(x, y, z)`: the
-fractional cell index is `(x - x_left)/dx` per axis (a division, so `dx` is never
-inverted), the lower corner and the blend fraction are clamped by `corner_weights`, and
-the corners are blended by `lerp8` along `i`, then `j`, then `k`.
+Trilinear sample of the eight primitives of block `mb` extended by its ghost layer at
+`(x, y, z)`: the fractional cell index is `(x - x_left)/dx` per axis (a division, so `dx`
+is never inverted), the lower corner and the blend fraction are those of
+[`shell_weights`](@ref), and the corners are blended by `lerp8` along `i`, then `j`, then
+`k`. Between the outermost cell centre and the block face the blend takes the ghost cell,
+so the sample is continuous across faces between blocks of one level.
 """
 @inline function block_sample(b::FluidBlocks, mb::Int, x, y, z)
     xl = b.x_left
@@ -296,9 +317,9 @@ the corners are blended by `lerp8` along `i`, then `j`, then `k`.
     g1 = (x - @inbounds(xl[1, mb])) / @inbounds(dx[1, mb])
     g2 = (y - @inbounds(xl[2, mb])) / @inbounds(dx[2, mb])
     g3 = (z - @inbounds(xl[3, mb])) / @inbounds(dx[3, mb])
-    i0, d1 = corner_weights(g1, b.ni)
-    j0, d2 = corner_weights(g2, b.nj)
-    k0, d3 = corner_weights(g3, b.nk)
+    i0, d1 = shell_weights(g1, b.ni)
+    j0, d2 = shell_weights(g2, b.nj)
+    k0, d3 = shell_weights(g3, b.nk)
     i1 = i0 + 1; j1 = j0 + 1; k1 = k0 + 1
     i2 = i1 + 1; j2 = j1 + 1; k2 = k1 + 1
     c = (corner(b, i1, j1, k1, mb), corner(b, i2, j1, k1, mb),

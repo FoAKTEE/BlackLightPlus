@@ -30,12 +30,15 @@ temperature columns are dropped and non-finite cells are zeroed with one warning
 other layout is an error. The block geometry is `lo = x?f[1]`, `hi = x?f[end]`,
 `x_left = x?v[1]`, `dx = x?v[2] - x?v[1]` per block.
 
-The array constructor takes `data` as `(8, ni, nj, nk, nmb)` in `PRIM_NAMES` order,
-`lo`, `hi`, `x_left`, `dx` as `(3, nmb)` matrices (or vectors of `SVector{3}`), and
-`levels`, `logical_locations` as above; arrays already of type `Array{Float32,5}` and
-`Matrix{Float64}` are stored without a copy. Both constructors build the locate strategy
-eagerly with [`build_locate`](@ref). `primitives(snap, x)` and `domain_radius(snap)`
-are those of `snap.blocks`; `Adapt.adapt(to, snap)` is `Adapt.adapt(to, snap.blocks)`.
+The array constructor takes `data` as `(8, ni, nj, nk, nmb)` in `PRIM_NAMES` order (the
+interior cells, rounded to `Float32` into the interior of the extended array), `lo`,
+`hi`, `x_left`, `dx` as `(3, nmb)` matrices (or vectors of `SVector{3}`; a
+`Matrix{Float64}` is stored without a copy), and `levels`, `logical_locations` as above.
+Both constructors build the locate strategy with [`build_locate`](@ref) and then the
+ghost layer of every block with [`fill_ghosts!`](@ref), threaded over blocks, so the
+sampled field is interpolated across block faces. `primitives(snap, x)` and
+`domain_radius(snap)` are those of `snap.blocks`; `Adapt.adapt(to, snap)` is
+`Adapt.adapt(to, snap.blocks)`.
 """
 struct AthenaKSnapshot <: GridProvider
     blocks::_HostBlocks
@@ -66,11 +69,29 @@ function AthenaKSnapshot(data::AbstractArray{<:Real,5}, lo, hi, x_left, dx,
         throw(ArgumentError("lo, hi, x_left, dx must be (3, $nmb)"))
     (length(levels) == nmb && size(logical_locations) == (3, nmb)) ||
         throw(ArgumentError("levels must have $nmb entries and logical_locations be (3, $nmb)"))
-    lo_, hi_, xl_, dx_ = geometry
+    ext = _extended(ni, nj, nk, nmb)
+    @views ext[:, 2:(ni + 1), 2:(nj + 1), 2:(nk + 1), :] .= data
+    return _snapshot(ext, geometry..., levels, logical_locations, names, time)
+end
+
+# An uninitialised extended fluid array: `ni × nj × nk` interior cells and one ghost cell
+# on each side per axis, for `nmb` blocks.
+_extended(ni, nj, nk, nmb) = Array{Float32,5}(undef, 8, ni + 2, nj + 2, nk + 2, nmb)
+
+# The snapshot of the extended fluid array `ext`, whose interior holds the cells: the
+# locate strategy, then the ghost layers of every block (threaded over blocks; each block
+# writes its own ghost layer and reads only interior cells).
+function _snapshot(ext::Array{Float32,5}, lo, hi, xl, dx, levels, logical_locations,
+                   names, time)
+    _, ni2, nj2, nk2, nmb = size(ext)
     lv = collect(Int, levels)
     ll = convert(Matrix{Int}, logical_locations)
-    blocks = FluidBlocks(convert(Array{Float32,5}, data), xl_, dx_, lo_, hi_, ni, nj, nk, nmb,
-                         build_locate(lo_, hi_, lv, ll))
+    blocks = FluidBlocks(ext, xl, dx, lo, hi, ni2 - 2, nj2 - 2, nk2 - 2, nmb,
+                         build_locate(lo, hi, lv, ll))
+    box = MeshBox(blocks)
+    Threads.@threads for m in 1:nmb
+        fill_ghosts!(blocks, box, m)
+    end
     return AthenaKSnapshot(blocks, lv, ll, collect(String, names), Float64(time))
 end
 
@@ -93,25 +114,25 @@ function AthenaKSnapshot(filename::AbstractString; gamma::Union{Nothing,Real} = 
     hi = Float64[x[end, m] for x in (f.x1f, f.x2f, f.x3f), m in 1:nmb]
     xl = Float64[x[1, m] for x in (f.x1v, f.x2v, f.x3v), m in 1:nmb]
     dx = Float64[x[2, m] - x[1, m] for x in (f.x1v, f.x2v, f.x3v), m in 1:nmb]
-    return AthenaKSnapshot(data, lo, hi, xl, dx, Int.(f.levels), Int.(f.loclocs);
-                           time = f.time)
+    return _snapshot(data, lo, hi, xl, dx, Int.(f.levels), Int.(f.loclocs), PRIM_NAMES, f.time)
 end
 
 _scalar(t::Real) = Float64(t)
 _scalar(t::AbstractArray) = Float64(only(t))
 
-# The `eint` layout: uov = dens velx vely velz eint, B = bcc1..3, copied feature fastest.
+# The `eint` layout: uov = dens velx vely velz eint, B = bcc1..3, copied feature fastest
+# into the interior of an extended array.
 function _athdf_eint_layout(uov, B)
     ni, nj, nk, nmb, _ = size(uov)
-    data = Array{Float32,5}(undef, 8, ni, nj, nk, nmb)
+    data = _extended(ni, nj, nk, nmb)
     @inbounds for m in 1:nmb, k in 1:nk, j in 1:nj, i in 1:ni, p in 1:8
-        data[p, i, j, k, m] = p <= 5 ? uov[i, j, k, m, p] : B[i, j, k, m, p - 5]
+        data[p, i + 1, j + 1, k + 1, m] = p <= 5 ? uov[i, j, k, m, p] : B[i, j, k, m, p - 5]
     end
     return data
 end
 
 # The `mhd_w_bcc` layout with `use_e = true`: uov = dens velx vely velz press
-# [temperature], B = bcc1..3. Returns the feature-fastest `PRIM_NAMES` block with
+# [temperature], B = bcc1..3. Returns the extended feature-fastest `PRIM_NAMES` array with
 # eint = press/(gamma-1) (Float64, one Float32 rounding) and non-finite cells zeroed.
 function _athdf_press_layout(uov, B, names, gamma, filename)
     want = ("dens", "velx", "vely", "velz", "press")
@@ -125,14 +146,14 @@ function _athdf_press_layout(uov, B, names, gamma, filename)
               "needed for eint = press/(gamma-1); pass gamma=...")
     gm1 = Float64(gamma) - 1.0
     ni, nj, nk, nmb, _ = size(uov)
-    data = Array{Float32,5}(undef, 8, ni, nj, nk, nmb)
+    data = _extended(ni, nj, nk, nmb)
     nbad = Threads.Atomic{Int}(0)
     Threads.@threads for m in 1:nmb
         bad = 0
         @inbounds for k in 1:nk, j in 1:nj, i in 1:ni, prim in 1:8
             val = prim <= 5 ? uov[i, j, k, m, prim] : B[i, j, k, m, prim - 5]
             isfinite(val) || (val = 0.0f0; bad += 1)
-            data[prim, i, j, k, m] = prim == 5 ? Float32(Float64(val) / gm1) : val
+            data[prim, i + 1, j + 1, k + 1, m] = prim == 5 ? Float32(Float64(val) / gm1) : val
         end
         bad > 0 && Threads.atomic_add!(nbad, bad)
     end

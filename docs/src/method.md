@@ -389,6 +389,71 @@ of $I,Q,U$ between $10^{-28}$ and $10^{-24}$, EVPA medians of $10^{-15}$ rad), a
 corrections to Krang (the Stokes $I$ weight of its polarized material and the emission
 polar sign on far-hemisphere cones) described in the validation record.
 
+## Sampling the meshblock hierarchy
+
+An AthenaK snapshot holds cell averages on blocks of $n_1\times n_2\times n_3$ cells
+whose refinement levels differ by at most one between blocks that share a face, an edge
+or a corner. The sampled field in a block is the trilinear interpolant of its cells
+extended by one layer of ghost cells, built once when the snapshot is loaded
+(`Data.fill_ghosts!`), so a point between the outermost cell centre and the block face
+blends the outermost cell with the ghost cell beyond the face. The ghost at centre
+$\mathbf p$, with the block's cell widths $\mathbf h$, takes the value
+$V(\mathbf p,\mathbf h)$ of the mesh on that cell (`Data.mesh_value`):
+
+- a block of the same level covers $\mathbf p$: its cell (copy);
+- a finer block covers $\mathbf p$: the mean of $V$ over the children of the cell, the
+  volume average of the finer cells inside it (restriction);
+- a coarser block, of cell widths $\mathbf H$, covers $\mathbf p$: from the coarse cell
+  $c$ that contains $\mathbf p$,
+  ```math
+  V=u_c+\sum_a\operatorname{minmod}\big(u_c-V(\mathbf x_c-H_a\hat{\mathbf e}_a),\;
+  V(\mathbf x_c+H_a\hat{\mathbf e}_a)-u_c\big)\,\frac{p_a-x_{c,a}}{H_a},
+  ```
+  the limited piecewise-linear prolongation of AthenaK (`ProlongCC`), its neighbours
+  taken at the coarse widths by the same rules (where the finer block covers one, its
+  restriction);
+- $\mathbf p$ lies outside the mesh along axis $a$:
+  $V=2V(\mathbf p-sh_a\hat{\mathbf e}_a)-V(\mathbf p-2sh_a\hat{\mathbf e}_a)$, $s$ the
+  outward sign, along each such axis in turn (one-sided linear extrapolation; the value
+  $V(\mathbf p-sh_a\hat{\mathbf e}_a)$ is held where the mesh is one cell thick).
+
+*Continuity.* A ghost value depends on its centre and widths alone, not on the block
+that asks. Two blocks of one level that share a face therefore blend the same eight
+nodes at every point of the face, and the sampled field is continuous across it to
+rounding, where the face's edges and corners border coarser or finer blocks too. Across a
+face between two levels the sides interpolate on different nodes and differ at second
+order: continuity there would need the fine side's trace on the face, bilinear between
+fine tangential nodes, to equal the coarse side's, bilinear between coarse ones, and
+their kinks do not coincide.
+
+*Order.* Copy, restriction (the mean of a linear field over a cell is its centre value),
+the limited slope of linear data (the two one-sided differences are equal) and linear
+extrapolation are exact for a linear field, so a linear field is sampled exactly
+everywhere: the faces, edges and corners between levels and the outer boundary included.
+For a smooth field restriction and extrapolation err by $O(h^2)$. The limited slope
+departs from the derivative by $O(H)$ only where the one-sided differences change sign,
+within a cell of an extremum, where the derivative is itself $O(H)$; times the offset
+$|p_a-x_{c,a}|=H_a/4$ the prolonged value errs by $O(H^2)$. Trilinear interpolation of
+second-order nodes is second order, so the sampled field is second-order accurate
+everywhere (`test/infra/data_ghosts.jl`: a quadratic field on a three-level mesh
+converges at second order, the coarse–fine shells included).
+
+*Why the limiter.* The unlimited slope $(u_{c+1}-u_{c-1})/2H$ is second order too and
+also a function of position, but at the offset $H/4$ it overshoots wherever the field
+changes by a large factor across a coarse cell (the torus surface, a funnel wall):
+$u=(1,1,100)$ prolongs to $-11.4$. The minmod slope keeps every prolonged value between
+$u_c$ and its neighbours; copy and restriction are averages; the trilinear blend is a
+convex combination of its nodes. Inside the mesh the sampled field therefore stays within
+the range of the cells around it: no new extrema, and $\rho>0$, $e>0$ wherever the cells
+have them. Only the extrapolated ghosts at the outer boundary can leave that range, and a
+non-positive density or pressure decodes as vacuum.
+
+A block of $n^3$ cells is stored with $(n+2)^3$ (20% more memory for $32^3$, 10% for
+$64^3$); the ghost layers travel with the block data to every device, so threads and
+kernels run the same stencil. Imaging, the slow-light windows (each frame carries its own
+ghost layers), the uniform resample and the Monte Carlo march all sample this field; the
+Monte Carlo emission zones sit at cell centres, where the sample is the cell value.
+
 ## Radiative transfer
 
 A single plasma-decode chain converts sampled code-unit
@@ -532,9 +597,9 @@ mechanism seeds a dual on a physical scalar (the density mass scale, $R_{\rm hig
 through the transfer accumulation, so `sensitivity` returns the image and its exact
 parameter derivative in one pass (the differentiable-GRRT construction of Jipole
 [NaetheMotta2025](@citep)). The fluid is sampled on the AthenaK meshblock hierarchy on
-both backends with the same clamped trilinear stencil; a `UniformGrid` resample is the
-cheaper alternative, at the percent level in flux and with EVPA changes on
-Faraday-thick decks.
+both backends with the same trilinear stencil on ghost-extended blocks
+([Sampling the meshblock hierarchy](@ref)); a `UniformGrid` resample is the cheaper
+alternative, at the percent level in flux and with EVPA changes on Faraday-thick decks.
 
 ## Multi-device execution
 
@@ -746,7 +811,7 @@ KernelAbstractions CPU backend reproduces the threaded run bit for bit.
 
 ## Deviations from reference codes
 
-Three deliberate, oracle-verified departures from Blacklight
+Four deliberate, oracle-verified departures from Blacklight
 [White2022](@citep) and ipole [MoscibrodzkaGammie2018](@citep):
 
 1. **No dedicated $\rho=0$ coupling branch.** Blacklight's
@@ -764,6 +829,18 @@ Three deliberate, oracle-verified departures from Blacklight
 3. **Degenerate eigenstructures take their exact limits** (the dichroism-cone
    boundary, nilpotent coupling, rotation without absorption) in place of an
    approximate fallback.
+4. **Interpolation across meshblock faces.** Blacklight interpolates within a block and
+   extrapolates linearly from the two outermost cells in the outer half cell (its
+   default); with `simulation_block_interp` it takes the anchors beyond a face from the
+   neighbouring blocks, but on the high side of each axis it forms the blend fraction
+   from `x1v(b, i + 1)` one past the block, the first cell centre of the next block in
+   storage order. BlackLightPlus interpolates across every face through its ghost layers
+   ([Sampling the meshblock hierarchy](@ref)). On the AthenaK torus deck of the
+   GRMHD-snapshot comparison ($i=163^\circ$, 230 GHz) Blacklight with that coordinate
+   taken at the face, $2x^1_f(b,i+1)-x^1_v(b,i)$, agrees with BlackLightPlus to NMSE
+   $9.7\times10^{-6}$, $2.1\times10^{-5}$, $2.1\times10^{-5}$, $5.5\times10^{-5}$ in
+   $I$, $Q$, $U$, $V$ (net linear polarization 3.352% and 3.349%); its in-block
+   extrapolation differs by $3.8\times10^{-4}$ in $I$ (3.246%).
 
 The images are cross-validated against RAPTOR [Bronzwaer2018](@citep) on
 analytic scenes and binary-black-hole GRMHD snapshots, and against Blacklight

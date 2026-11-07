@@ -7,6 +7,23 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- AthenaK snapshots are sampled on every meshblock extended by one layer of ghost cells,
+  built when the snapshot is loaded from the neighbouring blocks: copied at the same
+  level, the mean of the finer cells from a finer block, the minmod-limited linear
+  prolongation of AthenaK from a coarser one, edges and corners included, one-sided linear
+  extrapolation outside the mesh (`Data.fill_ghosts!`, `Data.mesh_value`). The sample is
+  continuous across faces between blocks of one level, a linear field is reproduced
+  exactly everywhere and the field is second-order accurate everywhere; the outermost
+  cell value was held in the outer half cell of every block. On the AthenaK torus of the
+  GRMHD comparison ($i = 163^\circ$, 230 GHz) the seam at the block face $x = 0$ inside
+  the shadow (a step of 1.29 times the neighbouring steps) is gone, the net linear
+  polarization is 3.349 % (2.647 % before) and the image agrees with Blacklight's
+  interblock interpolation, its high-face anchor coordinate corrected, to NMSE
+  $9.7\times10^{-6}$ in $I$. `FluidBlocks.data` is `(8, ni + 2, nj + 2, nk + 2, nmb)`
+  (20 % more memory for blocks of $32^3$, 10 % for $64^3$; 1 s for 512 blocks of $64^3$
+  on 24 threads); `Data.corner(b, i, j, k, m)` reads the interior as `1:n` and the ghost
+  layer as `0` and `n + 1`.
+
 - `render_analytic(plan, disk; observables = false)` runs `Products.RadiusProgram`
   (`Spacetime.radius_prep`, `band_radius`): the landing radius without the azimuth and time
   integrals, the intensity, radius and radial sign bit for bit those of the full path, about

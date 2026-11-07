@@ -64,15 +64,19 @@ const EINT = ("dens", "velx", "vely", "velz", "eint")
         @test snap.names == collect(PRIM_NAMES) && snap.time == 2.0
         for m in 1:2, (i, j, k) in ((1, 1, 1), (3, 2, 4), (4, 4, 4))
             for p in 1:4
-                @test b.data[p, i, j, k, m] === cellval(m, p, i, j, k)
+                @test b.data[p, i + 1, j + 1, k + 1, m] === cellval(m, p, i, j, k)
             end
-            @test b.data[5, i, j, k, m] === Float32(Float64(cellval(m, 5, i, j, k)) / (γ - 1))
+            @test b.data[5, i + 1, j + 1, k + 1, m] === Float32(Float64(cellval(m, 5, i, j, k)) / (γ - 1))
             for p in 6:8
-                @test b.data[p, i, j, k, m] === cellval(m, 10 + p - 5, i, j, k)
+                @test b.data[p, i + 1, j + 1, k + 1, m] === cellval(m, 10 + p - 5, i, j, k)
             end
         end
-        @test b.data[5, 2, 1, 1, 2] === 0.0f0                  # non-finite press zeroed
+        @test b.data[5, 3, 2, 2, 2] === 0.0f0                  # non-finite press zeroed
         @test all(isfinite, b.data)
+        # the reader's ghost layers are those the array constructor builds from the cells
+        arr = AthenaKSnapshot(b.data[:, 2:5, 2:5, 2:5, :], b.lo, b.hi, b.x_left, b.dx,
+                              snap.levels, snap.logical_locations)
+        @test arr.blocks.data == b.data
         s = primitives(snap, SVector(0.0, 0.5, 0.5, 0.5))
         @test s.inside && s.rho > 0 && isfinite(s.eint)
     end
@@ -83,8 +87,8 @@ end
         path = write_athdf(joinpath(dir, "eint.athdf"), EINT)
         snap = AthenaKSnapshot(path)
         b = snap.blocks
-        @test b.data[5, 3, 2, 1, 2] === cellval(2, 5, 3, 2, 1)
-        @test b.data[7, 3, 2, 1, 2] === cellval(2, 12, 3, 2, 1)
+        @test b.data[5, 4, 3, 2, 2] === cellval(2, 5, 3, 2, 1)
+        @test b.data[7, 4, 3, 2, 2] === cellval(2, 12, 3, 2, 1)
         @test AthenaKSnapshot(path; gamma = 5 / 3).blocks.data == b.data   # gamma ignored
         @test b.lo[:, 2] == [1.0, 0.0, 0.0] && b.hi[:, 2] == [2.0, 1.0, 1.0]
         @test b.x_left[:, 2] == [1.125, 0.125, 0.125] && b.dx[:, 1] == [0.25, 0.25, 0.25]
