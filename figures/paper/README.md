@@ -13,6 +13,11 @@ the script defaults or the `BLP_*` environment variables named in each header.
 | fig_polarized (polarized GRMHD torus) and fig_summary (b) | `fig_pol_hires.jl` | Stokes I, Q, U, V of the torus snapshot and the run record |
 | fig_capture (Z4c binary slice) and fig_summary (c) | `fig_z4c_phasespace.jl`, `fig_z4c_amr.jl` | capture map, bisected boundary, ray deck; the class map and refinement levels of the image-plane AMR |
 | fig_binary (binary GRMHD images with EVPA ticks) and fig_summary (d) | `fig_eht_bbh.jl` | 230 GHz Stokes images of three binary snapshots |
+| fig_dynrays (rays through the orbiting binary against the frozen metric) | `fig_dynrays.jl` | the orbital-plane ray fan, the capture-class maps at four observer times and the freeze-time scan |
+| fig_dynrays_slowlight (fast and slow light of the GRMHD binary) | `fig_dynrays_slowlight.jl` | fast- and slow-light Stokes I of snapshot 00455 at i = 90°, the sky-plane crossing times, the epoch scan, the light-travel delays and the translation scan |
+| fig_dyntests (conserved charges of rays in time-dependent spacetimes) | `fig_dyntests.jl` | the step-constant sweep of a moving Kerr hole and an orbiting binary, and the cross-check against `trace` |
+| none; the CPU-against-GPU numbers of the dynamical-spacetime tests | `fig_dyntests_gpu.jl` (inside a Slurm GPU job, CUDA environment named in its header) | trace and shadow of the fig_dyntests spacetimes on the CPU threads and the GPU |
+| none; the two limits of the dynamical-spacetime tests | `fig_dyntests_limits.jl` | the binary at zero orbital frequency against the static superposition, and slow light on a static fluid series against fast light |
 | none in the manuscript; the i = 90° deck of `bench/bench.jl` | `fig_bbh_i90_pol_amr.jl` | the adaptive full-Stokes image of snapshot 00455 at i = 90° |
 | fig_spherical_orbits and fig_spherical_convergence (Appendix) | `fig_spherical_orbits.jl` | the four unstable spherical photon orbits at a = M and their RK4 step-size sweep |
 | fig_raptor_cmp (Appendix) | `fig_raptor_r07.jl` | the polarized images of snapshot 00455 compared with RAPTOR |
