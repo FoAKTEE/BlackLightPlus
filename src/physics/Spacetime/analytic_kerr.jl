@@ -399,12 +399,12 @@ end
     r1, r2, r3, r4 = prep.roots
     if prep.is_case2
         r31 = r3 - r1; r41 = r4 - r1; r42 = r4 - r2
-        sn2 = JacobiElliptic.sn(real(sqrt(r31 * r42)) * Gθ / 2 - prep.Fr, prep.kr)^2
+        sn2 = jacobi_sncndn(real(sqrt(r31 * r42)) * Gθ / 2 - prep.Fr, prep.kr)[1]^2
         return real((r4 * r31 - r3 * r41 * sn2) / (r31 - r41 * sn2)), Gθ > prep.τturn ? -1 : 1
     else
         r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
         A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
-        cn3 = JacobiElliptic.cn(sqrt(A * B) * Gθ - prep.Fr, prep.kr)
+        cn3 = jacobi_sncndn(sqrt(A * B) * Gθ - prep.Fr, prep.kr)[2]
         r1r = real(r1); r2r = real(r2)
         return ((A * r1r - B * r2r) - (A * r1r + B * r2r) * cn3) / ((A - B) - (A + B) * cn3), 1
     end

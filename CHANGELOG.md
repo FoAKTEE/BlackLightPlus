@@ -7,6 +7,19 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- The closed-form Kerr tracer takes its radial sn, cn and sc from `Spacetime.jacobi_sncndn`
+  and the Jacobi amplitude from `Spacetime.jacobi_amplitude`, which uses the m → 1
+  expansion (A&S 16.15.4) only where $(1-m)\cosh^2u<\sqrt\varepsilon$ and the AGM elsewhere.
+  JacobiElliptic 0.3 takes the expansion wherever $1-m<\sqrt\varepsilon$, at any $u$; near
+  the critical curve, where the radial parameter comes within $10^{-8}$ of 1 and $u$
+  reaches $K(m)$, the landing radius was off by up to $4\times10^{-3}$ (relative; order one
+  at $80^\circ$ inclination) and the intensity by up to $3\times10^{-3}$ of the maximum, at
+  70 and 58 points of the radial cuts of the code comparison and at none of its image
+  pixels. The order-0 landing radius at those points now agrees with a 40-digit landing to
+  $8\times10^{-14}$ (relative), and the intensity at the 14 of them sampled by the precise
+  march agrees with AART and the precise march to $7\times10^{-13}$ of the maximum; every
+  other value is unchanged bit for bit. `dn` is formed as $\sqrt{(1-m)+m\,\mathrm{cn}^2}$, free of cancellation as
+  $\mathrm{sn}\to1$, and the radial inversion no longer allocates under forced bounds checks.
 - The Z4c to ADM resample (`resample_z4c_adm`, `z4c_grid_spacetime`) and `sample_var`
   interpolate across meshblock faces through ghost layers, by the rule of the GRMHD
   blocks: in the outer half cell of a block the stencil blends the outermost cell with the

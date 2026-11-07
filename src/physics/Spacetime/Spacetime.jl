@@ -60,6 +60,7 @@ export kerr_horizon, kerr_delta, kerr_radial_potential, isco_radius, isco_progra
        conserved_quantities, radial_roots, angular_turning_points,
        analytic_angular_integrals, analytic_radial_integrals,
        pixel_prep, Landing, band_landing, critical_curve, radius_prep, band_radius,
+       jacobi_amplitude, jacobi_sncndn,
        surface_prep, surface_landing, image_crossings, surface_terms,
        kerr_bl_metric, photon_momentum, zamo_components, zamo_vector, rest_components,
        penrose_walker, screen_polarization, photon_shell_exponents, critical_point

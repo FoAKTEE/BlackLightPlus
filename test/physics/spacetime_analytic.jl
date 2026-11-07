@@ -171,9 +171,11 @@ end
         tα = αc[i+1] - αc[i-1]; tβ = βc[i+1] - βc[i-1]; s = hypot(tα, tβ)
         probe(δ) = (αc[i] + δ * tβ / s, βc[i] - δ * tα / s)
         Δr(δ) = abs(landing(probe(δ)..., θo, a, 0).r - landing(probe(-δ)..., θo, a, 0).r)
+        # the order-0 landing is continuous across the critical curve, linear in δ down to
+        # δ = 1e-9, where 1 − k_r ≈ 1e-10 outside the curve and the radial argument reaches K(k_r)
         @test Δr(1e-3) < 5e-3
         @test Δr(1e-5) < 5e-5
-        @test 1e-5 < Δr(1e-9) < 1e-3
+        @test Δr(1e-9) < 5e-9
         for (ae, ie, αe, βe) in ((0.94, 89.999, -5.0, 2.0), (0.94, 89.999999, -5.0, 2.0),
                                  (0.998, 60.0, -5.0, 1e-9), (0.9999, 60.0, -5.0, 2.0),
                                  (0.999999, 60.0, -5.0, 2.0), (0.94, 60.0, -5.0, 1e-12),

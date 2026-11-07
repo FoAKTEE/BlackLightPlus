@@ -345,6 +345,30 @@ radius agrees with Krang's to within $\varepsilon\,|\partial\ln r_s/\partial\ln 
 screen ray at every order. `lensing_band` finds the band edges of any order by a logarithmic
 search toward the critical curve.
 
+### Jacobi functions near $m=1$
+
+The radial inversion evaluates sn and cn (cases II and III) and sc (case IV) of the radial
+parameter $k_r$ at an argument $u$ linear in $G_\theta$. Near the critical curve the roots
+$r_3$, $r_4$ approach a double root, $m_1=1-k_r\to0$, and the rays that circle the photon
+shell carry $u$ to $K(k_r)\approx\ln(4/\sqrt{m_1})$ and beyond. `jacobi_amplitude` computes
+$\varphi=\mathrm{am}(u|m)$ by the arithmetic–geometric mean (A&S 16.4): from
+$(a_0,b_0,c_0)=(1,\sqrt{m_1},\sqrt m)$, $a_{j+1}=(a_j+b_j)/2$, $b_{j+1}=\sqrt{a_jb_j}$,
+$c_{j+1}=(a_j-b_j)/2$ until $c_N\le\varepsilon$, then $\varphi_N=2^Na_Nu$ and
+$\varphi_{j-1}=\tfrac12[\varphi_j+\arcsin(c_j\sin\varphi_j/a_j)]$. Two expansions replace it
+where they are exact to rounding: $\mathrm{am}=u-\tfrac14m(u-\tfrac12\sin2u)$ for $m<\sqrt\varepsilon$
+(A&S 16.13.4), and
+$$\mathrm{am}(u|m)=\mathrm{gd}\,u+\tfrac14m_1(\sinh u\cosh u-u)\,\mathrm{sech}\,u$$
+(A&S 16.15.4) only where $m_1\cosh^2u<\sqrt\varepsilon$. The m → 1 expansion is the first
+term of a series in $m_1\cosh^2u$, so its remainder is below $\varepsilon$ there; selected by
+$m_1<\sqrt\varepsilon$ alone it fails where it matters, since $m_1\cosh^2K\approx4$ whatever
+the size of $m_1$. `jacobi_sncndn` returns $\mathrm{sn}=\sin\varphi$, $\mathrm{cn}=\cos\varphi$
+and $\mathrm{dn}=\sqrt{m_1+m\,\mathrm{cn}^2}$, the form of $\sqrt{1-m\,\mathrm{sn}^2}$ without
+cancellation as $\mathrm{sn}\to1$. Over $m_1\in[10^{-15},10^{-8}]$ and $0\le u\le2K$ the three
+functions agree with 50-digit values to $1.2\times10^{-13}$, and on the radial cuts of the
+code comparison, where $m_1$ reaches $10^{-15}$, the landing radius of order 0 agrees with a
+40-digit landing to $8\times10^{-14}$. Wherever the m → 1 expansion is not taken the amplitude
+is the AGM's, bit for bit that of JacobiElliptic.jl.
+
 ### Time-dependent sources
 
 The landing time $t_s$ (zero at the observation, or the retarded time for an observer at

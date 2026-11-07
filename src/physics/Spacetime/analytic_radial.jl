@@ -8,6 +8,74 @@
 # F(φ|k) − Π(k/n; φ|k): the part of Π(n; φ|k) that stays finite where n sin²φ → 1.
 @inline _pi_regular(n, φ, k) = JacobiElliptic.F(φ, k) - JacobiElliptic.Pi(k / n, φ, k)
 
+# ---------------------------------------------------------------------- Jacobi functions
+"""
+    jacobi_amplitude(u, m) -> φ
+
+The Jacobi amplitude `φ = am(u|m)` for `0 ≤ m ≤ 1`: A&S 16.13.4 for `m < √ε`; A&S 16.15.4,
+`gd u + m₁ (sinh u cosh u − u) sech u / 4` with `m₁ = 1 − m`, only where `m₁ cosh²u < √ε`
+or `m₁ = 0`; the arithmetic–geometric mean (A&S 16.4) otherwise. The next term of the
+m → 1 expansion is of order `(m₁ cosh²u)²`, so it fails as `u` approaches
+`K(m) ≈ ln(4/√m₁)`, where `m₁ cosh²u ≈ 4`, whatever the size of `m₁`. Generic in the
+number type (ForwardDiff), with an immutable fixed-size buffer and no heap allocation
+(GPU).
+"""
+@inline function jacobi_amplitude(u::A, m::B) where {A,B}
+    T = promote_type(A, B)
+    u == 0 && return zero(T)
+    tol = eps(T)
+    sqrt_tol = sqrt(tol)
+    if m < sqrt_tol
+        return u - m * (u - sin(2 * u) / 2) / 4                  # A&S 16.13.4
+    end
+    m1 = 1 - m
+    if m1 < sqrt_tol && (iszero(m1) || m1 * cosh(u)^2 < sqrt_tol)
+        t = tanh(u)
+        return asin(t) + m1 * (t - u * (1 - t^2)) * cosh(u) / 4   # A&S 16.15.4
+    end
+    buf = ntuple(_ -> zero(T), Val(16))                           # c_n / a_n
+    a, b, c, n = 1, sqrt(m1), sqrt(m), 0
+    while abs(c) > tol && n < 16
+        a, b, c, n = ((a + b) / 2, sqrt(a * b), (a - b) / 2, n + 1)
+        buf = Base.setindex(buf, c / a, n)
+    end
+    phi = a * u * (2^n)
+    for i in n:-1:1
+        @inbounds phi = (phi + asin(buf[i] * sin(phi))) / 2
+    end
+    return phi
+end
+
+"""
+    jacobi_sncndn(u, m) -> (sn, cn, dn)
+
+The Jacobi elliptic functions `sn(u|m)`, `cn(u|m)`, `dn(u|m)` from
+[`jacobi_amplitude`](@ref): `sn = sin φ`, `cn = cos φ` and `dn = √(m₁ + m cos²φ)`, the form
+of `√(1 − m sin²φ)` free of cancellation as `m → 1`, for `0 ≤ m ≤ 1`; the
+negative-parameter transformation (A&S 16.10) for `m < 0` and the reciprocal-parameter
+transformation (A&S 16.11) for `m > 1`. Every sn, cn and sc of the closed-form radial
+inversion goes through this function.
+"""
+@inline function jacobi_sncndn(u, m)
+    if m < 0
+        mu1 = inv(1 - m)
+        mu = -m * mu1
+        smu1 = sqrt(mu1)
+        φ = jacobi_amplitude(u / smu1, mu)
+        s = sin(φ)
+        d = sqrt(1 - mu * s^2)
+        return smu1 * s / d, cos(φ) / d, inv(d)
+    elseif m > 1
+        mu = inv(m)
+        φ = jacobi_amplitude(u * sqrt(m), mu)
+        s = sin(φ)
+        return sqrt(mu) * s, sqrt(max(1 - mu * s^2, zero(s))), cos(φ)
+    end
+    φ = jacobi_amplitude(u, m)
+    c = cos(φ)
+    return sin(φ), c, sqrt((1 - m) + m * c^2)
+end
+
 # ---------------------------------------------------------------------- case IV
 # Root data of case IV (P1 Eqs. B83–B87): r₁,₂ = b₂ ∓ i a₂, r₃,₄ = b₁ ∓ i a₁.
 @inline function _case4_data(roots)
@@ -239,17 +307,18 @@ end
     r1, r2, r3, r4 = prep.roots
     if prep.rcase == 2
         r31 = r3 - r1; r41 = r4 - r1; r42 = r4 - r2
-        sn2 = JacobiElliptic.sn(real(sqrt(r31 * r42)) * τ / 2 - prep.Fr, prep.kr)^2
+        sn2 = jacobi_sncndn(real(sqrt(r31 * r42)) * τ / 2 - prep.Fr, prep.kr)[1]^2
         return real((r4 * r31 - r3 * r41 * sn2) / (r31 - r41 * sn2)), τ > prep.τturn ? -1 : 1
     elseif prep.rcase == 3
         r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
         A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
-        cn3 = JacobiElliptic.cn(sqrt(A * B) * τ - prep.Fr, prep.kr)
+        cn3 = jacobi_sncndn(sqrt(A * B) * τ - prep.Fr, prep.kr)[2]
         r1r = real(r1); r2r = real(r2)
         return ((A * r1r - B * r2r) - (A * r1r + B * r2r) * cn3) / ((A - B) - (A + B) * cn3), 1
     else
         d = _case4_data(prep.roots)
-        sc = JacobiElliptic.sc((d.C + d.D) / 2 * (prep.po[1] - τ), d.k4)
+        sn4, cn4, _ = jacobi_sncndn((d.C + d.D) / 2 * (prep.po[1] - τ), d.k4)
+        sc = sn4 / cn4
         return -d.a2 * (d.g0 - sc) / (1 + d.g0 * sc) - d.b1, 1
     end
 end

@@ -82,8 +82,7 @@ bits_equal(a, b) = Decks.bits((a.I, a.Q, a.U, a.V)) == Decks.bits((b.I, b.Q, b.U
         ap = AnalyticProgram(p.pixels, p.theta_o, 0.9, 1000.0, EquatorialDisk(0.9), (0, 1, 2))
         aouts = analytic_outputs(3, 64)
         @test Decks.device_isbits(ap) && aouts isa NTuple{15,Vector{Float64}}
-        # JacobiElliptic's sn and cn allocate when bounds checks are forced on (Pkg.test)
-        Base.JLOptions().check_bounds == 1 || @test allocs(ap, 28, 1, aouts...) == 0
+        @test allocs(ap, 28, 1, aouts...) == 0
         @test Decks.device_isbits(AnalyticProgram(CoordList([(1.0, 2.0)]), 1.0, 0.9, 1000.0,
                                                   EquatorialDisk(0.9), (1,)))
     end

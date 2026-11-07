@@ -92,14 +92,15 @@ package's own numerical march. NMSE is the normalized mean squared error of
 | polarized g-disk, Walker–Penrose constant in AART's gauge ($f_t=1$), $400^2$, two scenes | NMSE($\kappa$) $7\times10^{-25}$, $3\times10^{-24}$; EVPA median $9\times10^{-16}$ rad, maximum $10^{-9}$ rad (on AART's Cardano curve) |
 | power-law synchrotron surfaces, $400^2$, four scenes (dual cone, equator at $80^\circ$, jet cones in both hemispheres, polar cones with vortical rays), orders 0–2 | NMSE of $I$, $Q$, $U$ between $7\times10^{-29}$ and $2\times10^{-24}$ against Krang; EVPA median $10^{-15}$ rad |
 | cone landings against the traced crossings of the same rays (ordinary and vortical, cases II–IV) | radius within $10^{-4}$, the polar sign of every crossing equal |
-| landing radius at orders 0–6 along screen rays through 9 critical points, two scenes | within $\varepsilon\,|\partial\ln r_s/\partial\ln s|$ of Krang ($3\times10^{-10}$ at $n=0$, $10^{-6}$ at $n=6$, where $d_6\sim10^{-7}\,M$) |
+| landing radius at orders 0–6 along screen rays through 9 critical points, two scenes | within $\varepsilon\,\lvert\partial\ln r_s/\partial\ln s\rvert$ of Krang ($3\times10^{-10}$ at $n=0$, $10^{-6}$ at $n=6$, where $d_6\sim10^{-7}\,M$) |
+| order-0 landing radius on the radial cuts through the critical curve ($1.6\times10^6$ and $1.5\times10^6$ points, $1-k_r$ down to $10^{-15}$) | within $8\times10^{-14}$ of a 40-digit landing at the 70 and 60 points where Krang is off by up to $4\times10^{-3}$ and $1.2$ (relative); NMSE of the cut intensity against AART $4\times10^{-21}$–$10^{-19}$ per order outside AART's own 2 and 4 outlying points ($7\times10^{-12}$ with them) |
 | photon-ring exponents against the landings of orders 6 and 7 | $\gamma$, $\delta$, $\tau$ to $10^{-6}$–$10^{-5}$, the differences falling as $e^{-\gamma n}$ |
 | orbiting hot spot, 25 frames over one orbit, orders 0–2, $240^2$ | against AART's `flare_model` at $D=10^4$: NMSE $10^{-17}$ ($n=0$), $10^{-14}$ ($n=1,2$) outside the 81 pixels of AART's turning-point sign; against Krang's slow-light coordinates at infinity: NMSE $3\times10^{-18}$, $10^{-16}$, $2\times10^{-15}$; light curves to $10^{-9}$ |
 | per-order resolution of the photon-ring layers, $a=0.94$, $17^\circ$ | spacings $(0.02, 0.01, 0.005)$ reproduce the $n=1$, $2$ ring fluxes of uniform $0.01$ and $0.005$ grids with $2.0\times10^6$ rays instead of $6.1\times10^6$ and $2.5\times10^7$ |
 | every closed-form product on one A100 against the CPU threads (g-disk, intensity-only g-disk, dual cone, polar cones, polarized g-disk, hot-spot movie) | 53–85 % of the values bitwise, the rest within $4\times10^{-9}$ of the image maximum ($6\times10^{-8}$ on the hot-spot movie), the floating-point contraction of the two targets; $3.5$–$7\times10^6$ rays/s, 7–21 times four CPU threads |
 | EVPA against the package's polarized march (transported camera frame) | falls as $C^{-4}$ to the camera floor: $2\times10^{-5}$ rad at $d=10^5\,M$, median $10^{-8}$ rad at $d=10^9\,M$ |
 
-Three reference-code findings shape these comparisons. Krang's polarized synchrotron
+Four reference-code findings shape these comparisons. Krang's polarized synchrotron
 material weights its Stokes $I$ by $|\hat k\times B|^{2(1+\sigma)}$ where its intensity material
 (and the emissivity of the model) has $|\hat k\times B|^{1+\sigma}$; its fast-light entry points
 give the emission polar sign of a cone in the far hemisphere outside the observer's cone the
@@ -108,7 +109,14 @@ radial sign of emission at the turning point seen from infinity while its radial
 start at the finite observer distance, which tilts the EVPA by up to $4\times10^{-5}$ rad
 and the emission time by up to $4\times10^{-2}\,M$ on a thin ring at $D=10^4$–$10^5$; the
 polarization comparison uses $D=10^{15}$ and the movie comparison separates those pixels;
-the fix is reported upstream.
+the fix is reported upstream. JacobiElliptic.jl 0.3, which Krang uses, takes the first-order
+expansion of $\mathrm{am}(u|m)$ about $m=1$ wherever $1-m<\sqrt\varepsilon$, at any $u$; on
+rays near the critical curve, with $u\approx K(m)$, it moves the landing radius by up to
+$4\times10^{-3}$ (relative) at $17^\circ$ and by order one at $80^\circ$, and the intensity by up
+to $3\times10^{-3}$ of the maximum. SciPy's
+`ellipj`, which AART uses, does the same for $1-m\le10^{-10}$. The package's
+`jacobi_amplitude` keeps the expansion to $(1-m)\cosh^2u<\sqrt\varepsilon$; the JacobiElliptic.jl
+fix is reported upstream.
 
 ## Published figures
 
