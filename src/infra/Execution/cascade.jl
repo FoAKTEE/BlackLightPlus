@@ -126,7 +126,8 @@ Adapt.adapt_structure(to::CascadeSwap, ::ChildBuffer) = to.children
 Adapt.adapt_structure(to::CascadeSwap, ::Generation) = to.parents
 Adapt.adapt_structure(to::CascadeSwap, b::ExactBins) =
     to.scratch ? with_arrays(b, scratch!(to, b.count), scratch!(to, b.sumw),
-                             scratch!(to, b.sumwE), fresh_twins(b.twins)) : b
+                             scratch!(to, b.sumwE), scratch!(to, b.sumwE2),
+                             fresh_twins(b.twins)) : b
 Adapt.adapt_structure(to::CascadeSwap, s::ExactScalars) =
     to.scratch ? ExactScalars(scratch!(to, s.acc), scratch!(to, s.n), fresh_twins(s.twins)) : s
 

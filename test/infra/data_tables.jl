@@ -1,16 +1,17 @@
 # The Monte Carlo table builders: the hot-cross table holds the quadrature at its nodes
-# and the gpumonty file (when present) agrees with it; the serial and exact weight tables
-# agree, the exact one bitwise for every thread count; per-zone counts equal the
-# per-zone formula; the tabulated emissivities keep every weight node, clip interior
-# nodes to the chord and keep the acceptance at most 1.
+# and the gpumonty file (when present) agrees with it; the streaming zone tables equal the
+# serial weight table and the per-zone formula, bitwise for every thread count, and their
+# trapezoid counts sum to the target exactly; the emission sites are the owned cells
+# above the horizon at stride 1, and at any stride an unbiased quadrature of the stride-1
+# sum on a two-level mesh with a steep emissivity.
 using Test, BlackLightPlus
 using StaticArrays
-using BlackLightPlus.Spacetime: KerrSchildCartesian
-using BlackLightPlus.MonteCarlo: total_compton_cross_num, int_jnu_zone, zone_nsuperphotons, int_jnu_at,
-                      weight_at, tabulated_dnmax, IntJnuTable, WEIGHT_FLOOR, MINW, MAXW, MINT,
-                      MAXT, NW, NT, MC_N_ESAMP, INT_JNU_REFINE
-using BlackLightPlus.Data: load_hotcross, build_hotcross_table, build_weight_table,
-                build_zone_emission_table, zone_counts, build_int_jnu_table, zone_int_jnu_tables
+using Statistics: mean, std
+using BlackLightPlus.Spacetime: KerrSchildCartesian, Minkowski, proxy_distance
+using BlackLightPlus.MonteCarlo: total_compton_cross_num, int_jnu_zone, zone_nsuperphotons, weight_at,
+                      WEIGHT_FLOOR, MINW, MAXW, MINT, MAXT, NW, NT, MC_N_ESAMP
+using BlackLightPlus.Data: load_hotcross, build_hotcross_table, build_weight_table, zone_tables,
+                emission_sites, AthenaKSnapshot, locate
 
 const DK = Main.Decks
 const HOTCROSS_DAT = DK.HOTCROSS_DAT
@@ -40,45 +41,81 @@ const HOTCROSS_DAT = DK.HOTCROSS_DAT
 
     @testset "weight tables and zone counts" begin
         ws = build_weight_table(zones, 1000.0)
-        jt = build_zone_emission_table(zones)
-        @test size(jt.jnu) == (MC_N_ESAMP + 1, length(zones)) && jt.dV == [z.dV for z in zones]
-        @test jt.jnu[17, 5] === int_jnu_zone(zones[5].n_e, zones[5].theta_e, zones[5].B,
-                                             exp(16 * jt.dlnu + jt.lnu_min))
-        we = build_weight_table(jt, 1000.0; nthreads = 1)
+        we, Ns, dn = zone_tables(zones, 1000.0; nthreads = 1)
         @test (we.lnu_min, we.lnu_max, we.dlnu) == (ws.lnu_min, ws.lnu_max, ws.dlnu)
+        @test length(we.lwgt) == MC_N_ESAMP + 1
         @test maximum(abs.(exp.(we.lwgt) ./ exp.(ws.lwgt) .- 1)) < 1e-12
         for nt in (2, 3, 8, 64)
-            @test build_weight_table(jt, 1000.0; nthreads = nt).lwgt == we.lwgt
+            wn, Nn, dnn = zone_tables(zones, 1000.0; nthreads = nt)
+            @test wn.lwgt == we.lwgt && Nn == Ns && dnn == dn
         end
-        Ns, dn = zone_counts(jt, we)
         for z in (1, 7, length(zones))
             @test (Ns[z], dn[z]) === zone_nsuperphotons(zones[z], we)
         end
-        @test zone_counts(jt, we; nthreads = 3) == (Ns, dn)
-        @test sum(Ns) ≈ 1000.0 * log(1.0e16 / 1.0e8) rtol = 0.01   # Ns per unit ln ν
+        # trapezoid counts: Σ N_z = Ns' ln(ν_max/ν_min), the target, to rounding, when every
+        # node emits (the deck's emission is below the weight floor near 1e16 Hz)
+        for n_esamp in (400, 8)
+            wt, Nt, _ = zone_tables(zones, 50.0; n_esamp = n_esamp, nu_max = 1.0e14)
+            @test length(wt.lwgt) == n_esamp + 1 && all(wt.lwgt .> log(1.0e-60))
+            @test sum(Nt) ≈ 50.0 * log(1.0e14 / 1.0e8) rtol = 1e-12
+        end
     end
 
-    @testset "tabulated emissivities" begin
-        zone = zones[length(zones) ÷ 2]
-        wgt = build_weight_table([zone], 1000.0)
-        gt = build_int_jnu_table(zone, wgt)
-        @test length(gt.ljnu) == INT_JNU_REFINE * (length(wgt.lwgt) - 1) + 1
-        for m in (0, 1, 200, 400)
-            nu = exp(m * wgt.dlnu + wgt.lnu_min)
-            @test gt.ljnu[INT_JNU_REFINE * m + 1] ===
-                  log(int_jnu_zone(zone.n_e, zone.theta_e, zone.B, nu) + WEIGHT_FLOOR)
+    @testset "emission sites: stride 1 and the deck" begin
+        blocks = DK.amr_deck().blocks
+        st = KerrSchildCartesian(DK.TORUS_A)
+        sites = emission_sites(blocks, st, DK.torus_params())
+        @test [(s.x, s.dV) for s in sites] == [(z.x, z.dV) for z in zones]
+        # the plasma of an independent serial decode, to the last bits of the contraction
+        @test all(isapprox(s.n_e, z.n_e; rtol = 1e-14) && isapprox(s.theta_e, z.theta_e; rtol = 1e-14) &&
+                  isapprox(s.B, z.B; rtol = 1e-14) for (s, z) in zip(sites, zones))
+        @test emission_sites(blocks, st, DK.torus_params(); seed = 99) == sites
+        @test emission_sites(blocks, st, DK.torus_params(); max_zones = 7) == sites[1:7]
+        @test_throws ArgumentError emission_sites(blocks, st, DK.torus_params(); stride = 0)
+        # the horizon proxy: no site below it on a hole that swallows the deck's centre
+        big = KerrSchildCartesian(0.0)
+        @test all(s -> proxy_distance(big, s.x)[1] >= 1.0e-3,
+                  emission_sites(blocks, big, DK.torus_params()))
+    end
+
+    @testset "emission sites: unbiased stride quadrature on a two-level mesh" begin
+        # Level 0: 2³ blocks of 4³ cells over [-8, 8]³; level 1: one block of 4³ cells over
+        # [0, 4]³ stored after them, so 8 cells of the coarse block above it are not owned.
+        nc = 4
+        lo = Float64[]; hi = Float64[]; xl = Float64[]; dxs = Float64[]; lv = Int[]; ll = Int[]
+        for bk in 0:1, bj in 0:1, bi in 0:1
+            l = (-8.0 + 8bi, -8.0 + 8bj, -8.0 + 8bk)
+            append!(lo, l); append!(hi, l .+ 8.0); append!(xl, l .+ 1.0); append!(dxs, (2.0, 2.0, 2.0))
+            push!(lv, 0); append!(ll, (bi, bj, bk))
         end
-        dn = tabulated_dnmax(gt, wgt)
-        worst = maximum(1:50_001) do j
-            nu = exp(wgt.lnu_min + (wgt.lnu_max - wgt.lnu_min) * j / 50_001)
-            int_jnu_at(nu, gt) / (weight_at(nu, wgt) + WEIGHT_FLOOR) / dn
+        append!(lo, (0.0, 0.0, 0.0)); append!(hi, (4.0, 4.0, 4.0)); append!(xl, (0.5, 0.5, 0.5))
+        append!(dxs, (1.0, 1.0, 1.0)); push!(lv, 1); append!(ll, (2, 2, 2))
+        nmb = 9
+        data = zeros(Float32, 8, nc, nc, nc, nmb)
+        data[1, :, :, :, :] .= 1.0f0; data[5, :, :, :, :] .= 0.1f0; data[6, :, :, :, :] .= 0.3f0
+        R = m -> reshape(m, 3, nmb)
+        snap = AthenaKSnapshot(data, R(lo), R(hi), R(xl), R(dxs), lv, reshape(ll, 3, nmb))
+        b = snap.blocks
+        params = DK.torus_params()
+        Lu3 = params.units.L_unit^3
+        f(x) = (x[2]^2 + x[3]^2 + x[4]^2 + 0.5)^-3                 # an r⁻⁶ emissivity
+        quad(sites) = sum(s -> f(s.x) * s.dV, sites) / Lu3
+        one = emission_sites(b, Minkowski(), params)
+        @test length(one) == 8 * 64 - 8 + 64                        # every owned cell
+        @test all(s -> locate(b, s.x[2], s.x[3], s.x[4]) > 0, one)
+        S1 = quad(one)
+        for stride in (2, 3)
+            sites = emission_sites(b, Minkowski(), params; stride = stride, seed = 1)
+            # every zone sits on an owned cell; its volume is its group's owned cells
+            @test all(sites) do s
+                m = locate(b, s.x[2], s.x[3], s.x[4])
+                dV = b.dx[1, m]^3 * Lu3
+                n_own = s.dV / dV
+                m > 0 && isinteger(round(n_own; digits = 9)) && 1 <= n_own <= stride^3
+            end
+            est = [quad(emission_sites(b, Minkowski(), params; stride = stride, seed = k)) for k in 1:3000]
+            @test abs(mean(est) - S1) < 4.0 * std(est) / sqrt(length(est))
+            @test std(est) > 0.0
         end
-        @test worst <= 1.0 + 1e-12
-        jt = build_zone_emission_table(zones)
-        we = build_weight_table(jt, 1000.0)
-        lint, dnv = zone_int_jnu_tables(jt, we)
-        @test lint == log.(jt.jnu .+ WEIGHT_FLOOR)
-        @test dnv[3] === tabulated_dnmax(IntJnuTable(jt.lnu_min, jt.dlnu, lint[:, 3]), we)
-        @test_throws ErrorException zone_counts(jt, build_weight_table([zone], 1.0; n_esamp = 10))
     end
 end

@@ -7,7 +7,7 @@ using StaticArrays
 using BlackLightPlus.Numerics: MCRng, MCStreamLayout, primary_rng, SIGMA_THOMSON
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian
 using BlackLightPlus.Matter: UniformSphere
-using BlackLightPlus.MonteCarlo: Superphoton, GenerationTables, Opacities, Bias, FlatMarch, CurvedMarch,
+using BlackLightPlus.MonteCarlo: Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch, CurvedMarch,
                       HotcrossTable, NullSink, generate, track!, zone_nsuperphotons, NW, NT,
                       CURVED_MAX_STEPS, SPHERE_MAX_STEPS
 using BlackLightPlus.Execution: ExactBins, ExactScalars, ChildBuffer, PolarBands, InclinationBands
@@ -61,7 +61,10 @@ trk(ctl, st, prov, opac, sph, rng, sink, a, s) =
         @test allocs(trk, curved, st, blocks, copac, zs, zrng, csink, Val(true), Val(true)) == 0
         @test allocs(Execution.record!, bins[1], 1.0e-6, 2.0, SVector(0.1, 0.2, 0.3)) == 0
         @test allocs(Execution.record!, incl[1], 1.0e-6, 2.0, SVector(0.1, 0.2, 0.3)) == 0
-        @test allocs(Execution.spawn!, buf, sph, rng, 3) == 0
+        @test allocs(Execution.spawn!, buf, sph, rng) == 0
+        @test allocs(Execution.child_stream, buf, rng, 3) == 0
+        sopac = Opacities(params; table = table, bias = StateBias(1.0e3, 1.0e40, 1.0e6, 4), max_scatt = 3)
+        @test allocs(trk, curved, st, blocks, sopac, zs, zrng, csink, Val(true), Val(true)) == 0
         @test allocs(Execution.add!, DK.mc_ledger(), 2, 1.5) == 0
     end
 

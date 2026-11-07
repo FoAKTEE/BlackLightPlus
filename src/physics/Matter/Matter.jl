@@ -32,6 +32,6 @@ export PolishDoughnut, torus_potential, PageThorneDisk, page_thorne_flux, page_t
        EquatorialHotspot, hotspot_center
 export EquatorialDisk, intensity, gfactor_circular, gfactor_plunge, gfactor_disk,
        johnson_su_profile, equatorial_disk_intensity
-export EmissionZone, UniformSphere, emission_zone
+export EmissionZone, ZoneSite, UniformSphere, emission_zone
 
 end # module

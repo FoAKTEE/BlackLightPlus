@@ -3,17 +3,18 @@
 # them (`Generation`). A child's stream is keyed by its genealogy, so the children are
 # stored in arrival order, which is not deterministic, while their set is.
 
-using ..Numerics: MCRng, MCStreamLayout, child_rng
+using ..Numerics: MCRng, MCStreamLayout, child_rng, event_capacity
 
 """
     ChildBuffer(T, capacity, layout::MCStreamLayout)
 
 Scattered children of one layer of the layered scattering loop, as a structure of
 arrays: `photons::Vector{T}` and their streams `rngs::Vector{MCRng}`, `capacity` slots,
-and `count[1]`, the atomic slot counter of spawn attempts. [`spawn!`](@ref) takes the
-next slot from the counter and writes the child and its genealogy stream
-`child_rng(rng, event, layout)` if the slot exists; a child beyond the capacity is
-counted and dropped, and [`overflow`](@ref) reports how many. Children are therefore
+`count[1]`, the atomic slot counter of spawn attempts, and the stream `layout` of the
+run, from which [`child_stream`](@ref) names a child's stream by its genealogy.
+[`spawn!`](@ref) takes the next slot from the counter and writes the child and its
+stream if the slot exists; a child beyond the capacity is counted and dropped, and
+[`overflow`](@ref) reports how many. Children are therefore
 stored in arrival order, which is not deterministic; their set is.
 
 Policy (the driver's): a layer whose buffer overflowed is rerun from the same inputs
@@ -50,17 +51,26 @@ function Adapt.adapt_structure(to::DeviceAdaptor, b::ChildBuffer)
 end
 
 """
-    spawn!(buf::ChildBuffer, child, rng::MCRng, event) -> nothing
+    child_stream(buf::ChildBuffer, rng::MCRng, event) -> (MCRng, Bool)
 
-Store `child` with the stream `child_rng(rng, event, buf.layout)` (`rng` the parent's
-stream, `event` the 0-based spawn ordinal along its march) in the next free slot, or
-count it as overflow. Atomic; device-safe.
+The genealogy stream `child_rng(rng, event, buf.layout)` of the child of the scattering
+event of 0-based ordinal `event` along the march of the photon of stream `rng`, and
+whether `event < event_capacity(buf.layout)`, the ordinals the layout names distinctly.
 """
-@inline function spawn!(b::ChildBuffer, child, rng::MCRng, event::Integer)
+@inline child_stream(b::ChildBuffer, rng::MCRng, event::Integer) =
+    (child_rng(rng, event, b.layout), event < event_capacity(b.layout))
+
+"""
+    spawn!(buf::ChildBuffer, child, rng::MCRng) -> nothing
+
+Store `child` with its stream `rng` in the next free slot, or count it as overflow.
+Atomic; device-safe.
+"""
+@inline function spawn!(b::ChildBuffer, child, rng::MCRng)
     slot = Atomix.@atomic b.count[1] += Int64(1)
     if slot <= length(b.photons)
         @inbounds b.photons[slot] = child
-        @inbounds b.rngs[slot] = child_rng(rng, event, b.layout)
+        @inbounds b.rngs[slot] = rng
     end
     return nothing
 end

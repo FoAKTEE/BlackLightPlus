@@ -99,7 +99,8 @@ total_row(::InclinationBands{N}) where {N} = N + 1
     ExactBins(bands::Bands; nu_min = 1e8, nu_max = 1e16, n_ebins = 200)
 
 Exact spectral accumulator of escaped superphotons: per (row of `bands`, frequency
-bin) the photon count and the integer limbs of `Σ w` and `Σ w E` (`E` in mₑc²).
+bin) the photon count and the integer limbs of `Σ w`, `Σ w E` and `Σ (w E)²` (`E` in
+mₑc²), the last for the variance of the bin.
 Frequency bin `i` covers `ln ν ∈ lnu_min + [(i − 1), i) dlnu` with
 `dlnu = ln(nu_max/nu_min)/n_ebins`, `ν = E mₑc²/h`; a photon outside the grid is
 dropped. [`record!`](@ref) adds through atomics on host and device arrays alike, so the
@@ -118,6 +119,7 @@ struct ExactBins{B<:Bands,C,A,W}
     count::C
     sumw::A
     sumwE::A
+    sumwE2::A
     twins::W
 end
 
@@ -129,30 +131,30 @@ function ExactBins(bands::Bands; nu_min::Real = 1.0e8, nu_max::Real = 1.0e16,
     nr = nrows(bands)
     return ExactBins(bands, Float64(nu_min), Float64(nu_max), lnu_min, dlnu, Int(n_ebins),
                      zeros(Int64, nr, n_ebins), xsum_zeros(nr, n_ebins),
-                     xsum_zeros(nr, n_ebins), Twins())
+                     xsum_zeros(nr, n_ebins), xsum_zeros(nr, n_ebins), Twins())
 end
 
 "A zeroed `ExactBins` with the grid and bands of `b`."
 Base.similar(b::ExactBins) =
     ExactBins(b.bands; nu_min = b.nu_min, nu_max = b.nu_max, n_ebins = b.n_ebins)
 
-with_arrays(b::ExactBins, count, sumw, sumwE, twins) =
+with_arrays(b::ExactBins, count, sumw, sumwE, sumwE2, twins) =
     ExactBins(b.bands, b.nu_min, b.nu_max, b.lnu_min, b.dlnu, b.n_ebins, count, sumw, sumwE,
-              twins)
+              sumwE2, twins)
 
 Adapt.adapt_structure(to, b::ExactBins) =
     with_arrays(b, Adapt.adapt(to, b.count), Adapt.adapt(to, b.sumw), Adapt.adapt(to, b.sumwE),
-                nothing)
+                Adapt.adapt(to, b.sumwE2), nothing)
 Adapt.adapt_structure(to::DeviceAdaptor, b::ExactBins) =
     register!(b.twins, to.dev,
               with_arrays(b, zeroed(to.dev, b.count), zeroed(to.dev, b.sumw),
-                          zeroed(to.dev, b.sumwE), nothing))
+                          zeroed(to.dev, b.sumwE), zeroed(to.dev, b.sumwE2), nothing))
 
 """
     record!(bins::ExactBins, E, w, dir::SVector{3}) -> nothing
 
 Add an escaped photon of energy `E` (mₑc²), weight `w` and spatial escape direction
-`dir` (not normalised): one count, `w` and `w E` into its frequency bin of every row
+`dir` (not normalised): one count, `w`, `w E` and `(w E)²` into its frequency bin of every row
 its direction selects. Photons with `E ≤ 0` or outside the frequency grid are dropped.
 Atomic; device-safe.
 """
@@ -189,7 +191,9 @@ end
 @inline function add_cell!(b::ExactBins, row::Int, ie::Int, E, w)
     Atomix.@atomic b.count[row, ie] += Int64(1)
     xsum_atomic_add!(b.sumw, w, row, ie)
-    xsum_atomic_add!(b.sumwE, w * E, row, ie)
+    wE = w * E
+    xsum_atomic_add!(b.sumwE, wE, row, ie)
+    xsum_atomic_add!(b.sumwE2, wE * wE, row, ie)
     return nothing
 end
 
@@ -207,6 +211,7 @@ function Base.merge!(dst::ExactBins, src::ExactBins)
     dst.count .+= Array(src.count)
     dst.sumw .+= Array(src.sumw)
     dst.sumwE .+= Array(src.sumwE)
+    dst.sumwE2 .+= Array(src.sumwE2)
     return dst
 end
 
@@ -221,7 +226,7 @@ Add the device twins that a `PoolExecutor` made of the host accumulator `acc`
 function gather!(b::ExactBins)
     for (dev, t) in take_twins!(b.twins)
         merge!(b, t)
-        foreach(a -> free!(dev, a), (t.count, t.sumw, t.sumwE))
+        foreach(a -> free!(dev, a), (t.count, t.sumw, t.sumwE, t.sumwE2))
     end
     return b
 end
@@ -232,14 +237,14 @@ pending(acc) = @lock acc.twins.lock !isempty(acc.twins.list)
     Spectrum
 
 The host spectrum of escaped superphotons, rounded once per cell from
-[`ExactBins`](@ref): `count`, `sumw` (`Σ w`) and `sumwE` (`Σ w E`, mₑc²) are
-`n_bands × n_ebins` matrices; frequency bin `i` is centred at
+[`ExactBins`](@ref): `count`, `sumw` (`Σ w`), `sumwE` (`Σ w E`, mₑc²) and `sumwE2`
+(`Σ (w E)²`) are `n_bands × n_ebins` matrices; frequency bin `i` is centred at
 `exp(lnu_min + (i − 1/2) dlnu)`; `dOmega[j]` is the solid angle of row `j`; `total_row`
 is 0 when the rows partition the sky, else the all-sky row. `plan` and `run` are the
 plan and the run record of the product that made the spectrum (`nothing` for one made
 from bins directly). Accessors: [`nu_centers`](@ref), [`nuLnu`](@ref),
-[`nuLnu_total`](@ref), [`nuLnu_solid`](@ref), [`total_power`](@ref),
-[`total_weight`](@ref), [`mean_energy`](@ref), [`band`](@ref).
+[`nuLnu_total`](@ref), [`nuLnu_solid`](@ref), [`nuLnu_sigma`](@ref),
+[`total_power`](@ref), [`total_weight`](@ref), [`mean_energy`](@ref), [`band`](@ref).
 """
 struct Spectrum{P,R}
     nu_min::Float64
@@ -251,6 +256,7 @@ struct Spectrum{P,R}
     count::Matrix{Int}
     sumw::Matrix{Float64}
     sumwE::Matrix{Float64}
+    sumwE2::Matrix{Float64}
     dOmega::Vector{Float64}
     total_row::Int
     plan::P
@@ -270,7 +276,7 @@ function Spectrum(b::ExactBins; plan = nothing, run = nothing)
         error("Spectrum: a cell exceeds $(XSUM_MAX_ADDENDS) addends")
     return Spectrum(b.nu_min, b.nu_max, b.lnu_min, b.dlnu, b.n_ebins, nrows(b.bands),
                     Matrix{Int}(b.count), xsum_round_all(b.sumw), xsum_round_all(b.sumwE),
-                    solid_angles(b.bands), total_row(b.bands), plan, run)
+                    xsum_round_all(b.sumwE2), solid_angles(b.bands), total_row(b.bands), plan, run)
 end
 
 """
@@ -281,7 +287,8 @@ provenance of `spec`.
 """
 band(s::Spectrum, j::Integer) =
     Spectrum(s.nu_min, s.nu_max, s.lnu_min, s.dlnu, s.n_ebins, 1, s.count[j:j, :],
-             s.sumw[j:j, :], s.sumwE[j:j, :], [s.dOmega[j]], 0, s.plan, s.run)
+             s.sumw[j:j, :], s.sumwE[j:j, :], s.sumwE2[j:j, :], [s.dOmega[j]], 0, s.plan,
+             s.run)
 
 # The all-sky part of a spectrum: every row, or the total row.
 sky(s::Spectrum) = s.total_row == 0 ? s : band(s, s.total_row)
@@ -348,6 +355,34 @@ function nuLnu_solid(spec::Spectrum, dOmega::Real)
         L[i] *= f
     end
     return nu, L, cnt
+end
+
+"""
+    nuLnu_sigma(spec[, dOmega]) -> (nu, sigma, neff)
+
+The standard error of `nuLnu_total(spec)` (of `nuLnu_solid(spec, dOmega)` with a solid
+angle) in every frequency bin, `sigma = (mₑc²/dlnu) √Σ (w E)²` times `4π/dOmega`, and the
+effective number of photons of the bin, `neff = (Σ w E)²/Σ (w E)²` (0 for an empty bin).
+A bin's sum is a sum over independent emission events of a compound Poisson count, whose
+variance `Σ (w E)²` estimates; the relative error is `1/√neff`.
+"""
+function nuLnu_sigma(spec::Spectrum, dOmega::Real = 4.0 * π)
+    s = sky(spec)
+    nu = nu_centers(s)
+    f = ME * CL * CL / s.dlnu * (4.0 * π / dOmega)
+    sigma = zeros(Float64, s.n_ebins)
+    neff = zeros(Float64, s.n_ebins)
+    @inbounds for i in 1:s.n_ebins
+        a = 0.0
+        a2 = 0.0
+        for j in 1:s.n_bands
+            a += s.sumwE[j, i]
+            a2 += s.sumwE2[j, i]
+        end
+        sigma[i] = f * sqrt(a2)
+        neff[i] = a2 > 0.0 ? a * a / a2 : 0.0
+    end
+    return nu, sigma, neff
 end
 
 "Recorded power `mₑc² Σ w E` (erg s⁻¹) over the sky."

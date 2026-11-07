@@ -9,32 +9,28 @@
 const REJECT_MAX_ITER = 100_000
 
 """
-    GenerationTables{W,G}(weights, dnmax[, int_jnu = nothing])
+    GenerationTables{W,E}(weights, dnmax, emissivity = EMISSIVITY_TABLE)
 
 What a zone draws its superphotons from: the weight table `weights`, the zone's
-frequency-rejection envelope `dnmax` (from `zone_nsuperphotons`, or `tabulated_dnmax`
-with a table), and `int_jnu`, `nothing` to evaluate `int_jnu_zone` at every proposal
-or the zone's `IntJnuTable` (tabulated generation, statistically equivalent but not
-bitwise). `isbits` after `Adapt.adapt` to a device.
+frequency-rejection envelope `dnmax` (from [`zone_count`](@ref)) and the
+[`EmissivityTable`](@ref) `emissivity` of the frequency acceptance. `isbits` after
+`Adapt.adapt` to a device.
 """
-struct GenerationTables{W<:WeightTable,G<:Union{Nothing,IntJnuTable}}
+struct GenerationTables{W<:WeightTable,E<:EmissivityTable}
     weights::W
     dnmax::Float64
-    int_jnu::G
+    emissivity::E
 end
 GenerationTables(weights::WeightTable, dnmax::Real) =
-    GenerationTables(weights, Float64(dnmax), nothing)
+    GenerationTables(weights, Float64(dnmax), EMISSIVITY_TABLE)
 Adapt.@adapt_structure GenerationTables
-
-# Numerator of the frequency acceptance: the Simpson integral or the tabulated one.
-@inline gen_int_jnu(::Nothing, n_e, theta_e, B, nu) = int_jnu_zone(n_e, theta_e, B, nu)
-@inline gen_int_jnu(gt::IntJnuTable, n_e, theta_e, B, nu) = int_jnu_at(nu, gt)
 
 """
     generate(zone::EmissionZone, tables::GenerationTables, rng::MCRng) -> (Superphoton, MCRng)
 
 One superphoton emitted by `zone` and the advanced stream. The frequency is drawn by
-rejection against `tables` (weight `w(ν)` of the packet), the pitch angle to the field
+rejection against `tables` (log-uniform proposals accepted with
+`(∫j_ν dΩ/w(ν))/dnmax`; weight `w(ν)` of the packet), the pitch angle to the field
 by rejection against `jmax`, the azimuth uniformly; the momentum is null in the
 emission tetrad of the zone and covariant in coordinates, the weight is `w(ν)`, the
 optical depths and scattering count are zero, and the emission diagnostics are the
@@ -44,7 +40,7 @@ proposals with the last one. Pure and allocation-free.
 @inline function generate(zone::EmissionZone, tables::GenerationTables, rng::MCRng)
     wgt = tables.weights
     dnmax = tables.dnmax
-    gt = tables.int_jnu
+    emis = tables.emissivity
     ne = zone.n_e; te = zone.theta_e; B = zone.B
 
     nu = 0.0
@@ -54,7 +50,7 @@ proposals with the last one. Pure and allocation-free.
         nu = exp(u1 * (wgt.lnu_max - wgt.lnu_min) + wgt.lnu_min)
         w = weight_at(nu, wgt)
         u2, rng = mc_uniform(rng)
-        accept = (gen_int_jnu(gt, ne, te, B, nu) / (w + WEIGHT_FLOOR)) / dnmax
+        accept = (int_jnu(emis, ne, te, B, nu) / (w + WEIGHT_FLOOR)) / dnmax
         u2 <= accept && break
     end
 

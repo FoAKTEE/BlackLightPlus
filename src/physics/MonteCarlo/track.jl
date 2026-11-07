@@ -1,12 +1,19 @@
 # The one superphoton tracker and its two march controls. Each step samples the plasma at
-# the step's end, accumulates the trapezoid optical depths
+# the step's end and accumulates the trapezoid optical depths
 #   dτ = ½ (rate_n + rate_{n+1}) (L_unit h/mₑc²) dλ
-# of absorption (deterministic weight decay) and scattering, and draws the biased
-# exponential-transform scattering decision (Kahn 1950; gpumonty `track.cu`): a child
-# carrying w (1 − e^{−dτ_s})/(1 − e^{−b dτ_s}) is spawned with probability 1 − e^{−b dτ_s}
-# at the fraction x₁/(b dτ_s) of the step, so the expected spawned weight equals the
-# physical loss w (1 − e^{−dτ_s}) for every bias b ≥ 1, and the incident beam is
-# depleted by e^{−dτ_s}. Children go to the sink and are tracked in a later layer.
+# of absorption and scattering, with rates uniform over the step in the fraction f of the
+# step. A photon of weight w entering a step of depths a = Δτ_a, s = Δτ_s, Δτ = a + s,
+# scatters at f with expected weight density w s e^{−Δτ f} df and leaves it with
+# w e^{−Δτ}, deterministically. The scattering events of the step are a Poisson process
+# of mean b s for a bias b ≥ 1 chosen before the step's draws, at fractions drawn
+# independently from q(f) = Δτ e^{−Δτ f}/(1 − e^{−Δτ}), each spawning a child of weight
+# W = w (1 − e^{−Δτ})/(b Δτ): the expected child weight density is
+#   b s · W · q(f) = w s e^{−Δτ f},
+# the physical one, for every b, a and s, and W ≤ w/b. The events are the points of a
+# rate-b s Poisson process on the CDF coordinate u = (1 − e^{−Δτ f})/(1 − e^{−Δτ}) ∈ [0, 1),
+# drawn as cumulated exponential gaps on the photon's stream, so a step with no event
+# draws one uniform. Each child kicks off the plasma at its event and carries its own
+# stream, named by the event ordinal (`child_stream`), into a later layer.
 
 "Step of the straight-line march as a fraction of the sphere radius per unit spatial |k|."
 const SPHERE_STEP_FRAC = 0.05
@@ -109,6 +116,16 @@ recorded) rather than a capture or the step limit.
 @inline escaped(c::CurvedMarch, s::MarchStep) = s.R > min(c.R_em, c.escape)
 
 """
+    captured(ctl, step::MarchStep) -> Bool
+
+Whether the stopping decision `step` of `ctl` is a capture by the horizon: never for a
+[`FlatMarch`](@ref) (its other stop is the step limit), every stop that is not an escape
+for a [`CurvedMarch`](@ref).
+"""
+@inline captured(c::FlatMarch, s::MarchStep) = false
+@inline captured(c::CurvedMarch, s::MarchStep) = !escaped(c, s)
+
+"""
     escape_direction(ctl, sph::Superphoton) -> SVector{3}
 
 Spatial travel direction of the escaped `sph` (not normalised), the input of the
@@ -123,36 +140,32 @@ in flat coordinates), the spatial part of `k^μ = g^{μν}(x) p_ν` for a
 end
 
 """
-    scatter_event(w, b, dtau_s, weight_min, rng) -> (spawn, weight, frac, rng)
+    event_weight(w, b, dtau) -> Float64
 
-The exponential-transform scattering decision of a step of scattering depth `dtau_s`
-for a photon of weight `w` under bias `b ≥ 1`: one uniform `U` gives `x₁ = −log U`;
-a child of weight `w (1 − e^{−dτ})/(1 − e^{−b dτ})` is spawned when that weight
-exceeds `weight_min` and `b dτ > x₁`, at the fraction `frac = x₁/(b dτ)` of the step
-(0 without a spawn).
+Weight of every child of a step of total depth `dtau = Δτ_a + Δτ_s > 0` under bias `b`
+for a photon of weight `w` at the step start: `w (1 − e^{−Δτ})/(b Δτ)`.
 """
-@inline function scatter_event(w, b, dtau_s, weight_min, rng::MCRng)
-    weight_scat = w * (-expm1(-dtau_s)) / (-expm1(-b * dtau_s))
-    u, rng = mc_uniform(rng)
-    x1 = -log(u > 0.0 ? u : 1.0e-300)
-    spawn = weight_scat > weight_min && b * dtau_s > x1
-    return (spawn = spawn, weight = weight_scat, frac = spawn ? x1 / (b * dtau_s) : 0.0,
-            rng = rng)
+@inline event_weight(w, b, dtau) = w * (-expm1(-dtau)) / (b * dtau)
+
+"""
+    next_event(u, lambda, dtau, rng) -> (u, frac, rng)
+
+The next scattering event of a step after the one at CDF coordinate `u` (0 before the
+first): `u + E/lambda` with `E = −log U` one exponential draw, `lambda = b Δτ_s` the
+expected number of events, and its fraction of the step
+`frac = −log(1 + u (e^{−Δτ} − 1))/Δτ`, the inverse of `u = (1 − e^{−Δτ f})/(1 − e^{−Δτ})`.
+The step has no further event when the returned `u ≥ 1` (then `frac = 1`).
+"""
+@inline function next_event(u, lambda, dtau, rng::MCRng)
+    x, rng = mc_uniform(rng)
+    u += -log(x) / lambda
+    u < 1.0 || return u, 1.0, rng
+    return u, -log1p(u * expm1(-dtau)) / dtau, rng
 end
 
 # Absorption rate of the provider's frame from a sample (state, metric pair g).
 @inline absorption(::FluidFrame, s, g, p) = absorption_rate(s, p)
 @inline absorption(f::StaticFrame, s, g, p) = absorption_rate(f, s, last(g) * p)
-
-"""
-    may_scatter(provider, state) -> Bool
-
-Whether a step whose end sample is `state` may scatter: `state.valid`; always for a
-`UniformSphere`, whose every step that accrues scattering depth scatters off its
-uniform plasma.
-"""
-@inline may_scatter(::PlasmaProvider, s::PlasmaState) = s.valid
-@inline may_scatter(::UniformSphere, s::PlasmaState) = true
 
 """
     scatter_site(provider, st, x, params) -> (zone::EmissionZone, ok::Bool)
@@ -181,24 +194,45 @@ struct March{C,S,P,O,K}
     sink::K
 end
 
-# Spawn the child of the decision `ev` on step `stp = (it, y, h, dtau_a, tau_a, tau_s)`
-# as spawn `event` of `sph`: kick off the plasma at the event point and hand the child
-# to the sink. Returns the child's weight (0 when the site is not valid) and the stream.
-@inline function spawn_child(m::March, sph::Superphoton, stp, ev, event::Int, ::Val{A}) where {A}
-    yev = geodesic_step(m.ctl, stp.y, stp.h * ev.frac, stp.it)
-    xev = position(yev)
-    zone, ok = scatter_site(m.provider, m.st, xev, m.opac.params)
-    rng = ev.rng
-    ok || return 0.0, rng
-    p_new, _, rng = scatter_superphoton(momentum(yev), zone, rng)
-    wc = A ? ev.weight * exp(-stp.dtau_a * ev.frac) : ev.weight
-    child = Superphoton(xev, p_new, wc;
-                        tau_abs = stp.tau_a, tau_scatt = stp.tau_s,
-                        nscatt = sph.nscatt + Int32(1),
-                        x1i = sph.x1i, x2i = sph.x2i,
-                        ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
-    spawn!(m.sink, child, rng, event)
-    return wc, rng
+# Temperature of a sample for the bias, 0 for vacuum.
+@inline state_theta(s) = s.valid ? Float64(s.theta_e) : 0.0
+
+# The events of one step (`stp`: it, y, h, the depths at its start) of the photon `sph`,
+# of weight `w` at the step start, with the scattering depth `dtau_s`, the total depth
+# `dtau` and the bias decision `(b, copies)`. Each event advances to its fraction of the
+# step, kicks off the plasma of the event site on the stream of each child (`copies`
+# per event, ordinals `nev, nev + 1, …`) and hands the children to the sink. Returns the
+# spawned and unspawned weight, the next ordinal and the photon's stream.
+@inline function step_events(m::March, sph::Superphoton, stp, w, dtau_s, dtau, b, copies,
+                             nev::Int, rng::MCRng)
+    W = event_weight(w, b, dtau) / copies
+    lambda = b * dtau_s
+    spawned = 0.0; unspawned = 0.0
+    u = 0.0
+    while true
+        u, frac, rng = next_event(u, lambda, dtau, rng)
+        u < 1.0 || break
+        yev = geodesic_step(m.ctl, stp.y, stp.h * frac, stp.it)
+        xev = position(yev)
+        zone, ok = scatter_site(m.provider, m.st, xev, m.opac.params)
+        for _ in 1:copies
+            crng, fits = child_stream(m.sink, rng, nev)
+            nev += 1
+            if ok && fits && W > m.opac.weight_min
+                p_new, _, crng = scatter_superphoton(momentum(yev), zone, crng)
+                child = Superphoton(xev, p_new, W;
+                                    tau_abs = stp.tau_a, tau_scatt = stp.tau_s,
+                                    nscatt = sph.nscatt + Int32(1),
+                                    x1i = sph.x1i, x2i = sph.x2i,
+                                    ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
+                spawn!(m.sink, child, crng)
+                spawned += W
+            else
+                unspawned += W
+            end
+        end
+    end
+    return spawned, unspawned, nev, rng
 end
 
 """
@@ -209,18 +243,18 @@ March the superphoton `sph` under the control `ctl` ([`FlatMarch`](@ref),
 [`CurvedMarch`](@ref)) on the spacetime `st` through the plasma of `provider`
 (`Matter.sample` with `opacities.params`) until the control stops it. Every step
 accrues the trapezoid absorption depth (`absorb = Val(true)`, rate
-[`absorption_rate`](@ref) in the provider's [`rate_frame`](@ref)) and scattering
-depth (`scatter = Val(true)`, [`scattering_rate`](@ref) with `opacities.table`), and
-decays the weight by `e^{−(dτ_a + dτ_s)}`. With scattering, a step with `dτ_s > 0`
-that [`may_scatter`](@ref) while `nscatt < opacities.max_scatt` draws one
-[`scatter_event`](@ref) with bias `bias(opacities.bias, nscatt)`; a spawn advances to
-the event point, kicks the momentum there off the plasma of [`scatter_site`](@ref) by
-`scatter_superphoton` with this photon's stream, and hands the child (weight
-additionally absorbed up to the event, `nscatt + 1`, the depths at the step start) to
-`spawn!(sink, child, rng, event)`, `event` counting the spawn decisions from 0. The
-returned photon has the final state and depths; if the control reports an escape it
-is also handed to `record!(sink, sph)`, and with scattering the ledger goes to
-`tally!`. `rng` is the advanced stream; without scattering it is not drawn from.
+[`absorption_rate`](@ref) in the provider's [`rate_frame`](@ref)) and scattering depth
+(`scatter = Val(true)`, [`scattering_rate`](@ref) with `opacities.table`), and decays
+the weight by `e^{−(dτ_a + dτ_s)}`. With scattering, while `nscatt < opacities.max_scatt`
+every step with `dτ_s > 0` draws its Poisson-many events ([`next_event`](@ref)) under the
+bias [`event_bias`](@ref) of `opacities.bias` (the step's larger end temperature, the
+weight at the step start), each spawning children of weight [`event_weight`](@ref) (split
+in `copies`) at its event point, kicked by `scatter_superphoton` off the plasma of
+[`scatter_site`](@ref) on the [`child_stream`](@ref) of its ordinal, with `nscatt + 1` and
+the depths at the step start, handed to `spawn!`; an event whose site is not valid
+spawns nothing. The returned photon has the final state and depths; if the control
+reports an escape it is also handed to `record!(sink, sph)`, and its [`MarchLedger`](@ref)
+goes to `tally!`. `rng` is the advanced stream; without scattering it is not drawn from.
 Allocation-free for `isbits` arguments and sink.
 """
 function track!(ctl, st, provider, opac::Opacities, sph::Superphoton, rng::MCRng, sink;
@@ -230,46 +264,59 @@ function track!(ctl, st, provider, opac::Opacities, sph::Superphoton, rng::MCRng
     Cgr = opac.L_unit * HPL / (ME * CL * CL)
     y = raystate(sph.x, sph.p)
     w = sph.w; tau_a = sph.tau_abs; tau_s = sph.tau_scatt
-    s0, g0 = sample(provider, st, sph.x, opac.params)
-    na0 = A ? absorption(frame, s0, g0, sph.p) : 0.0
+    s0, g = sample(provider, st, sph.x, opac.params)
+    na0 = A ? absorption(frame, s0, g, sph.p) : 0.0
     ns0 = S ? scattering_rate(opac.table, s0, sph.p) : 0.0
+    th0 = S ? state_theta(s0) : 0.0
+    spawning = S && Int(sph.nscatt) < opac.max_scatt
     r_prev = Inf
-    recorded = false
-    nspawn = 0; loss = 0.0; spawned = 0.0
+    outcome = DROPPED_MARCH
+    nev = 0
+    loss = 0.0; loss_final = 0.0; spawned = 0.0; unspawned = 0.0; absorbed = 0.0
     for it in 1:max_steps(ctl)
         d = march_control(ctl, y, r_prev, it)
         if d.stop
-            recorded = escaped(ctl, d)
+            outcome = escaped(ctl, d) ? ESCAPED_MARCH :
+                      (captured(ctl, d) ? CAPTURED_MARCH : DROPPED_MARCH)
             break
         end
         r_prev = d.R
         h = d.h
         yn = geodesic_step(ctl, y, h, it)
-        s1, g1 = sample(provider, st, position(yn), opac.params)
-        na1 = A ? absorption(frame, s1, g1, momentum(yn)) : 0.0
+        s1, g = sample(provider, st, position(yn), opac.params)
+        na1 = A ? absorption(frame, s1, g, momentum(yn)) : 0.0
         ns1 = S ? scattering_rate(opac.table, s1, momentum(yn)) : 0.0
         dtau_a = 0.5 * (na0 + na1) * Cgr * h
         dtau_s = 0.5 * (ns0 + ns1) * Cgr * h
-        if S && dtau_s > 0.0 && may_scatter(provider, s1) && Int(sph.nscatt) < opac.max_scatt
-            ev = scatter_event(w, bias(opac.bias, sph.nscatt), dtau_s, opac.weight_min, rng)
-            rng = ev.rng
-            if ev.spawn
-                stp = (it = it, y = y, h = h, dtau_a = dtau_a, tau_a = tau_a, tau_s = tau_s)
-                wc, rng = spawn_child(m, sph, stp, ev, nspawn, absorb)
-                nspawn += 1
-                spawned += wc
+        dtau = (A ? dtau_a : 0.0) + (S ? dtau_s : 0.0)
+        lost = dtau > 0.0 ? (-expm1(-dtau)) / dtau : 1.0
+        A && (absorbed += w * (-y[5]) * dtau_a * lost)
+        if S
+            th1 = state_theta(s1)
+            if dtau_s > 0.0
+                if spawning
+                    loss += w * dtau_s * lost
+                    b, copies = event_bias(opac.bias, sph.nscatt, max(th0, th1), w)
+                    stp = (it = it, y = y, h = h, tau_a = tau_a, tau_s = tau_s)
+                    sp, us, nev, rng = step_events(m, sph, stp, w, dtau_s, dtau, b, copies,
+                                                   nev, rng)
+                    spawned += sp; unspawned += us
+                else
+                    loss_final += w * dtau_s * lost
+                end
             end
+            th0 = th1
         end
-        S && (loss += w * (-expm1(-dtau_s)))
         w *= attenuation(absorb, scatter, dtau_a, dtau_s)
         A && (tau_a += dtau_a)
         S && (tau_s += dtau_s)
         y = yn; na0 = na1; ns0 = ns1
     end
-    S && tally!(sink, sph, loss, spawned)
     out = Superphoton(position(y), momentum(y), w; tau_abs = tau_a, tau_scatt = tau_s,
                       nscatt = sph.nscatt, x1i = sph.x1i, x2i = sph.x2i,
                       ne0 = sph.ne0, thetae0 = sph.thetae0, b0 = sph.b0)
-    recorded && record!(sink, out)
-    return (sph = out, recorded = recorded, rng = rng)
+    outcome == ESCAPED_MARCH && record!(sink, out)
+    tally!(sink, sph, MarchLedger(outcome, loss, loss_final, spawned, unspawned, absorbed,
+                                  out.w, out.E, nev))
+    return (sph = out, recorded = outcome == ESCAPED_MARCH, rng = rng)
 end

@@ -38,7 +38,6 @@ export SnapshotSeries, synthetic_series, bracketing_pair, get_frame, blend, Fram
 # output
 export write_npy
 # Monte Carlo tables
-export load_hotcross, build_hotcross_table, build_weight_table, build_zone_emission_table,
-       zone_counts, build_int_jnu_table, zone_int_jnu_tables
+export load_hotcross, build_hotcross_table, build_weight_table, emission_sites, zone_tables
 
 end # module

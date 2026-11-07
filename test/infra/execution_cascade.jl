@@ -13,7 +13,8 @@ using BlackLightPlus.Numerics: MCRng, MCStreamLayout, child_rng, stream_id, prim
 using BlackLightPlus.MonteCarlo: Superphoton
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, ExactBins, ExactScalars, ChildBuffer,
                      Generation, InclinationBands, PolarBands, foreach_cascade!,
-                     cascade_chunk, gather!, add!, scalar, addends, spawn!, children, describe
+                     cascade_chunk, gather!, add!, scalar, addends, spawn!, child_stream, children,
+                     describe
 import BlackLightPlus.Execution
 
 const DK = Main.Decks
@@ -38,7 +39,7 @@ function (p::Gen0)(item, i)
     p.buf === nothing && return nothing
     for e in 0:(item % 4 - 1)
         spawn!(p.buf, Superphoton(SVector(0.0, item, e, 0.0), SVector(-E, 0.0, 0.0, E), 1.0 + e;
-                                  nscatt = 1), r, e)
+                                  nscatt = 1), first(child_stream(p.buf, r, e)))
     end
     return nothing
 end
@@ -60,7 +61,8 @@ function (p::GenN)(item, i)
     add!(p.scalars, 3, sph.w)
     Execution.record!(p.bins, -sph.p[1] * Int(sph.nscatt), sph.w, SVector(0.3, -0.2, sph.x[3] - 1.0))
     for e in 0:(Int(id % 3) - 1)
-        spawn!(p.buf, Superphoton(sph.x, sph.p, sph.w / 2; nscatt = sph.nscatt + 1), rng, e)
+        spawn!(p.buf, Superphoton(sph.x, sph.p, sph.w / 2; nscatt = sph.nscatt + 1),
+               first(child_stream(p.buf, rng, e)))
     end
     return nothing
 end

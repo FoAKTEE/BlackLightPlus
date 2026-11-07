@@ -223,16 +223,17 @@ device_isbits(x) = isbits(Adapt.adapt(DeviceLike(), x))
 
 using LinearAlgebra: det
 using BlackLightPlus.Numerics: primary_rng, MCRng, MCStreamLayout, mc_uniform, Units, GNEWT, CL
-using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, ks_radius
-using BlackLightPlus.Matter: EmissionZone, ElectronModel, PlasmaCuts, legacy_bound, sample
+using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, ks_radius, HORIZON_EPS_SAMPLED
+using BlackLightPlus.Matter: EmissionZone, ZoneSite, ElectronModel, PlasmaCuts, legacy_bound, sample,
+                             emission_zone
 using BlackLightPlus.Transfer: TransferParams
 using BlackLightPlus.MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, FlatMarch,
-                      CurvedMarch, escape_direction, generate, track!, table_zone,
-                      zone_nsuperphotons, SPHERE_MAX_STEPS, CURVED_MAX_STEPS
-import BlackLightPlus.MonteCarlo: record!, spawn!, tally!
+                      CurvedMarch, MarchLedger, CAPTURED_MARCH, escape_direction, generate, track!,
+                      table_zone, zone_nsuperphotons, SPHERE_MAX_STEPS, CURVED_MAX_STEPS
+import BlackLightPlus.MonteCarlo: record!, child_stream, spawn!, tally!
 using BlackLightPlus.Execution: Execution, ExactBins, ExactScalars, ChildBuffer, PolarBands,
                      InclinationBands, foreach_item!, gather!, children, overflow
-using BlackLightPlus.Data: build_weight_table, build_zone_emission_table, zone_counts, locate
+using BlackLightPlus.Data: build_weight_table, zone_tables, locate
 
 """
     BinsSink(ctl, orders, children, ledger)
@@ -240,10 +241,12 @@ using BlackLightPlus.Data: build_weight_table, build_zone_emission_table, zone_c
 A Monte Carlo sink over the `BlackLightPlus.Execution` accumulators: an escaped photon of
 scattering order `n` is recorded into `orders[min(n, K) + 1]` (`orders` a tuple of
 `K + 1` `ExactBins`) with direction `escape_direction(ctl, sph)`; children go to the
-`ChildBuffer` `children` (`nothing` without scattering); the `ExactScalars` `ledger`
-(`nothing` for none) receives 1: spawned weight, 2: weight spawned by primaries,
-3: scattering loss, 4: weight of primaries (from `tally!`), 5: escaped `Σ w E`,
-6: emitted `Σ w E` (added by the programs).
+`ChildBuffer` `children` (`nothing` without scattering) on the stream its layout names;
+the `ExactScalars` `ledger` (`nothing` for none) receives 1: spawned weight, 2: weight
+spawned by primaries, 3: scattering loss of the steps that may spawn, 4: weight of
+primaries (from `tally!` with scattering), 5: escaped `Σ w E`, 6: emitted `Σ w E` (added
+by the programs), 7: weight of the events that spawned nothing, 8: absorbed `Σ w E`,
+9: captured `Σ w E`.
 """
 struct BinsSink{C,O,K,L} <: Sink
     ctl::C
@@ -253,8 +256,8 @@ struct BinsSink{C,O,K,L} <: Sink
 end
 Adapt.@adapt_structure BinsSink
 
-"A ledger of the six `BinsSink` scalars."
-mc_ledger() = ExactScalars(6)
+"A ledger of the nine `BinsSink` scalars."
+mc_ledger() = ExactScalars(9)
 
 @inline function record!(s::BinsSink, sph::Superphoton)
     k = min(Int(sph.nscatt), length(s.orders) - 1) + 1
@@ -262,15 +265,20 @@ mc_ledger() = ExactScalars(6)
     s.ledger === nothing || Execution.add!(s.ledger, 5, sph.w * sph.E)
     return nothing
 end
-@inline spawn!(s::BinsSink, child, rng, event) = Execution.spawn!(s.children, child, rng, event)
-@inline function tally!(s::BinsSink, sph, loss, spawned)
+@inline child_stream(s::BinsSink, rng, event) = Execution.child_stream(s.children, rng, event)
+@inline spawn!(s::BinsSink, child, rng) = Execution.spawn!(s.children, child, rng)
+@inline function tally!(s::BinsSink, sph, l::MarchLedger)
     s.ledger === nothing && return nothing
-    Execution.add!(s.ledger, 1, Float64(spawned))
+    Execution.add!(s.ledger, 8, l.absorbed)
+    l.outcome == CAPTURED_MARCH && Execution.add!(s.ledger, 9, l.w * l.E)
+    s.children === nothing && return nothing
+    Execution.add!(s.ledger, 1, l.spawned)
     if sph.nscatt == 0
-        Execution.add!(s.ledger, 2, Float64(spawned))
+        Execution.add!(s.ledger, 2, l.spawned)
         Execution.add!(s.ledger, 4, sph.w)
     end
-    Execution.add!(s.ledger, 3, Float64(loss))
+    Execution.add!(s.ledger, 3, l.scatter_loss)
+    Execution.add!(s.ledger, 7, l.unspawned)
     return nothing
 end
 
@@ -313,11 +321,13 @@ Adapt.@adapt_structure PrimaryProgram
 end
 
 """
-    ZoneProgram(zones, weights, dnmax, offset, ctl, st, provider, opac, sink, seed, absorb, scatter)
+    ZoneProgram(sites, weights, dnmax, offset, ctl, st, provider, opac, sink, seed, absorb, scatter)
 
-Per-item program over the primaries of a zone list: primary `g` belongs to the zone `z`
-with `offset[z] < g ≤ offset[z + 1]` and is generated from `zones[z]` with the shared
-weight table and the zone's envelope `dnmax[z]` on the stream `primary_rng(seed, g)`.
+Per-item program over the primaries of a list of `ZoneSite`s: primary `g` belongs to the
+zone `z` with `offset[z] < g ≤ offset[z + 1]`, whose zone `emission_zone(provider, st,
+sites[z], opac.params)` is decoded in the program and generates the photon with the
+shared weight table and the zone's envelope `dnmax[z]` on the stream
+`primary_rng(seed, g)`.
 """
 struct ZoneProgram{Z,W,D,F,C,S,P,O,K,A,B}
     zones::Z
@@ -337,8 +347,9 @@ Adapt.@adapt_structure ZoneProgram
 
 @inline function (p::ZoneProgram)(item, i)
     z = searchsortedfirst(p.offset, item) - 1
-    tables = GenerationTables(p.weights, @inbounds(p.dnmax[z]), nothing)
-    sph, rng = generate(@inbounds(p.zones[z]), tables, primary_rng(p.seed, item))
+    tables = GenerationTables(p.weights, @inbounds(p.dnmax[z]))
+    zone = emission_zone(p.provider, p.st, @inbounds(p.zones[z]), p.opac.params)
+    sph, rng = generate(zone, tables, primary_rng(p.seed, item))
     emitted!(p.sink, sph)
     track_into(p, sph, rng)
     return nothing
@@ -493,22 +504,24 @@ function torus_params(; nu_obs = 2.3e11)
 end
 
 """
-    torus_zones(blocks, st, params; stride = 1, r_emit_max = Inf) -> Vector{EmissionZone}
+    torus_zones(blocks, st, params; r_emit_max = Inf) -> Vector{EmissionZone}
 
-One zone per cell centre of `blocks` (every `stride`-th cell per axis) that its own block
-owns, within Kerr–Schild radius `r_emit_max`, whose decoded state is valid with
-`n_e, Θₑ > 0`: proper volume `√−g Δx¹Δx²Δx³ stride³ L_unit³` (cm³).
+One zone per cell centre of `blocks` that its own block owns, at least
+`HORIZON_EPS_SAMPLED` above the Kerr horizon and within Kerr–Schild radius `r_emit_max`,
+whose decoded state is valid with `n_e, Θₑ > 0`: proper volume `√−g Δx¹Δx²Δx³ L_unit³`
+(cm³).
 """
-function torus_zones(blocks, st, params; stride = 1, r_emit_max = Inf)
+function torus_zones(blocks, st, params; r_emit_max = Inf)
     zones = EmissionZone{Float64}[]
     Lu3 = params.units.L_unit^3
     for mb in 1:blocks.nmb
         d = blocks.dx[:, mb]
-        dVcode = d[1] * d[2] * d[3] * Float64(stride)^3
-        for k in 1:stride:blocks.nk, j in 1:stride:blocks.nj, i in 1:stride:blocks.ni
+        dVcode = d[1] * d[2] * d[3] * 1.0
+        for k in 1:blocks.nk, j in 1:blocks.nj, i in 1:blocks.ni
             xc = SVector(0.0, blocks.x_left[1, mb] + (i - 1) * d[1],
                          blocks.x_left[2, mb] + (j - 1) * d[2], blocks.x_left[3, mb] + (k - 1) * d[3])
             locate(blocks, xc[2], xc[3], xc[4]) == mb || continue
+            ks_radius(st, xc) - st.r_h >= HORIZON_EPS_SAMPLED || continue
             ks_radius(st, xc) <= r_emit_max || continue
             s, g = sample(blocks, st, xc, params)
             (s.valid && s.n_e > 0.0 && s.theta_e > 0.0) || continue
@@ -520,24 +533,26 @@ function torus_zones(blocks, st, params; stride = 1, r_emit_max = Inf)
 end
 
 """
-    torus_run(exec, blocks, zones, Ns, seed; scattering = false, table = nothing, bias0 = 1.0,
+    torus_run(exec, blocks, sites, Ns, seed; scattering = false, table = nothing, bias0 = 1.0,
               max_scatt = 3, C = 32.0, incl_deg = (17.0, 50.0, 90.0), half_width_deg = 10.0,
               n_ebins = 120, capacity) -> (bins, ledger, n_gen, layers)
 
-The Monte Carlo of the torus deck on the Kerr hole of `TORUS_A`: the weight table of
-the zones for about `Ns` primaries over [1e8, 1e16] Hz, per-zone counts rounded
+The Monte Carlo of the torus deck on the Kerr hole of `TORUS_A` from the `ZoneSite`s
+`sites`: the weight table of the zones for about `Ns` primaries over [1e8, 1e16] Hz (`Data.zone_tables`), per-zone
+counts rounded
 stochastically on the stream `MCRng(seed, 0)`, a `CurvedMarch` whose emission radius is
 the larger of 100 and 1.2 times the outermost zone radius, absorption always and
-scattering on request, binned by inclination band over [1e8, 1e24] Hz.
+scattering on request (constant `Bias(bias0)`), binned by inclination band over
+[1e8, 1e24] Hz.
 """
-function torus_run(exec, blocks, zones, Ns, seed; scattering = false, table = nothing,
+function torus_run(exec, blocks, zones::AbstractVector{<:ZoneSite}, Ns, seed;
+                   scattering = false, table = nothing,
                    bias0 = 1.0, max_scatt = 3, C = 32.0, incl_deg = (17.0, 50.0, 90.0),
                    half_width_deg = 10.0, n_ebins = 120, capacity = 1024)
     st = KerrSchildCartesian(TORUS_A)
     params = torus_params()
-    jt = build_zone_emission_table(zones; nu_min = 1.0e8, nu_max = 1.0e16)
-    wgt = build_weight_table(jt, Float64(Ns) / (log(1.0e16) - log(1.0e8)))
-    Nsz, dnmax = zone_counts(jt, wgt)
+    wgt, Nsz, dnmax = zone_tables(zones, Float64(Ns) / (log(1.0e16) - log(1.0e8));
+                                  nu_min = 1.0e8, nu_max = 1.0e16)
     offset = zeros(Int, length(zones) + 1)
     rr = MCRng(Int(seed), 0)
     for z in eachindex(zones)

@@ -11,7 +11,7 @@ using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: Superphoton, HotcrossTable, NW, NT
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, foreach_item!, ExactBins, ExactScalars,
                      ChildBuffer, PolarBands, InclinationBands, Spectrum, band, gather!,
-                     nu_centers, nuLnu, nuLnu_total, nuLnu_solid, total_power, total_weight,
+                     nu_centers, nuLnu, nuLnu_total, nuLnu_solid, nuLnu_sigma, total_power, total_weight,
                      mean_energy, add!, scalar, addends, capacity, overflow, children
 import BlackLightPlus.Execution
 
@@ -36,7 +36,8 @@ function (p::AccProgram)(item, i)
     add!(p.scalars, 1, exp(-item / 100.0))
     add!(p.scalars, 2, sin(Float64(item)))
     item % 3 == 0 && Execution.spawn!(p.buf, Superphoton(SVector(0.0, item, 0.0, 0.0),
-                                                         SVector(-E, 0.0, 0.0, E), 1.0), r, item % 5)
+                                                         SVector(-E, 0.0, 0.0, E), 1.0),
+                                       first(Execution.child_stream(p.buf, r, item % 5)))
     return nothing
 end
 
@@ -64,6 +65,12 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
         @test b.count[6, ie] == 2 && b.count[1, ie] == 1 && sum(b.count) == 3
         s = Spectrum(b)
         @test s.sumw[6, ie] === 3.0 && s.sumw[1, ie] === 3.0 && s.sumwE[1, ie] === 3.0 * E
+        @test s.sumwE2[1, ie] === (3.0 * E)^2 && s.sumwE2[6, ie] === (2.0 * E)^2 + E^2
+        nu, sig, neff = nuLnu_sigma(s)
+        @test sig[ie] ≈ MEC2 / s.dlnu * sqrt(9.0 + 4.0 + 1.0) * E rtol = 1e-14
+        @test neff[ie] ≈ 36.0 / 14.0 rtol = 1e-14
+        @test neff[ie + 1] == 0.0 && sig[ie + 1] == 0.0
+        @test nuLnu_sigma(s, π)[2] ≈ 4.0 .* sig
         @test sum(s.dOmega) ≈ 4π && s.total_row == 0
         ib = ExactBins(InclinationBands((17.0, 50.0, 60.0), 10.0))
         th = deg2rad(55.0)
@@ -92,6 +99,7 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
         @test total_power(s) ≈ MEC2 * sum(s.sumwE) && total_weight(s) ≈ sum(s.sumw)
         @test mean_energy(s) ≈ sum(s.sumwE) / sum(s.sumw)
         @test band(s, 2).sumwE == s.sumwE[2:2, :] && band(s, 2).dOmega == [s.dOmega[2]]
+        @test band(s, 2).sumwE2 == s.sumwE2[2:2, :]
         @test mean_energy(Spectrum(ExactBins(PolarBands(2)))) == 0.0
     end
 
@@ -111,7 +119,8 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
             Execution.record!(isodd(k) ? b2 : b3, energy_at(1.0e10), x, d)
         end
         merge!(b2, b3)
-        @test b2.count == b1.count && b2.sumw == b1.sumw && b2.sumwE == b1.sumwE
+        @test b2.count == b1.count && b2.sumw == b1.sumw && b2.sumwE == b1.sumwE &&
+              b2.sumwE2 == b1.sumwE2
         @test_throws ArgumentError merge!(b1, ExactBins(PolarBands(3)))
     end
 
@@ -121,8 +130,10 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
         sp = Superphoton(SVector(0.0, 1.0, 0.0, 0.0), SVector(-1.0, 1.0, 0.0, 0.0), 2.0)
         parent = primary_rng(9, 4)
         for e in 0:4
-            Execution.spawn!(buf, sp, parent, e)
+            Execution.spawn!(buf, sp, first(Execution.child_stream(buf, parent, e)))
         end
+        @test Execution.child_stream(buf, parent, 15) == (child_rng(parent, 15, L), true)
+        @test !last(Execution.child_stream(buf, parent, 16))
         @test capacity(buf) == 3 && length(buf) == 3 && overflow(buf) == 2
         ph, rg = children(buf)
         @test rg == [child_rng(parent, e, L) for e in 0:2] && all(==(sp), ph)
@@ -138,7 +149,7 @@ childset(buf) = (c = children(buf); sort(collect(zip(stream_id.(c[2]), getfield.
                      (PoolExecutor(DK.hosts(nd); chunk = 97) for nd in DK.NDEV)...)
             p = run_acc(exec, n)
             @test p.bins.count == ref.bins.count && p.bins.sumw == ref.bins.sumw &&
-                  p.bins.sumwE == ref.bins.sumwE
+                  p.bins.sumwE == ref.bins.sumwE && p.bins.sumwE2 == ref.bins.sumwE2
             @test p.scalars.acc == ref.scalars.acc && p.scalars.n == ref.scalars.n
             @test childset(p.buf) == childset(ref.buf)
         end

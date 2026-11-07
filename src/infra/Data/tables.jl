@@ -1,15 +1,18 @@
 # Host builders of the Monte Carlo tables whose lookups are `MonteCarlo` physics: the
 # hot-cross table (gpumonty `hotcross.dat` reader and the quadrature build), the
-# superphoton weight table, the per-zone emissivity table with the per-zone counts, and
-# the tabulated emissivities of tabulated generation (gpumonty `weights.cu`,
-# `kernels.cu` `init_zone`). Each threaded loop writes disjoint columns or merges exact
-# partial sums by integer addition, so every table is independent of the thread count.
+# emission zones of a block mesh as compact records, the superphoton weight table and the
+# per-zone counts (gpumonty `weights.cu`, `kernels.cu` `init_zone`). Each threaded loop
+# writes disjoint slots or merges exact partial sums by integer addition, so every table
+# is independent of the thread count.
 
-using ..Numerics: HPL, xsum_zeros, xsum_add!, xsum_round, XSUM_MAX_ADDENDS
-using ..Matter: EmissionZone
+using LinearAlgebra: det
+using ..Numerics: HPL, xsum_zeros, xsum_add!, xsum_round, XSUM_MAX_ADDENDS, run_rng, mc_uniform,
+                  MCRng
+using ..Spacetime: proxy_distance, HORIZON_EPS_SAMPLED
+using ..Matter: EmissionZone, ZoneSite, sample
 using ..MonteCarlo: HotcrossTable, NW, NT, MINW, MAXW, MINT, MAXT, total_compton_cross_num,
-                    WeightTable, ZoneEmissionTable, IntJnuTable, int_jnu_zone, tabulated_dnmax,
-                    WEIGHT_FLOOR, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP, INT_JNU_REFINE
+                    WeightTable, EmissivityTable, EMISSIVITY_TABLE, int_jnu, int_jnu_zone,
+                    zone_count, WEIGHT_FLOOR, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP
 
 """
     load_hotcross(path) -> HotcrossTable
@@ -58,10 +61,10 @@ end
     build_weight_table(zones, Ns; n_esamp = MC_N_ESAMP, nu_min = MC_NU_MIN, nu_max = MC_NU_MAX)
         -> WeightTable
 
-The weight table `w(ν_m) = Σ_z ∫j_ν dΩ(zone_z, ν_m) dV_z / (h Ns)` on `n_esamp + 1`
-log-spaced nodes over `[nu_min, nu_max]`, stored as `log(w + WEIGHT_FLOOR)`; `Ns` is
-the target number of superphotons (gpumonty `init_weight_table`). Serial sum over the
-zones in list order.
+The weight table `w(ν_m) = Σ_z ∫j_ν dΩ(zone_z, ν_m) dV_z / (h Ns)` of a list of
+`EmissionZone`s on `n_esamp + 1` log-spaced nodes over `[nu_min, nu_max]`, stored as
+`log(w + WEIGHT_FLOOR)`; `Ns` is the target number of superphotons per unit `ln ν`
+(gpumonty `init_weight_table`). Serial sum over the zones in list order.
 """
 function build_weight_table(zones::AbstractVector{<:EmissionZone}, Ns::Real;
                             n_esamp::Integer = MC_N_ESAMP, nu_min::Real = MC_NU_MIN,
@@ -83,56 +86,117 @@ function build_weight_table(zones::AbstractVector{<:EmissionZone}, Ns::Real;
 end
 
 """
-    build_zone_emission_table(zones; n_esamp = MC_N_ESAMP, nu_min = MC_NU_MIN,
-                              nu_max = MC_NU_MAX) -> ZoneEmissionTable
+    emission_sites(blocks::FluidBlocks, st, params; stride = 1, seed = 0, r_emit_max = Inf,
+                   max_zones = typemax(Int)) -> Vector{ZoneSite{Float64}}
 
-`∫j_ν dΩ` of every zone on the `n_esamp + 1` nodes of the weight grid over
-`[nu_min, nu_max]`, threaded over zones.
+The emission zones of the cell centres of `blocks` as [`ZoneSite`](@ref)s. Each block is
+cut into groups of `stride` cells per axis (the last group of an axis takes the cells
+left); the cells of a group that their own block owns (`locate`) are its `n_own` owned
+cells, and one of them is drawn uniformly, by the uniform of draw `c` of the stream
+`run_rng(seed, 0)`, `c` the group's global index (`stride = 1`: the cell itself). The
+drawn cell is a zone when it lies above the horizon proxy
+(`proxy_distance(st, x)[1] ≥ HORIZON_EPS_SAMPLED`: a photon emitted below is captured
+before its first step), within the escape radius `r_emit_max`, and its plasma decoded on
+`st` with `params` is valid with `n_e > 0` and `Θₑ > 0`. Its volume is
+`n_own √−g Δx¹Δx²Δx³ L_unit³` at the drawn cell (`√−g` taken as 1 where `det g ≥ 0`), so
+for any function `f` of the cell, `Σ_zones f dV` is an unbiased estimate of the sum of
+`f √−g Δ³x L³` over every owned cell that passes the cuts, exact at `stride = 1`.
+Threaded over blocks; the list is in block order, groups `k`, `j`, `i` outermost to
+innermost, at most `max_zones` long, independent of the thread count.
 """
-function build_zone_emission_table(zones::AbstractVector{<:EmissionZone};
-                                   n_esamp::Integer = MC_N_ESAMP, nu_min::Real = MC_NU_MIN,
-                                   nu_max::Real = MC_NU_MAX)
-    lnu_min = log(nu_min)
-    lnu_max = log(nu_max)
-    dlnu = (lnu_max - lnu_min) / n_esamp
-    nz = length(zones)
-    jnu = Matrix{Float64}(undef, n_esamp + 1, nz)
-    dV = Vector{Float64}(undef, nz)
-    Threads.@threads for z in 1:nz
-        zn = zones[z]
-        dV[z] = zn.dV
-        ne = zn.n_e; the = zn.theta_e; B = zn.B
-        @inbounds for m in 0:n_esamp
-            nu = exp(m * dlnu + lnu_min)
-            jnu[m + 1, z] = int_jnu_zone(ne, the, B, nu)
+function emission_sites(blocks::FluidBlocks, st, params; stride::Integer = 1,
+                        seed::Integer = 0, r_emit_max::Real = Inf,
+                        max_zones::Integer = typemax(Int))
+    s = Int(stride)
+    s >= 1 || throw(ArgumentError("emission_sites: stride must be positive"))
+    ng = (cld(blocks.ni, s), cld(blocks.nj, s), cld(blocks.nk, s))
+    ngroups = ng[1] * ng[2] * ng[3]
+    blocks.nmb * ngroups <= typemax(UInt32) ||
+        throw(ArgumentError("emission_sites: more than 2^32 groups"))
+    rng0 = run_rng(seed, 0)
+    Lu3 = params.units.L_unit^3
+    rmax = Float64(r_emit_max)
+    per_block = Vector{Vector{ZoneSite{Float64}}}(undef, blocks.nmb)
+    Threads.@threads for mb in 1:blocks.nmb
+        out = ZoneSite{Float64}[]
+        d1 = blocks.dx[1, mb]; d2 = blocks.dx[2, mb]; d3 = blocks.dx[3, mb]
+        cell(i, j, k) = SVector(0.0, blocks.x_left[1, mb] + (i - 1) * d1,
+                                blocks.x_left[2, mb] + (j - 1) * d2,
+                                blocks.x_left[3, mb] + (k - 1) * d3)
+        owned(x) = locate(blocks, x[2], x[3], x[4]) == mb
+        for gk in 0:(ng[3] - 1), gj in 0:(ng[2] - 1), gi in 0:(ng[1] - 1)
+            ks = (gk * s + 1):min((gk + 1) * s, blocks.nk)
+            js = (gj * s + 1):min((gj + 1) * s, blocks.nj)
+            is = (gi * s + 1):min((gi + 1) * s, blocks.ni)
+            n_own = 0
+            for k in ks, j in js, i in is
+                owned(cell(i, j, k)) && (n_own += 1)
+            end
+            n_own == 0 && continue
+            pick = 0
+            if n_own > 1
+                c = (mb - 1) * ngroups + (gk * ng[2] + gj) * ng[1] + gi
+                u, _ = mc_uniform(MCRng(rng0.key, UInt32(c), rng0.sid))
+                pick = min(unsafe_trunc(Int, u * n_own), n_own - 1)
+            end
+            xc = cell(first(is), first(js), first(ks))
+            for k in ks, j in js, i in is
+                x = cell(i, j, k)
+                owned(x) || continue
+                pick == 0 && (xc = x; break)
+                pick -= 1
+            end
+            dist, r = proxy_distance(st, xc)
+            (dist >= HORIZON_EPS_SAMPLED && r <= rmax) || continue
+            state, g = sample(blocks, st, xc, params)
+            (state.valid && state.n_e > 0.0 && state.theta_e > 0.0) || continue
+            detg = det(g[1])
+            dV = (detg < 0.0 ? sqrt(-detg) : 1.0) * (d1 * d2 * d3 * n_own) * Lu3
+            push!(out, ZoneSite{Float64}(xc, dV, state.n_e, state.theta_e, state.B))
         end
+        per_block[mb] = out
     end
-    return ZoneEmissionTable(lnu_min, lnu_max, dlnu, Int(n_esamp), jnu, dV)
+    sites = reduce(vcat, per_block; init = ZoneSite{Float64}[])
+    length(sites) > max_zones && resize!(sites, max(0, Int(max_zones)))
+    return sites
 end
 
 """
-    build_weight_table(jt::ZoneEmissionTable, Ns; nthreads = Threads.nthreads()) -> WeightTable
+    zone_tables(sites, Ns; n_esamp = MC_N_ESAMP, nu_min = MC_NU_MIN, nu_max = MC_NU_MAX,
+                emissivity = EMISSIVITY_TABLE, nthreads = Threads.nthreads())
+        -> (wgt::WeightTable, Nz::Vector{Float64}, dnmax::Vector{Float64})
 
-The weight table of the zones of `jt`, `w(ν_m) = Σ_z jnu[m, z] dV[z] / (h Ns)`, with
-each zone sum exact (integer limbs, rounded once), so the table is the correctly
-rounded value whatever `nthreads`, the number of chunks of zones summed in parallel.
+The generation tables of the zones `sites` (any vector of records with `n_e`,
+`theta_e`, `B`, `dV`: [`ZoneSite`](@ref)s or `EmissionZone`s) in two streaming passes
+over the zones, threaded over `nthreads` chunks: (1) the weight table
+`w(ν_m) = Σ_z ∫j_ν dΩ(ν_m) dV_z/(h Ns)` on the `n_esamp + 1` nodes, each node's sum exact
+(integer limbs, rounded once), so the table is the correctly rounded value whatever
+`nthreads`; (2) every zone's count and envelope, `MonteCarlo.zone_count` on that table
+(trapezoid in `ln ν`, so `Σ_z Nz = Ns ln(nu_max/nu_min)` when every node emits). `Ns` is
+the target number per unit `ln ν`. `∫j_ν dΩ` ([`int_jnu`](@ref) with `emissivity`) is
+evaluated in both passes and never stored, so the memory is that of the zones and the
+nodes.
 """
-function build_weight_table(jt::ZoneEmissionTable, Ns::Real;
-                            nthreads::Integer = Threads.nthreads())
-    n_nodes = jt.n_esamp + 1
-    nz = size(jt.jnu, 2)
+function zone_tables(sites::AbstractVector, Ns::Real; n_esamp::Integer = MC_N_ESAMP,
+                     nu_min::Real = MC_NU_MIN, nu_max::Real = MC_NU_MAX,
+                     emissivity::EmissivityTable = EMISSIVITY_TABLE,
+                     nthreads::Integer = Threads.nthreads())
+    lnu_min = log(nu_min)
+    lnu_max = log(nu_max)
+    dlnu = (lnu_max - lnu_min) / n_esamp
+    n_nodes = Int(n_esamp) + 1
+    nz = length(sites)
     hNs = HPL * Float64(Ns)
     nchunks = clamp(Int(nthreads), 1, max(1, nz))
-    nz <= XSUM_MAX_ADDENDS || error("build_weight_table: too many zones for an exact sum")
+    nz <= XSUM_MAX_ADDENDS || error("zone_tables: too many zones for an exact sum")
+    nus = [exp(m * dlnu + lnu_min) for m in 0:(n_nodes - 1)]
     partials = [xsum_zeros(n_nodes) for _ in 1:nchunks]
     Threads.@threads for c in 1:nchunks
         acc = partials[c]
-        lo = div((c - 1) * nz, nchunks) + 1
-        hi = div(c * nz, nchunks)
-        @inbounds for z in lo:hi
-            dVz = jt.dV[z]
+        @inbounds for z in (div((c - 1) * nz, nchunks) + 1):div(c * nz, nchunks)
+            zs = sites[z]
             for m in 1:n_nodes
-                xsum_add!(acc, jt.jnu[m, z] * dVz, m)
+                xsum_add!(acc, int_jnu(emissivity, zs.n_e, zs.theta_e, zs.B, nus[m]) * zs.dV, m)
             end
         end
     end
@@ -144,96 +208,14 @@ function build_weight_table(jt::ZoneEmissionTable, Ns::Real;
     @inbounds for m in 1:n_nodes
         lwgt[m] = log(xsum_round(total, m) / hNs + WEIGHT_FLOOR)
     end
-    return WeightTable(jt.lnu_min, jt.lnu_max, jt.dlnu, lwgt)
-end
-
-"""
-    zone_counts(jt::ZoneEmissionTable, wgt::WeightTable; nthreads = Threads.nthreads())
-        -> (Ns::Vector{Float64}, dnmax::Vector{Float64})
-
-Expected superphoton count and frequency-rejection envelope of every zone of `jt`, as
-`MonteCarlo.zone_nsuperphotons` computes them, from the tabulated emissivities.
-Threaded over zones. `jt` and `wgt` must share the frequency nodes.
-"""
-function zone_counts(jt::ZoneEmissionTable, wgt::WeightTable;
-                     nthreads::Integer = Threads.nthreads())
-    n_nodes = jt.n_esamp + 1
-    length(wgt.lwgt) == n_nodes ||
-        error("zone_counts: table nodes ($n_nodes) != weight-table nodes ($(length(wgt.lwgt)))")
-    nz = size(jt.jnu, 2)
-    Nsv = Vector{Float64}(undef, nz)
-    dnv = Vector{Float64}(undef, nz)
-    Threads.@threads for z in 1:nz
-        dnmax = 0.0
-        ninterp = 0.0
-        @inbounds for m in 1:n_nodes
-            w = exp(wgt.lwgt[m])
-            dn = jt.jnu[m, z] / (w + WEIGHT_FLOOR)
-            dnmax = max(dnmax, dn)
-            ninterp += wgt.dlnu * dn
-        end
-        @inbounds Nsv[z] = jt.dV[z] / HPL * ninterp
-        @inbounds dnv[z] = dnmax
-    end
-    return Nsv, dnv
-end
-
-"""
-    build_int_jnu_table(zone, wgt; refine = INT_JNU_REFINE) -> IntJnuTable
-
-Tabulated `∫j_ν dΩ` of `zone` on the `refine`-fold refinement of the nodes of `wgt`
-(every weight node is a table node). Interior nodes hold the smaller of the exact
-logarithm and the chord between the neighbouring weight nodes, so the tabulated
-acceptance clips where the exact one would exceed 1 and the envelope
-(`tabulated_dnmax`) stays the maximum over the weight nodes.
-"""
-function build_int_jnu_table(zone::EmissionZone, wgt::WeightTable;
-                             refine::Integer = INT_JNU_REFINE)
-    k = Int(refine)
-    n_coarse = length(wgt.lwgt) - 1
-    n_fine = k * n_coarse
-    dlnu = (wgt.lnu_max - wgt.lnu_min) / n_fine
-    lc = Vector{Float64}(undef, n_coarse + 1)
-    @inbounds for m in 0:n_coarse
-        nu = exp(m * wgt.dlnu + wgt.lnu_min)
-        lc[m + 1] = log(int_jnu_zone(zone.n_e, zone.theta_e, zone.B, nu) + WEIGHT_FLOOR)
-    end
-    ljnu = Vector{Float64}(undef, n_fine + 1)
-    @inbounds for i in 0:n_fine
-        m, r = divrem(i, k)
-        if r == 0
-            ljnu[i + 1] = lc[m + 1]
-        else
-            f = r / k
-            chord = (1.0 - f) * lc[m + 1] + f * lc[m + 2]
-            nu = exp(i * dlnu + wgt.lnu_min)
-            lx = log(int_jnu_zone(zone.n_e, zone.theta_e, zone.B, nu) + WEIGHT_FLOOR)
-            ljnu[i + 1] = min(lx, chord)
+    wgt = WeightTable(lnu_min, lnu_max, dlnu, lwgt)
+    Nz = Vector{Float64}(undef, nz)
+    dnmax = Vector{Float64}(undef, nz)
+    Threads.@threads for c in 1:nchunks
+        @inbounds for z in (div((c - 1) * nz, nchunks) + 1):div(c * nz, nchunks)
+            zs = sites[z]
+            Nz[z], dnmax[z] = zone_count(zs.n_e, zs.theta_e, zs.B, zs.dV, wgt, emissivity)
         end
     end
-    return IntJnuTable(wgt.lnu_min, dlnu, ljnu)
-end
-
-"""
-    zone_int_jnu_tables(jt::ZoneEmissionTable, wgt::WeightTable) -> (lint, dnmax)
-
-Tabulated generation for every zone of `jt` on the weight nodes (refinement 1):
-`lint[m, z] = log(jnu[m, z] + WEIGHT_FLOOR)` and `dnmax[z]`, the envelope of
-`tabulated_dnmax` over column `z`. Threaded over zones. `jt` and `wgt` must share the
-frequency nodes.
-"""
-function zone_int_jnu_tables(jt::ZoneEmissionTable, wgt::WeightTable)
-    n_nodes = jt.n_esamp + 1
-    length(wgt.lwgt) == n_nodes ||
-        error("zone_int_jnu_tables: table nodes ($n_nodes) != weight-table nodes ($(length(wgt.lwgt)))")
-    nz = size(jt.jnu, 2)
-    lint = Matrix{Float64}(undef, n_nodes, nz)
-    dnv = Vector{Float64}(undef, nz)
-    Threads.@threads for z in 1:nz
-        @inbounds for m in 1:n_nodes
-            lint[m, z] = log(jt.jnu[m, z] + WEIGHT_FLOOR)
-        end
-        dnv[z] = tabulated_dnmax(IntJnuTable(jt.lnu_min, jt.dlnu, view(lint, :, z)), wgt)
-    end
-    return lint, dnv
+    return wgt, Nz, dnmax
 end

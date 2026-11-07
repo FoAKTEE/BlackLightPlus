@@ -1,22 +1,28 @@
 # The tracker and its controls: the straight-line march steps and stops as specified and
-# its absorption depth is α_ν times the path; the curved march captures infalling and
-# releases outgoing photons; the torus deck over Kerr gives null seeds inside emitting
-# zones, conserves energy without scattering, peaks in the synchrotron band and grows a
-# Compton tail with scattering, identically under every executor.
+# its absorption depth is α_ν times the path; the scattering events of one step deposit
+# the physical child weight at the physical positions for every depth and bias; the
+# biases follow their rules; every march closes its weight ledger and spawns at every
+# valid event site; the curved march captures infalling and releases outgoing photons;
+# the torus deck over Kerr gives
+# null seeds inside emitting zones, conserves energy without scattering, peaks in the
+# synchrotron band and grows a Compton tail with scattering, identically under every
+# executor.
 using Test, BlackLightPlus
 using StaticArrays
 using LinearAlgebra: dot, norm
-using BlackLightPlus.Numerics: MCRng, primary_rng, MCStreamLayout, HPL, ME, CL
+using BlackLightPlus.Numerics: MCRng, mc_uniform, primary_rng, MCStreamLayout, HPL, ME, CL, SIGMA_THOMSON
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
                      ETA, inverse_metric, null_covariant, proxy_distance, horizon_floor,
                      horizon_radius, ks_radius
 using BlackLightPlus.Matter: UniformSphere, sample
-using BlackLightPlus.MonteCarlo: Superphoton, FlatMarch, CurvedMarch, Opacities, Bias, NullSink, VectorSink,
-                      track!, escaped, escape_direction, alpha_nu, generate, GenerationTables,
-                      zone_nsuperphotons, scatter_event, bias, SPHERE_STEP_FRAC
+using BlackLightPlus.MonteCarlo: Superphoton, FlatMarch, CurvedMarch, Opacities, Bias, StateBias, NullSink,
+                      VectorSink, track!, escaped, captured, escape_direction,
+                      alpha_nu, generate, GenerationTables, zone_nsuperphotons, event_weight,
+                      next_event, bias, event_bias, amplification, HotcrossTable, NW, NT,
+                      ESCAPED_MARCH, CAPTURED_MARCH, DROPPED_MARCH, SPHERE_STEP_FRAC
 using BlackLightPlus.Transfer: march_control, geodesic_step, max_steps
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, nuLnu_total, scalar, addends
-using BlackLightPlus.Data: build_weight_table, load_hotcross
+using BlackLightPlus.Data: build_weight_table, load_hotcross, emission_sites
 
 const DK = Main.Decks
 const SPH = UniformSphere()
@@ -61,27 +67,117 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
         @test r.rng === MCRng(1, 1)                              # absorption draws nothing
         sink = VectorSink(MCStreamLayout(10, 10, 1))
         r2 = track!(ctl, Minkowski(), SPH, Opacities(), sp, MCRng(1, 1), sink)
-        @test length(sink.escaped) == 1 && sink.escaped[1] === r2.sph && isempty(sink.ledger)
+        @test length(sink.escaped) == 1 && sink.escaped[1] === r2.sph && length(sink.ledger) == 1
+        l = sink.ledger[1][2]
+        @test l.outcome == ESCAPED_MARCH && l.w === r2.sph.w && l.E === r2.sph.E
+        @test l.scatter_loss == l.spawned == l.unspawned == 0.0 && l.events == 0
+        @test l.absorbed + l.w * l.E ≈ sp.w * sp.E rtol = 1e-12          # absorbed power closes
         r0 = track!(ctl, Minkowski(), SPH, Opacities(), sp, MCRng(1, 1), NullSink();
                     absorb = Val(false))
         @test r0.sph.w === 3.0 && r0.sph.tau_abs === 0.0 && r0.sph.x === r.sph.x
     end
 
-    @testset "scattering decision" begin
-        @test bias(Bias(0.5), 0) == 1.0 && bias(Bias(2.0), 1) == 8.0 && bias(Bias(NaN), 0) == 1.0
-        @test Bias(SPH).b0 == SPH.n_e * BlackLightPlus.Numerics.SIGMA_THOMSON * SPH.R
-        n = 0; wsum = 0.0; fracs_ok = true
-        rng = MCRng(4, 4)
-        for _ in 1:100_000
-            ev = scatter_event(1.0, 3.0, 0.01, 0.0, rng)
-            rng = ev.rng
-            ev.spawn && (n += 1; wsum += ev.weight; fracs_ok &= 0.0 <= ev.frac < 1.0)
+    @testset "scattering events: one step, exact in expectation" begin
+        # Per step of depths (s, a), Δτ = s + a, the physical child weight density is
+        # w s e^{−Δτ f} df: total w s (1 − e^{−Δτ})/Δτ, first moment
+        # w s (1 − (1 + Δτ) e^{−Δτ})/Δτ². The events, Poisson of mean b s at fractions of
+        # density Δτ e^{−Δτ f}/(1 − e^{−Δτ}), each of weight W, reproduce both for every b.
+        grid = [(ds, da, b) for ds in (0.01, 0.3, 2.0) for da in (0.0, 0.5, 5.0)
+                for b in (10.0, 100.0, 1000.0)]
+        res = Vector{NTuple{3,Float64}}(undef, length(grid))
+        Threads.@threads for k in eachindex(grid)
+            ds, da, b = grid[k]
+            dtau = ds + da
+            W = event_weight(1.0, b, dtau)
+            M = ceil(Int, 4.0e7 / (b * ds))
+            sw = 0.0; swf = 0.0; fmin = 1.0; fmax = 0.0
+            for i in 1:M
+                rng = MCRng(0x5A5A, k * 10^9 + i)
+                u = 0.0
+                while true
+                    u, f, rng = next_event(u, b * ds, dtau, rng)
+                    u < 1.0 || break
+                    sw += W; swf += W * f
+                    fmin = min(fmin, f); fmax = max(fmax, f)
+                end
+            end
+            q = -expm1(-dtau)
+            res[k] = ((sw / M) / (ds * q / dtau), (swf / M) / (ds * (q - dtau * exp(-dtau)) / dtau^2),
+                      (fmin >= 0.0 && fmax < 1.0) ? 1.0 : 0.0)
         end
-        @test fracs_ok
-        @test n / 100_000 ≈ -expm1(-0.03) rtol = 0.05            # spawn probability
-        @test wsum / 100_000 ≈ -expm1(-0.01) rtol = 0.05         # expected spawned weight
+        @test all(r -> abs(r[1] - 1.0) < 1.0e-3, res)
+        @test all(r -> abs(r[2] - 1.0) < 1.0e-3, res)
+        @test all(r -> r[3] == 1.0, res)
+        for (ds, da, b) in grid
+            dtau = ds + da
+            @test event_weight(2.0, b, dtau) <= 2.0 / b
+            @test event_weight(2.0, b, dtau) ≈ 2.0 * (1 - exp(-dtau)) / (b * dtau) rtol = 1e-14
+        end
+        # the fraction inverts the CDF u = (1 − e^{−Δτ f})/(1 − e^{−Δτ}); one draw ends a quiet step
+        for dtau in (1.0e-12, 0.1, 3.0, 40.0)
+            u, f, r = next_event(0.0, 1.0e-300, dtau, MCRng(1, 2))
+            @test u >= 1.0 && f == 1.0 && r == mc_uniform(MCRng(1, 2))[2]
+            u, f, _ = next_event(0.0, 1.0e3, dtau, MCRng(1, 3))
+            @test u < 1.0
+            @test expm1(-dtau * f) / expm1(-dtau) ≈ u rtol = 1e-9
+        end
     end
 
+    @testset "biases" begin
+        @test bias(Bias(0.5), 0) == 1.0 && bias(Bias(2.0), 1) == 8.0 && bias(Bias(NaN), 0) == 1.0
+        @test Bias(SPH).b0 == SPH.n_e * SIGMA_THOMSON * SPH.R
+        @test event_bias(Bias(2.0), 1, 50.0, 1.0e40) == (8.0, 1)
+        @test amplification(0.0) == 1.0 && amplification(3.0) == 1.0 + 12.0 + 144.0
+        sb = StateBias(2.0, 1.0e10, 1.0e5, 1)
+        @test event_bias(sb, 0, 3.0, 1.0e10) == (2.0 * 157.0, 1)
+        @test event_bias(sb, 2, 3.0, 2.0e10) == (4.0 * 157.0, 1)          # no order factor
+        @test event_bias(sb, 0, 0.0, 1.0e8) == (1.0, 1)                    # floor at 1
+        @test event_bias(sb, 0, 100.0, 1.0e12) == (1.0e5, 1)               # cap, no split
+        @test event_bias(StateBias(2.0, 1.0e10, 1.0e5, 8), 0, 100.0, 1.0e12)[2] == 8
+        @test event_bias(StateBias(2.0, 1.0e10, 1.0e7, 8), 0, 100.0, 1.0e12) == (1.0e7, 4)
+        @test event_bias(StateBias(2.0, 1.0e10, 1.0e5, 8), 0, NaN, 1.0e12) == (1.0, 1)
+        @test isbits(sb) && isbits(Opacities(; bias = sb))
+    end
+
+    @testset "ledger closure, edge events, layout overflow" begin
+        thom = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
+        s = UniformSphere(n_e = 3.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        tabs, _ = DK.sphere_tables(s, 1000; nu_min = 1.0e8, nu_max = 1.0e13)
+        ctl = FlatMarch(s)
+        sink = VectorSink(MCStreamLayout(10_000, 2^20, 2))
+        opac = Opacities(; table = thom, bias = Bias(30.0), max_scatt = 2)
+        loss = 0.0; got = 0.0; worst = 0.0
+        for g in 1:1000, (A, k) in ((Val(true), 0), (Val(false), 1000))
+            sp, rng = generate(s, tabs, primary_rng(9, g + k))
+            r = track!(ctl, Minkowski(), s, opac, sp, rng, sink; absorb = A, scatter = Val(true))
+            l = sink.ledger[end][2]
+            # every photon: w₀E = absorbed + E (scattered weight) + w E (flat: E fixed)
+            worst = max(worst, abs((l.absorbed + sp.E * (l.scatter_loss + l.scatter_loss_final) +
+                                    l.w * l.E) / (sp.w * sp.E) - 1.0))
+            loss += l.scatter_loss; got += l.spawned + l.unspawned
+            @test l.unspawned == 0.0 && l.scatter_loss_final == 0.0
+        end
+        @test worst < 1.0e-12
+        @test length(sink.children) > 1000
+        @test abs(got / loss - 1.0) < 0.1                    # heavy-tailed weights: a loose check
+        ids = [BlackLightPlus.Numerics.stream_id(c[2]) for c in sink.children]
+        @test all(c -> c[1].nscatt == 1 && BlackLightPlus.Numerics.stream_layer(c[2]) == 1, sink.children)
+        @test allunique(ids)
+        # a photon of the last order scatters out of the beam but spawns nothing
+        sp, rng = generate(s, tabs, primary_rng(9, 1))
+        last = Superphoton(sp.x, sp.p, sp.w; nscatt = 2)
+        n0 = length(sink.children)
+        track!(ctl, Minkowski(), s, opac, last, rng, sink; absorb = Val(false), scatter = Val(true))
+        l = sink.ledger[end][2]
+        @test length(sink.children) == n0 && l.scatter_loss == 0.0 && l.scatter_loss_final > 0.0
+        @test l.events == 0
+        # ordinals beyond the layout's event field spawn nothing and are counted
+        small = VectorSink(MCStreamLayout(100, 2, 2))
+        track!(ctl, Minkowski(), s, Opacities(; table = thom, bias = Bias(1.0e4), max_scatt = 2), sp,
+               rng, small; absorb = Val(false), scatter = Val(true))
+        l = small.ledger[end][2]
+        @test length(small.children) == 2 && l.events > 2 && l.unspawned > 0.0 && l.spawned > 0.0
+    end
     @testset "curved control: capture and escape" begin
         st = KerrSchildCartesian(0.9)
         ctl = CurvedMarch(st; C = 40.0, escape = 200.0, R_em = 30.0)
@@ -96,6 +192,10 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
                       MCRng(1, 1), NullSink(); absorb = Val(false))
         @test rin.sph.E > 0 && rout.sph.E > 0
         @test !rin.recorded && ks_radius(st, rin.sph.x) < ctl.r_h + 1e-2
+        lin = VectorSink(MCStreamLayout(10, 10, 1))
+        track!(ctl, st, UniformSphere(R = 0.5), plasma, Superphoton(x, pin, 1.0), MCRng(1, 1), lin;
+               absorb = Val(false))
+        @test lin.ledger[1][2].outcome == CAPTURED_MARCH
         @test rout.recorded && 30.0 < ks_radius(st, rout.sph.x) < 32.0
         k = inverse_metric(st, rout.sph.x) * rout.sph.p
         @test escape_direction(ctl, rout.sph) ≈ SVector(k[2], k[3], k[4]) rtol = 1e-14
@@ -107,6 +207,7 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
     st = KerrSchildCartesian(DK.TORUS_A)
     params = DK.torus_params()
     zones = DK.torus_zones(blocks, st, params)
+    sites = emission_sites(blocks, st, params)
 
     @testset "curved control on the moving binary" begin
         orbit = CircularOrbit((0.5, 0.5), 8.0)
@@ -161,7 +262,7 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
 
     @testset "torus: energy, synchrotron peak, Compton tail" begin
         exec = ThreadedExecutor(chunk = 64)
-        b0, l0, n0, _ = DK.torus_run(exec, blocks, zones, 1_500, 0xC0FFEE)
+        b0, l0, n0, _ = DK.torus_run(exec, blocks, sites, 1_500, 0xC0FFEE)
         @test n0 > 0 && addends(l0, 5) > 0
         ratio = scalar(l0, 5) / scalar(l0, 6)
         @test 0.0 < ratio <= 1.0 + 1.0e-9
@@ -171,7 +272,7 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
         @test L[ip] > 0.0 && 1.0e9 <= nu[ip] <= 1.0e18
         if isfile(HOTCROSS_DAT)
             table = load_hotcross(HOTCROSS_DAT)
-            b1, l1, n1, layers = DK.torus_run(exec, blocks, zones, 1_500, 0xC0FFEE;
+            b1, l1, n1, layers = DK.torus_run(exec, blocks, sites, 1_500, 0xC0FFEE;
                                               scattering = true, table = table, bias0 = 1.0e5)
             @test n1 == n0 && sum(length(first(l)) for l in layers) > 0
             nu1, L1, _ = nuLnu_total(Spectrum(b1))
@@ -181,7 +282,7 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
             @test p_scat > p_dir && p_scat > 0.0
             # the same run on the device path and with other chunkings: identical bits
             for ex in (ThreadedExecutor(chunk = 7), PoolExecutor(DK.hosts(3); chunk = 50))
-                b, l, n, lay = DK.torus_run(ex, blocks, zones, 1_500, 0xC0FFEE; scattering = true,
+                b, l, n, lay = DK.torus_run(ex, blocks, sites, 1_500, 0xC0FFEE; scattering = true,
                                             table = table, bias0 = 1.0e5)
                 @test b.count == b1.count && b.sumw == b1.sumw && b.sumwE == b1.sumwE
                 @test l.acc == l1.acc && l.n == l1.n

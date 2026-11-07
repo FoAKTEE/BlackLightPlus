@@ -89,11 +89,11 @@ end
     Bias{T}(b0)
     Bias(sphere::UniformSphere)
 
-Importance bias of the exponential-transform scattering decision,
-`b = max(1, b0 (n_sc + 1)²)` after `n_sc` scatterings ([`bias`](@ref)): a constant
-`b0 > 1` raises the rate of rare scatterings and the growth with order keeps the
-higher orders populated. The sphere form is `b0 = n_e σ_T R`, its Thomson depth.
-The estimator is unbiased for any `b ≥ 1`.
+Constant importance bias of the scattering events, `b = max(1, b0 (n_sc + 1)²)` after
+`n_sc` scatterings ([`bias`](@ref)): a constant `b0 > 1` raises the rate of rare
+scatterings and the growth with order keeps the higher orders populated. The sphere
+form is `b0 = n_e σ_T R`, its Thomson depth. [`StateBias`](@ref) is the bias that
+follows the plasma and the photon weight. Any `b ≥ 1` leaves the estimator unbiased.
 """
 struct Bias{T}
     b0::T
@@ -111,6 +111,57 @@ Bias(s::UniformSphere) = Bias(s.n_e * SIGMA_THOMSON * s.R)
 end
 
 """
+    amplification(theta_e) -> Float64
+
+`A(Θₑ) = 1 + 4Θₑ + 16Θₑ²`, the closed form that joins the two limits of the mean energy
+gain of one Thomson scattering off a Maxwell–Jüttner population,
+`1 + 4Θₑ K₃(1/Θₑ)/K₂(1/Θₑ)` (`1 + 4Θₑ` cold, `16Θₑ²` hot): at most 15 % above it for every
+`Θₑ` (157 against 146.85 at `Θₑ = 3`). Any positive function of the state serves
+[`StateBias`](@ref); this one costs no Bessel function.
+"""
+@inline amplification(theta_e) = 1.0 + theta_e * (4.0 + 16.0 * theta_e)
+
+"""
+    StateBias(b0, w_ref, b_max, split)
+
+Importance bias of the scattering events that follows the plasma and the photon: at a
+step of a photon of weight `w` through gas of temperature `Θₑ`,
+`b = clamp(b0 A(Θₑ) w/w_ref, 1, b_max)` ([`amplification`](@ref)), so a child, of weight
+about `w/b`, carries about `w_ref/(b0 A)` photons and the energy weight `w_ref E/b0`
+whatever the gas that scattered it; `b_max` bounds the events per step. With
+`split > 1`, an event whose uncapped bias `b0 A w/w_ref` exceeds `b_max` spawns
+`m = min(split, ⌈b0 A w/(w_ref b_max)⌉)` children of `1/m` of the event weight, each
+with its own kick. Any positive `b` chosen from the state before the step's draws, and
+any split, leave the estimator unbiased.
+"""
+struct StateBias
+    b0::Float64
+    w_ref::Float64
+    b_max::Float64
+    split::Int
+end
+StateBias(b0::Real, w_ref::Real, b_max::Real, split::Integer = 1) =
+    StateBias(Float64(b0), Float64(w_ref), Float64(b_max), Int(split))
+
+"""
+    event_bias(b, nscatt, theta_e, w) -> (b::Float64, copies::Int)
+
+The bias of the scattering events of a step and the children per event: for a
+[`Bias`](@ref) `(bias(b, nscatt), 1)`; for a [`StateBias`](@ref) the clamped
+`b0 A(Θₑ) w/w_ref` and its split count. `theta_e` is the temperature of the step (the
+larger of its two end samples; 0 for vacuum), `w` the photon weight at the step start.
+"""
+@inline event_bias(b::Bias, nscatt::Integer, theta_e, w) = (bias(b, nscatt), 1)
+@inline function event_bias(b::StateBias, nscatt::Integer, theta_e, w)
+    t = b.b0 * amplification(theta_e) * (w / b.w_ref)
+    t > 1.0 || return (1.0, 1)
+    t < b.b_max && return (t, 1)
+    c = t / b.b_max
+    m = c >= b.split ? b.split : max(1, unsafe_trunc(Int, ceil(c)))
+    return (b.b_max, m)
+end
+
+"""
     Opacities(; params = nothing, table = nothing, bias = Bias(1.0), L_unit = 1.0,
               weight_min = MC_WEIGHT_MIN, max_scatt = 0)
     Opacities(params::TransferParams; kw...)
@@ -118,22 +169,23 @@ end
 Everything [`track!`](@ref) needs beyond the control, the spacetime and the provider:
 `params`, the parameter set handed to `Matter.sample` (units, electron model, cuts;
 not read by analytic providers such as `UniformSphere`); `table`, the `HotcrossTable`
-of the scattering rate (unused without scattering); `bias`, the [`Bias`](@ref);
-`L_unit`, centimetres per coordinate length (`params.units.L_unit` in the second
-form); `weight_min`, the smallest child weight that is spawned; and `max_scatt`, the
-scattering order beyond which no child is spawned. `isbits` after `Adapt.adapt`.
+of the scattering rate (unused without scattering); `bias`, a [`Bias`](@ref) or a
+[`StateBias`](@ref); `L_unit`, centimetres per coordinate length
+(`params.units.L_unit` in the second form); `weight_min`, the child weight at or below
+which an event spawns nothing; and `max_scatt`, the scattering order beyond which no
+child is spawned. `isbits` after `Adapt.adapt`.
 """
-struct Opacities{P,H,T}
+struct Opacities{P,H,B}
     params::P
     table::H
-    bias::Bias{T}
+    bias::B
     L_unit::Float64
     weight_min::Float64
     max_scatt::Int
 end
 Adapt.@adapt_structure Opacities
 
-Opacities(; params = nothing, table = nothing, bias::Bias = Bias(1.0), L_unit::Real = 1.0,
+Opacities(; params = nothing, table = nothing, bias = Bias(1.0), L_unit::Real = 1.0,
           weight_min::Real = MC_WEIGHT_MIN, max_scatt::Integer = 0) =
     Opacities(params, table, bias, Float64(L_unit), Float64(weight_min), Int(max_scatt))
 Opacities(params::TransferParams; kw...) =

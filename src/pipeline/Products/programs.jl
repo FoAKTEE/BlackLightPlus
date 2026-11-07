@@ -242,22 +242,30 @@ end
 const LEDGER_STRIPES = 64
 
 # The quantities of the Monte Carlo ledger, scalar `LEDGER_SLOTS s + k` of stripe `s`.
-const LEDGER_SLOTS = 6
+const LEDGER_SLOTS = 11
 const SPAWNED = 1                  # weight spawned into children
 const SPAWNED_BY_PRIMARIES = 2     # weight spawned by primaries
-const SCATTER_LOSS = 3             # incident weight lost to scattering, Σ w (1 − e^{−dτ_s})
+const SCATTER_LOSS = 3             # scattered weight of the steps that may spawn
 const PRIMARY_WEIGHT = 4           # weight of the primaries (scattering runs)
 const ESCAPED = 5                  # Σ w E of the escaped photons; addends: their number
 const EMITTED = 6                  # Σ w E of the primaries at emission
+const SCATTER_LOSS_FINAL = 7       # scattered weight of the steps that may not spawn
+const UNSPAWNED = 8                # weight of the events that spawned nothing
+const ABSORBED = 9                 # Σ w E absorbed
+const CAPTURED = 10                # Σ w E of the captured photons
+const DROPPED = 11                 # Σ w E of the photons ended by the step limit
 
 """
     mc_ledger() -> ExactScalars
 
-The exact scalars of a Monte Carlo run: `LEDGER_STRIPES` stripes of six quantities, the
-weight spawned into children, the weight spawned by primaries, the incident weight lost
-to scattering, the weight of the primaries (these four from `tally!`, so with
-scattering only), `Σ w E` of the escaped photons and `Σ w E` of the primaries at
-emission. Read a quantity with [`ledger_sum`](@ref) and [`ledger_count`](@ref).
+The exact scalars of a Monte Carlo run: `LEDGER_STRIPES` stripes of eleven quantities.
+In weight (photons s⁻¹), from the scattering runs' [`MarchLedger`](@ref)s: the weight
+spawned into children, the weight spawned by primaries, the scattered weight of the
+steps that may spawn and of those that may not, the weight of the events that spawned
+nothing, and the weight of the primaries. In power (`Σ w E`, mₑc² s⁻¹): the escaped
+photons, the primaries at emission, the absorbed power, the captured photons and the
+photons ended by the step limit. Read a quantity with [`ledger_sum`](@ref) and
+[`ledger_count`](@ref).
 """
 mc_ledger() = ExactScalars(LEDGER_SLOTS * LEDGER_STRIPES)
 
@@ -285,9 +293,10 @@ The sink of the Monte Carlo programs over the exact accumulators: an escaped pho
 scattering order `n` is recorded into `orders[min(n, K) + 1]` (`orders` a tuple of
 `K + 1` `ExactBins`) with the direction `escape_direction(ctl, sph)` and its `w E` into
 the escaped power of `ledger` (a [`mc_ledger`](@ref)); a child goes to the `ChildBuffer`
-`children` (`nothing` without scattering); the scattering ledger of `tally!` goes to the
-first four quantities of `ledger`. Every addition goes to stripe `stripe`. `isbits` after
-`Adapt.adapt`; writes through atomics only.
+`children` (`nothing` without scattering) on the stream its buffer's layout names; the
+[`MarchLedger`](@ref) of `tally!` goes to the absorbed, captured and dropped power and,
+with scattering, to the weight quantities of `ledger`. Every addition goes to stripe
+`stripe`. `isbits` after `Adapt.adapt`; writes through atomics only.
 """
 struct MCSink{C,O,K,L} <: Sink
     ctl::C
@@ -313,15 +322,22 @@ Adapt.@adapt_structure MCSink
     return nothing
 end
 
-@inline spawn!(s::MCSink, child, rng, event) = Execution.spawn!(s.children, child, rng, event)
+@inline child_stream(s::MCSink, rng, event) = Execution.child_stream(s.children, rng, event)
+@inline spawn!(s::MCSink, child, rng) = Execution.spawn!(s.children, child, rng)
 
-@inline function tally!(s::MCSink, sph, loss, spawned)
-    add_ledger!(s, SPAWNED, spawned)
+@inline function tally!(s::MCSink, sph, l::MarchLedger)
+    add_ledger!(s, ABSORBED, l.absorbed)
+    l.outcome == CAPTURED_MARCH && add_ledger!(s, CAPTURED, l.w * l.E)
+    l.outcome == DROPPED_MARCH && add_ledger!(s, DROPPED, l.w * l.E)
+    s.children === nothing && return nothing
+    add_ledger!(s, SPAWNED, l.spawned)
     if sph.nscatt == 0
-        add_ledger!(s, SPAWNED_BY_PRIMARIES, spawned)
+        add_ledger!(s, SPAWNED_BY_PRIMARIES, l.spawned)
         add_ledger!(s, PRIMARY_WEIGHT, sph.w)
     end
-    add_ledger!(s, SCATTER_LOSS, loss)
+    add_ledger!(s, SCATTER_LOSS, l.scatter_loss)
+    add_ledger!(s, SCATTER_LOSS_FINAL, l.scatter_loss_final)
+    add_ledger!(s, UNSPAWNED, l.unspawned)
     return nothing
 end
 
@@ -362,30 +378,32 @@ Adapt.@adapt_structure SphereSource
 @inline emit(s::SphereSource, item, rng) = generate(s.sphere, s.tables, rng)
 
 """
-    ZoneSource(zones, weights, dnmax, offset, lint)
+    ZoneSource(sites, provider, st, params, weights, emissivity, dnmax, offset)
 
 The primaries of a zone list: primary `g` belongs to the zone `z` with
-`offset[z] < g ≤ offset[z + 1]` and is generated from `zones[z]` with the shared weight
-table `weights` and the zone's envelope `dnmax[z]`; `lint` is `nothing` (exact
-generation) or the matrix whose column `z` is the zone's tabulated `log ∫ j_ν dΩ` on the
-weight nodes (tabulated generation).
+`offset[z] < g ≤ offset[z + 1]`, whose [`ZoneSite`](@ref) `sites[z]` is decoded again on
+the plasma `provider`, the spacetime `st` and the parameter set `params`, and is
+generated from it with the shared weight table `weights`, the `MonteCarlo.EmissivityTable`
+`emissivity` and the zone's envelope `dnmax[z]`. The zone's `n_e`, `Θₑ`, `B` are the
+site's, its kinematics and metric the sample's.
 """
-struct ZoneSource{Z,W,D,F,L}
-    zones::Z
+struct ZoneSource{Z,P,S,Q,W,E,D,F}
+    sites::Z
+    provider::P
+    st::S
+    params::Q
     weights::W
+    emissivity::E
     dnmax::D
     offset::F
-    lint::L
 end
 Adapt.@adapt_structure ZoneSource
 
-@inline zone_int_jnu(::Nothing, w, z) = nothing
-@inline zone_int_jnu(lint::AbstractMatrix, w, z) = IntJnuTable(w.lnu_min, w.dlnu, view(lint, :, z))
-
 @inline function emit(s::ZoneSource, item, rng)
     z = searchsortedfirst(s.offset, item) - 1
-    tables = GenerationTables(s.weights, @inbounds(s.dnmax[z]), zone_int_jnu(s.lint, s.weights, z))
-    return generate(@inbounds(s.zones[z]), tables, rng)
+    zone = emission_zone(s.provider, s.st, @inbounds(s.sites[z]), s.params)
+    tables = GenerationTables(s.weights, @inbounds(s.dnmax[z]), s.emissivity)
+    return generate(zone, tables, rng)
 end
 
 """

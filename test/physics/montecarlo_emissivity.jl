@@ -1,13 +1,18 @@
 # Emission-frame physics of the Monte Carlo: j_ν equals the invariant thermal synchrotron
-# emissivity times ν², jmax envelopes the pitch-angle distribution, the zone integral
-# matches an independent quadrature, the emission tetrad is orthonormal with e₍₀₎ = u
-# and e₍₁₎ along b, and the weight interpolant clamps to the last node at the band top.
+# emissivity times ν², jmax envelopes the pitch-angle distribution, the angle integral
+# F(K) of the table matches the Simpson rule over its whole range and through it the zone
+# integral matches independent quadratures, the emission tetrad is orthonormal with
+# e₍₀₎ = u and e₍₁₎ along b, and the weight interpolant clamps to the last node at the
+# band top.
 using Test, BlackLightPlus
 using StaticArrays
 using LinearAlgebra: dot
 using BlackLightPlus.Transfer: thermal_synchrotron
-using BlackLightPlus.MonteCarlo: j_nu, alpha_nu, jmax, int_jnu_zone, emission_tetrad, SMALL_VECTOR,
-                      weight_at, table_zone
+using BlackLightPlus.MonteCarlo: j_nu, alpha_nu, jmax, int_jnu_zone, int_jnu, int_jnu_simpson,
+                      EMISSIVITY_TABLE, build_emissivity_table, synchrotron_F, F_TABLE_KMIN,
+                      F_TABLE_KMAX, F_TABLE_THETA, emission_tetrad, SMALL_VECTOR, weight_at,
+                      table_zone
+using BlackLightPlus.Numerics: EE, ME, CL, SQRT2
 using BlackLightPlus.Data: build_weight_table
 using BlackLightPlus.Matter: UniformSphere
 
@@ -47,12 +52,49 @@ end
         end
     end
 
-    @testset "int_jnu_zone against an independent quadrature" begin
+    @testset "F(K) table against the Simpson rule" begin
+        t = EMISSIVITY_TABLE
+        @test t.lnF == build_emissivity_table().lnF            # the compiled table is the build
+        # F(K) = ∫₀^{π/2} sin²θ G(K/sin θ) dθ by the 512- and 8192-interval Simpson rules
+        G(X) = (sqrt(X) + 2.0^(11 / 12) * X^(1 / 6))^2 * exp(-cbrt(X))
+        function F_simpson(K, n)
+            h = 0.5π / n
+            return sum((i == n ? 1.0 : (isodd(i) ? 4.0 : 2.0)) * sin(i * h)^2 * G(K / sin(i * h))
+                       for i in 1:n) * h / 3
+        end
+        worst512 = 0.0; worst8192 = 0.0
+        for k in 0:400
+            K = exp(log(1.0e-35) + (log(F_TABLE_KMAX) - log(1.0e-35)) * (k + 0.37) / 401)
+            F = synchrotron_F(t, K)
+            worst512 = max(worst512, abs(F / F_simpson(K, 512) - 1))
+            worst8192 = max(worst8192, abs(F / F_simpson(K, 8192) - 1))
+        end
+        @test worst512 < 1.0e-8
+        @test worst8192 < 2.0e-10
+        @test synchrotron_F(t, 2 * F_TABLE_KMAX) == 0.0 && synchrotron_F(t, 0.0) == 0.0
+        @test synchrotron_F(t, -1.0) == 0.0 && synchrotron_F(t, NaN) == 0.0
+        # K → 0: F ∝ K^{1/3}
+        @test synchrotron_F(t, 1.0e-45) / synchrotron_F(t, 1.0e-42) ≈ 0.1 rtol = 1e-8
+        # the prefactor: ∫ j dΩ = 4π n_e e² ν_c/c (√2π/27) F(K)
+        nu_c = EE * BF / (2π * ME * CL)
+        K = 2.3e11 / (2 / 9 * nu_c * TE^2)
+        @test int_jnu(t, NE, TE, BF, 2.3e11) ≈ 4π * NE * EE^2 * nu_c / CL * (SQRT2 * π / 27) *
+                                               F_simpson(K, 8192) rtol = 1e-10
+        @test int_jnu(t, 0.0, TE, BF, 1e11) == int_jnu(t, NE, -1.0, BF, 1e11) ==
+              int_jnu(t, NE, TE, 0.0, 1e11) == int_jnu(t, NE, TE, BF, 0.0) == 0.0
+    end
+
+    @testset "int_jnu_zone against independent quadratures" begin
         for nu in (5.0e10, 2.3e11, 1.0e12)
             iz = int_jnu_zone(NE, TE, BF, nu)
             @test iz > 0.0
             @test iz ≈ ref_int(nu) rtol = 1e-6
+            @test iz ≈ int_jnu_simpson(NE, TE, BF, nu) rtol = 1e-8
             @test iz <= 4π * jmax(NE, TE, BF, nu)
+        end
+        for (ne, te, b, nu) in ((1e5, 0.05, 3.0, 1e9), (1e13, 100.0, 1.0, 1e16), (1e7, 300.0, 1e3, 1e8),
+                                (1e4, 1.0, 0.1, 3e12))
+            @test int_jnu_zone(ne, te, b, nu) ≈ int_jnu_simpson(ne, te, b, nu) rtol = 1e-8
         end
         @test j_nu(NE, TE, BF, 1.0e15, 1.0) < j_nu(NE, TE, BF, 1.0e11, 1.0)
     end

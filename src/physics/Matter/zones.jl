@@ -52,6 +52,36 @@ EmissionZone(; n_e, theta_e, B, dV, x, ucon, ucov, bcon, gcov, gcon) =
 end
 
 """
+    ZoneSite{T}(x, dV, n_e, theta_e, B)
+
+The compact record of an emission zone of a plasma grid: the emitting point `x`, the
+zone's proper volume `dV` (cm³) and the plasma `n_e` (cm⁻³), `theta_e`, `B` (G) decoded
+there, everything the generation tables read. [`emission_zone`](@ref) decodes the full
+[`EmissionZone`](@ref) at `x` again when a photon is emitted.
+"""
+struct ZoneSite{T}
+    x::SVector{4,T}
+    dV::T
+    n_e::T
+    theta_e::T
+    B::T
+end
+
+"""
+    emission_zone(provider::PlasmaProvider, st, site::ZoneSite, params) -> EmissionZone{Float64}
+
+The zone of `site`: its plasma `n_e`, `Θₑ`, `B` and volume, with the kinematics and the
+metric pair of the provider's [`sample`](@ref) at `site.x` on `st` with `params`. On the
+executor that built the site the sample's plasma is the site's, bit for bit; elsewhere
+the generation tables built from the site stay the zone's own.
+"""
+@inline function emission_zone(p::PlasmaProvider, st, site::ZoneSite, params)
+    s, g = sample(p, st, site.x, params)
+    return EmissionZone{Float64}(site.n_e, site.theta_e, site.B, site.dV, site.x, s.ucon,
+                                 s.ucov, s.bcon, g[1], g[2])
+end
+
+"""
     UniformSphere{T} <: AnalyticProvider
     UniformSphere(; n_e = 1e13, theta_e = 100.0, B = 1.0, R = 1.0)
 

@@ -1,8 +1,7 @@
 # End-to-end Monte Carlo of the uniform sphere through generate → track! → ExactBins on
 # the threaded executor. Thin sphere (n_e = 1e13, Θₑ = 100, B = 1 G, R = 1 cm): the
 # angle-summed ν L_ν matches ν V ∫j_ν dΩ within 10 % per well-populated bin over
-# [1e9, 1e14] Hz and the bolometric power within 3 %, for exact and tabulated generation
-# (gpumonty sphere test). Scattering sphere (n_e = 1e18, Θₑ = 3, B = 100 G, R = 3e5 cm,
+# [1e9, 1e14] Hz and the bolometric power within 3 % (gpumonty sphere test). Scattering sphere (n_e = 1e18, Θₑ = 3, B = 100 G, R = 3e5 cm,
 # τ_es ≈ 0.2, needs the gpumonty hot-cross table): the unscattered spectrum is the direct
 # emission times a grey survival, photons are up-scattered in distinct bumps, the
 # scattered fraction matches the optical depth, the spawned weight equals the scattering
@@ -13,11 +12,11 @@ using StaticArrays
 using BlackLightPlus.Numerics: SIGMA_THOMSON, MCStreamLayout, primary_rng
 using BlackLightPlus.Spacetime: Minkowski
 using BlackLightPlus.Matter: UniformSphere
-using BlackLightPlus.MonteCarlo: int_jnu_zone, GenerationTables, tabulated_dnmax, table_zone, FlatMarch,
+using BlackLightPlus.MonteCarlo: int_jnu_zone, GenerationTables, table_zone, FlatMarch,
                       Opacities, Bias, VectorSink, generate, track!, SPHERE_MAX_STEPS
 using BlackLightPlus.Execution: ThreadedExecutor, Spectrum, nuLnu_total, total_power, total_weight,
                      mean_energy, nu_centers, scalar
-using BlackLightPlus.Data: build_int_jnu_table, load_hotcross
+using BlackLightPlus.Data: load_hotcross
 
 const DK = Main.Decks
 const EXEC = ThreadedExecutor(chunk = 4096)
@@ -86,25 +85,18 @@ function first_order_ledger(tau_es, table; N = 20_000)
         track!(FlatMarch(s), Minkowski(), s, opac, sp, rng, sink; absorb = Val(false),
                scatter = Val(true))
     end
-    return sum(l[3] for l in sink.ledger) / sum(l[2] for l in sink.ledger)
+    return sum(l[2].spawned for l in sink.ledger) / sum(l[2].scatter_loss for l in sink.ledger)
 end
 
 @testset "Monte Carlo sphere" begin
-    @testset "thin sphere: spectrum and power, exact and tabulated generation" begin
+    @testset "thin sphere: spectrum and power" begin
         s = UniformSphere()
         tabs, N = DK.sphere_tables(s, 2_000_000)
+        @test N == 2_000_000                                    # trapezoid counts: Ns exactly
         spec = Spectrum(DK.sphere_thin_bins(EXEC, s, tabs, N, 0xC0FFEE))
         worst, ntested = sphere_gate(spec, s)
         @test ntested >= 50 && worst < 0.10
         @test isapprox(total_power(spec) / analytic_bolometric(s), 1.0; atol = 0.03)
-        gt = build_int_jnu_table(table_zone(s), tabs.weights)
-        tt = GenerationTables(tabs.weights, tabulated_dnmax(gt, tabs.weights), gt)
-        spec_t = Spectrum(DK.sphere_thin_bins(EXEC, s, tt, N, 0xC0FFEE))
-        worst_t, ntested_t = sphere_gate(spec_t, s)
-        @test ntested_t >= 50 && worst_t < 0.10
-        @test abs(total_power(spec_t) - total_power(spec)) / total_power(spec) < 1.0e-4
-        ca = vec(sum(spec.count; dims = 1)); cb = vec(sum(spec_t.count; dims = 1))
-        @test maximum(abs.(cb .- ca) ./ sqrt.(max.(ca, 1))) < 5.0
     end
 
     if isfile(HOTCROSS_DAT)

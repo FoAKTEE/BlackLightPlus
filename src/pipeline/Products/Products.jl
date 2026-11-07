@@ -9,18 +9,20 @@ using StaticArrays
 using LinearAlgebra: dot, det
 import Adapt
 using ForwardDiff: Dual, value, partials
-using ..Numerics: position, momentum, MCRng, MCStreamLayout, mc_uniform, primary_rng, ME, CL
+using ..Numerics: position, momentum, MCRng, MCStreamLayout, widest_layout, mc_uniform, primary_rng,
+                  ME, CL
 using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step,
                    inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance
-using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, intensity, sample
+using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
+                sample, emission_zone
 using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
-using ..MonteCarlo: Sink, Superphoton, GenerationTables, IntJnuTable, Opacities, Bias, FlatMarch,
-                    CurvedMarch, escape_direction, generate, track!, table_zone,
-                    zone_nsuperphotons, tabulated_dnmax, int_jnu_zone, MC_NU_MIN, MC_NU_MAX,
-                    MC_N_ESAMP, SPHERE_MAX_STEPS, CURVED_MAX_STEPS
-import ..MonteCarlo: record!, spawn!, tally!
-using ..Data: FluidBlocks, AthenaKSnapshot, locate, build_weight_table, build_zone_emission_table,
-              zone_counts, zone_int_jnu_tables, build_int_jnu_table, build_hotcross_table
+using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
+                    CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
+                    generate, track!, table_zone, zone_nsuperphotons, mean_weight, int_jnu_zone,
+                    EMISSIVITY_TABLE, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP
+import ..MonteCarlo: record!, child_stream, spawn!, tally!
+using ..Data: FluidBlocks, AthenaKSnapshot, locate, build_weight_table, emission_sites, zone_tables,
+              build_hotcross_table
 import ..Execution
 using ..Execution: ThreadedExecutor, resolve, describe, foreach_item!, ray, image_coords,
                    CameraRays, BlockGrid, CoordList, mixed_partition, ImageBlock, stream_blocks!,

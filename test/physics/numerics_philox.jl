@@ -1,9 +1,10 @@
 # The Philox stream is uniform, reproducible and independent across streams; the
-# samplers hit their analytic moments; stream identities are injective over genealogies.
+# samplers hit their analytic moments; stream identities are injective over genealogies,
+# the widest layout fills the identity, and a run's host streams name no photon.
 using Test, BlackLightPlus
 using BlackLightPlus.Numerics: philox4x32, philox_rand, MCRng, mc_uniform, mc_gauss, sample_direction,
-                    standard_gamma, chi_square, MCStreamLayout, primary_rng, child_rng,
-                    stream_id, stream_layer
+                    standard_gamma, chi_square, MCStreamLayout, widest_layout, event_capacity,
+                    primary_rng, run_rng, child_rng, stream_id, stream_layer
 using LinearAlgebra: norm
 
 function philox_moments(n)
@@ -139,6 +140,27 @@ end
         @test mc_uniform(a)[1] != mc_uniform(primary_rng(1, 1))[1]
         @test_throws ArgumentError MCStreamLayout(10^7, 100_000, 7)
         @test_throws ArgumentError MCStreamLayout(10, 10, 16)
+        @test_throws ArgumentError MCStreamLayout(Int128(2)^123, 1, 0)
         @test isbits(primary_rng(1, 1))
+        @test event_capacity(L) == 4
+    end
+
+    @testset "widest layout and run streams" begin
+        for (n, K, E) in ((10^7, 3, 32), (10^7, 4, 25), (10^9, 3, 31), (10, 15, 8), (5, 0, 32))
+            L = widest_layout(n, K)
+            @test (L.event_bits, L.max_layer) == (E, K) && event_capacity(L) == 2^E
+            @test L.gid_bits + K * L.event_bits <= 124
+        end
+        @test_throws ArgumentError widest_layout(Int128(2)^119, 15)
+        # the last ordinal of every layer stays in its field
+        L = widest_layout(1000, 3)
+        e = event_capacity(L) - 1
+        r = child_rng(child_rng(child_rng(primary_rng(5, 1000), e, L), e, L), e, L)
+        @test stream_layer(r) == 3
+        @test stream_id(r) & (UInt128(2)^L.gid_bits - 1) == 1000
+        # a run's host stream has bit 123 set, layer 0: no primary or child carries it
+        h = run_rng(5, 7)
+        @test stream_id(h) == (UInt128(1) << 123) + 7 && stream_layer(h) == 0
+        @test h.ctr == 0 && run_rng(5, 7) == h && run_rng(6, 7) != h
     end
 end

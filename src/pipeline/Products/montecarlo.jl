@@ -8,20 +8,26 @@
 # children that layer n − 1 spawned.
 #
 # Normalisation: the weight table fixes w(ν) = Σ_zones ∫j_ν dΩ dV/(h Ns/ln(ν_max/ν_min)),
-# so the generated frequency density is uniform in ln ν, about `Ns` packets are launched,
-# and ν L_ν(bin) = (mₑc²/dlnν) Σ w E estimates the emitted spectrum with no free constant.
+# so the generated frequency density is uniform in ln ν, the expected number of primaries
+# is `Ns` (trapezoid counts), and ν L_ν(bin) = (mₑc²/dlnu) Σ w E estimates the emitted
+# spectrum with no free constant.
 
 """
     ScatterResult
 
 The spectrum of the scattering sphere ([`mc_spectrum`](@ref) with `scattering = true`).
 `orders[n + 1]` is the escaped `Spectrum` of the photons of scattering order `n`
-(`orders[end]` holds the order `max_scatt`), `total` the exact sum of the orders.
-Diagnostics: `n_primary` primaries and `n_children` children tracked, the weight of the
-primaries `w_primary`, the weight spawned into children `w_children`, of which
-`w_first_order` by primaries, and `scatter_loss`, the incident weight lost to scattering
-(`w_children ≈ scatter_loss` checks the unbiasedness of the exponential transform). `plan`
-and `run` as in [`Image`](@ref).
+(`orders[end]` holds the order `max_scatt`), `total` the exact sum of the orders; each
+carries `Σ (w E)²` per bin for its standard error (`Execution.nuLnu_sigma`).
+Diagnostics: `n_primary` primaries and `n_children` children tracked; in weight
+(photons s⁻¹) the primaries `w_primary`, the children `w_children`, of which
+`w_first_order` spawned by primaries, `scatter_loss`, the weight scattered out of the
+beam in the steps that may spawn (the expectation of `w_children + w_unspawned`),
+`scatter_loss_final`, that of the steps of the order `max_scatt`, which spawn nothing,
+and `w_unspawned`, the weight of the events that spawned nothing; in power (erg s⁻¹,
+`mₑc² Σ w E`) `emitted_power` by the primaries, `escaped_power`, `absorbed_power`,
+`captured_power` and `dropped_power` (photons ended by the step limit). `plan` and `run`
+as in [`Image`](@ref).
 """
 struct ScatterResult{S,P,R}
     orders::Vector{S}
@@ -33,6 +39,13 @@ struct ScatterResult{S,P,R}
     w_children::Float64
     w_first_order::Float64
     scatter_loss::Float64
+    scatter_loss_final::Float64
+    w_unspawned::Float64
+    emitted_power::Float64
+    escaped_power::Float64
+    absorbed_power::Float64
+    captured_power::Float64
+    dropped_power::Float64
     plan::P
     run::R
 end
@@ -48,11 +61,16 @@ The spectrum of a plasma grid on a spacetime ([`mc_spectrum`](@ref)). `spectra[k
 the one-row escaped `Spectrum` of the photons whose asymptotic polar angle falls in the
 inclination band `incl_deg[k] ± half_width_deg` (degrees), of solid angle `dOmega[k]`
 (`nuLnu_solid(spectra[k], dOmega[k])`, or [`incl_nuLnu`](@ref), gives the
-isotropic-equivalent `ν L_ν`); `total` is the all-sky spectrum. Diagnostics:
-`emitted_power` and `escaped_power` (`mₑc² Σ w E` over the primaries at emission and over
-the escaped photons, erg s⁻¹), `n_zones` emitting zones, `n_gen` primaries, `n_recorded`
-escaped photons, and `scattering`, whether Compton scattering was tracked. `plan` and
-`run` as in [`Image`](@ref).
+isotropic-equivalent `ν L_ν`); `total` is the all-sky spectrum; both sum the scattering
+orders, and `orders[n + 1]` is the spectrum of order `n` alone, every band and the
+all-sky row (`orders[end]` the order `max_scatt`; one order without scattering). Every
+spectrum carries `Σ (w E)²` per bin for its standard error (`Execution.nuLnu_sigma`).
+Diagnostics: `n_zones` emitting zones, `n_gen` primaries, `n_recorded` escaped photons,
+`n_children` children, `scattering`, whether Compton scattering was tracked; the
+weights `w_primary`, `w_children`, `w_first_order`, `scatter_loss`, `scatter_loss_final`
+and `w_unspawned` and the powers `emitted_power`, `escaped_power`, `absorbed_power`,
+`captured_power` and `dropped_power` of a [`ScatterResult`](@ref) (the weights zero
+without scattering). `plan` and `run` as in [`Image`](@ref).
 """
 struct GRMHDSpectrumResult{S,P,R}
     incl_deg::Vector{Float64}
@@ -60,11 +78,23 @@ struct GRMHDSpectrumResult{S,P,R}
     dOmega::Vector{Float64}
     spectra::Vector{S}
     total::S
-    emitted_power::Float64
-    escaped_power::Float64
+    orders::Vector{S}
+    max_scatt::Int
     n_zones::Int
     n_gen::Int
     n_recorded::Int
+    n_children::Int
+    w_primary::Float64
+    w_children::Float64
+    w_first_order::Float64
+    scatter_loss::Float64
+    scatter_loss_final::Float64
+    w_unspawned::Float64
+    emitted_power::Float64
+    escaped_power::Float64
+    absorbed_power::Float64
+    captured_power::Float64
+    dropped_power::Float64
     scattering::Bool
     plan::P
     run::R
@@ -73,6 +103,18 @@ end
 Base.show(io::IO, r::GRMHDSpectrumResult) =
     print(io, "GRMHDSpectrumResult(", length(r.spectra), " bands, ", r.n_zones, " zones, ",
           r.n_gen, " primaries, ", r.n_recorded, " escaped, ", r.run.executor.kind, ")")
+
+# The ledger totals of a run, in the field order of the results: the six weights, then
+# the five powers (erg s⁻¹).
+function ledger_totals(l::ExactScalars)
+    mec2 = ME * CL * CL
+    return (ledger_sum(l, PRIMARY_WEIGHT), ledger_sum(l, SPAWNED),
+            ledger_sum(l, SPAWNED_BY_PRIMARIES), ledger_sum(l, SCATTER_LOSS),
+            ledger_sum(l, SCATTER_LOSS_FINAL), ledger_sum(l, UNSPAWNED),
+            mec2 * ledger_sum(l, EMITTED), mec2 * ledger_sum(l, ESCAPED),
+            mec2 * ledger_sum(l, ABSORBED), mec2 * ledger_sum(l, CAPTURED),
+            mec2 * ledger_sum(l, DROPPED))
+end
 
 """
     incl_nuLnu(res::GRMHDSpectrumResult) -> (nu, L)
@@ -111,44 +153,26 @@ end
 # ---------------------------------------------------------------- emission zones
 
 """
-    emission_zones(plan; stride = 1, r_emit_max = Inf, max_zones = typemax(Int))
-        -> Vector{EmissionZone{Float64}}
-    emission_zones(blocks::FluidBlocks, st, params; stride, r_emit_max, max_zones)
+    emission_zones(plan; stride = 1, seed = 0x5eed5eed, r_emit_max = Inf,
+                   max_zones = typemax(Int)) -> Vector{EmissionZone{Float64}}
+    emission_zones(blocks::FluidBlocks, st, params; stride, seed, r_emit_max, max_zones)
 
-One emission zone per cell centre of the plan's matter (an `AthenaKSnapshot` or
-`FluidBlocks`; every `stride`-th cell per axis) that its own block owns (`locate`, so a
-cell under a finer block is skipped), within Kerr–Schild radius `r_emit_max`, whose
-plasma decoded on the plan's spacetime with the plan's parameter set is valid with
-`n_e > 0` and `Θₑ > 0`. The zone's volume is the proper volume
-`√−g Δx¹Δx²Δx³ stride³ L_unit³` (cm³), `√−g` taken as 1 where `det g ≥ 0`. Cells are
-visited block by block, `k`, `j`, `i` outermost to innermost; at most `max_zones` zones.
+The emission zones of the plan's matter (an `AthenaKSnapshot` or `FluidBlocks`) as
+`mc_spectrum` draws them, decoded in full: `Data.emission_sites` of its blocks on the
+plan's spacetime with the plan's parameter set (one zone per group of `stride³` cells,
+its cell drawn uniformly among the group's owned cells on a stream of `seed`, volume
+the owned cells' proper volume at that cell; every owned cell above the horizon proxy at
+`stride = 1`), each zone `Matter.emission_zone` of its site.
 """
 emission_zones(plan::Plan; kw...) =
     emission_zones(zone_blocks(plan.provider), plan.spacetime, plan.params; kw...)
 
 function emission_zones(blocks::FluidBlocks, st, params; stride::Integer = 1,
-                        r_emit_max::Real = Inf, max_zones::Integer = typemax(Int))
-    s = Int(stride)
-    s >= 1 || throw(ArgumentError("emission_zones: stride must be positive"))
-    zones = EmissionZone{Float64}[]
-    Lu3 = params.units.L_unit^3
-    rmax = Float64(r_emit_max)
-    for mb in 1:blocks.nmb
-        d1 = blocks.dx[1, mb]; d2 = blocks.dx[2, mb]; d3 = blocks.dx[3, mb]
-        dVcode = d1 * d2 * d3 * Float64(s)^3
-        for k in 1:s:blocks.nk, j in 1:s:blocks.nj, i in 1:s:blocks.ni
-            xc = SVector(0.0, blocks.x_left[1, mb] + (i - 1) * d1,
-                         blocks.x_left[2, mb] + (j - 1) * d2, blocks.x_left[3, mb] + (k - 1) * d3)
-            locate(blocks, xc[2], xc[3], xc[4]) == mb || continue
-            proxy_distance(st, xc)[2] <= rmax || continue
-            state, g = sample(blocks, st, xc, params)
-            (state.valid && state.n_e > 0.0 && state.theta_e > 0.0) || continue
-            detg = det(g[1])
-            push!(zones, EmissionZone(state, (detg < 0.0 ? sqrt(-detg) : 1.0) * dVcode * Lu3, xc, g))
-            length(zones) >= max_zones && return zones
-        end
-    end
-    return zones
+                        seed::Integer = 0x5eed5eed, r_emit_max::Real = Inf,
+                        max_zones::Integer = typemax(Int))
+    sites = emission_sites(blocks, st, params; stride = stride, seed = UInt32(seed & 0xffffffff),
+                           r_emit_max = r_emit_max, max_zones = max_zones)
+    return [emission_zone(blocks, st, s, params) for s in sites]
 end
 
 zone_blocks(b::FluidBlocks) = b
@@ -159,12 +183,15 @@ zone_blocks(p) =
 
 # ---------------------------------------------------------------- the product
 
+"Default cap of the state-dependent bias of `mc_spectrum` (`bias_max`)."
+const MC_BIAS_MAX = 1.0e6
+
 """
     mc_spectrum(plan, Ns; scattering = false, backend = nothing, bands = nothing,
                 seed = 0x5eed5eed, nu_min = 1e8, nu_max = 1e16, spec_nu_min = nu_min,
                 spec_nu_max = scattering ? 1e24 : nu_max, n_esamp = 400, n_ebins = 200,
-                tabulated = false, table = nothing, max_scatt = 3, bias = nothing,
-                absorption, capacity = nothing, C = plan.budget.C, escape = 1e3,
+                table = nothing, max_scatt = 3, bias = nothing, bias_max = MC_BIAS_MAX,
+                split = 1, absorption, capacity = nothing, C = plan.budget.C, escape = 1e3,
                 R_em = 100.0, stride = 1, r_emit_max = Inf, max_zones = typemax(Int))
         -> Spectrum | ScatterResult | GRMHDSpectrumResult
 
@@ -179,23 +206,27 @@ sphere). A plasma grid (`AthenaKSnapshot`, `FluidBlocks`) on any spacetime, a mo
 binary included: the grid is one snapshot, emitting from its cell centres at `t = 0`
 and held fixed while the superphotons travel, and the march reads the metric at each
 photon's own time; primaries spread over the [`emission_zones`](@ref) of the plan
-(`stride`, `r_emit_max`, `max_zones`) by their expected counts, rounded stochastically
-on the stream `MCRng(seed, 0)`; a geodesic march (`CurvedMarch`: step divisor `C`,
-escape at radius `escape`, emission-confinement radius the larger of `R_em` and 1.2
-times the outermost zone radius); absorption always by default; the result a
-[`GRMHDSpectrumResult`](@ref).
+(every owned cell above the horizon at `stride = 1`; one randomly drawn cell per group
+of `stride³` with the group's volume otherwise, an unbiased quadrature for quick runs;
+`r_emit_max`, `max_zones`) by their expected counts, rounded stochastically on the stream
+`MCRng(seed, 0)`; a geodesic march (`CurvedMarch`: step divisor `C`, escape at radius
+`escape`, emission-confinement radius the larger of `R_em` and 1.2 times the outermost
+zone radius); absorption always by default; the result a [`GRMHDSpectrumResult`](@ref).
 
 Generation: the weight table over `[nu_min, nu_max]` on `n_esamp` intervals for about
-`Ns` primaries, exact (`tabulated = false`) or tabulated frequency rejection. Primary `g`
-draws the stream `primary_rng(seed, g)`. Transport: absorption (`absorption`), Compton
-scattering (`scattering`) with the hot-cross `table` (`nothing`: `hotcross_table(plan)`,
-built at the plan's first scattering run and kept in the plan), at most `max_scatt`
-scatterings per photon, the importance `bias` (a `Bias`, its `b0`, or `nothing`: the
-sphere's Thomson depth, 1 on a grid), lengths in `plan.params.units.L_unit` cm (one cm
-for a plan without parameters). Binning:
-`bands` (`PolarBands(6)` for the sphere, `InclinationBands((17, 50, 90), 10)` on a grid,
-which takes inclination bands only), `n_ebins` log-frequency bins over
-`[spec_nu_min, spec_nu_max]`.
+`Ns` primaries (trapezoid counts, so their expectation is `Ns`), frequencies by rejection
+against `∫ j_ν dΩ` from the process's `EmissivityTable`. Primary `g` draws the stream
+`primary_rng(seed, g)`. Transport: absorption (`absorption`), Compton scattering
+(`scattering`) with the hot-cross `table` (`nothing`: `hotcross_table(plan)`, the
+process's table), at most `max_scatt` scatterings per photon, every step's scattering
+events a Poisson process under the importance `bias`: `nothing` or a number `b0` (1 by
+default) for the `StateBias` `b = clamp(b0 A(Θₑ) w/w_ref, 1, bias_max)` with `w_ref` the
+mean primary weight and `split` the most children per capped event (1: no splitting),
+or a `Bias`/`StateBias` used as given. Every choice leaves the spectrum unbiased; the
+bias and `split` set its variance and cost. Lengths in `plan.params.units.L_unit` cm (one
+cm for a plan without parameters). Binning: `bands` (`PolarBands(6)` for the sphere,
+`InclinationBands((17, 50, 90), 10)` on a grid, which takes inclination bands only),
+`n_ebins` log-frequency bins over `[spec_nu_min, spec_nu_max]`.
 
 Scattering runs as a cascade over chunks of primaries ([`Execution.foreach_cascade!`](@ref)):
 within a chunk, each layer's children are tracked by the next layer, up to `max_scatt`
@@ -215,8 +246,8 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
                      nu_max::Real = MC_NU_MAX, spec_nu_min::Real = nu_min,
                      spec_nu_max::Real = scattering ? 1.0e24 : nu_max,
                      n_esamp::Integer = MC_N_ESAMP, n_ebins::Integer = 200,
-                     tabulated::Bool = false, table = nothing, max_scatt::Integer = 3,
-                     bias = nothing,
+                     table = nothing, max_scatt::Integer = 3, bias = nothing,
+                     bias_max::Real = MC_BIAS_MAX, split::Integer = 1,
                      absorption::Bool = !(scattering && plan.provider isa UniformSphere),
                      capacity = nothing, C::Real = plan.budget.C, escape::Real = 1.0e3,
                      R_em::Real = 100.0, stride::Integer = 1, r_emit_max::Real = Inf,
@@ -228,13 +259,16 @@ function mc_spectrum(plan::Plan, Ns::Real; scattering::Bool = false, backend = n
     K >= 0 || throw(ArgumentError("mc_spectrum: max_scatt must be non-negative"))
     capacity === nothing || capacity >= 1 ||
         throw(ArgumentError("mc_spectrum: capacity must be positive"))
+    bias_max >= 1 || throw(ArgumentError("mc_spectrum: bias_max must be at least 1"))
+    split >= 1 || throw(ArgumentError("mc_spectrum: split must be positive"))
     o = (seed = UInt32(seed & 0xffffffff), scattering = scattering, absorption = absorption,
          K = K,
          gen = (nu_min = Float64(nu_min), nu_max = Float64(nu_max), n_esamp = Int(n_esamp),
-                tabulated = tabulated, Ns = Float64(Ns)),
+                Ns = Float64(Ns)),
          grid = (nu_min = Float64(spec_nu_min), nu_max = Float64(spec_nu_max),
                  n_ebins = Int(n_ebins)),
-         table = scattering ? hotcross(table, plan) : table, bias = bias, capacity = capacity,
+         table = scattering ? hotcross(table, plan) : table,
+         bias = (b = bias, b_max = Float64(bias_max), split = Int(split)), capacity = capacity,
          march = (C = Float64(C), escape = Float64(escape), R_em = Float64(R_em)),
          zones = (stride = Int(stride), r_emit_max = Float64(r_emit_max),
                   max_zones = Int(max_zones)))
@@ -245,17 +279,16 @@ end
 hotcross(::Nothing, plan) = hotcross_table(plan)
 hotcross(table, plan) = table
 
-# The importance bias of a run.
-mc_bias(::Nothing, s::UniformSphere) = Bias(s)
-mc_bias(::Nothing, provider) = Bias(1.0)
-mc_bias(b::Real, provider) = Bias(Float64(b))
-mc_bias(b::Bias, provider) = b
+# The importance bias of a run whose mean primary weight is `w_ref`.
+mc_bias(b::Nothing, kw, w_ref) = StateBias(1.0, w_ref, kw.b_max, kw.split)
+mc_bias(b::Real, kw, w_ref) = StateBias(Float64(b), w_ref, kw.b_max, kw.split)
+mc_bias(b::Union{Bias,StateBias}, kw, w_ref) = b
 
 # The opacities of a run: lengths in the plan's units, or in cm without a parameter set.
-mc_opacities(::Nothing, provider, o) =
-    Opacities(; table = o.table, bias = mc_bias(o.bias, provider), max_scatt = o.K)
-mc_opacities(params, provider, o) =
-    Opacities(params; table = o.table, bias = mc_bias(o.bias, provider), max_scatt = o.K)
+mc_opacities(::Nothing, o, w_ref) =
+    Opacities(; table = o.table, bias = mc_bias(o.bias.b, o.bias, w_ref), max_scatt = o.K)
+mc_opacities(params, o, w_ref) =
+    Opacities(params; table = o.table, bias = mc_bias(o.bias.b, o.bias, w_ref), max_scatt = o.K)
 
 mc_run(::Nothing, plan, exec, bands, o, t0) =
     throw(ArgumentError("mc_spectrum needs matter: prepare the plan with `matter = …`"))
@@ -267,12 +300,13 @@ function mc_run(sphere::UniformSphere, plan, exec, bands, o, t0)
                             "spacetime is $(nameof(typeof(plan.spacetime)))"))
     tables, N = sphere_tables(sphere, o.gen)
     ctl = FlatMarch(sphere)
-    transport = MCTransport(ctl, plan.spacetime, sphere, mc_opacities(plan.params, sphere, o),
+    transport = MCTransport(ctl, plan.spacetime, sphere,
+                            mc_opacities(plan.params, o, mean_weight(tables.weights)),
                             Val(o.absorption), Val(o.scattering))
     rows = bands === nothing ? PolarBands(6) : bands
     orders = ntuple(_ -> ExactBins(rows; o.grid...), o.K + 1)
     ledger = mc_ledger()
-    layout = MCStreamLayout(N, SPHERE_MAX_STEPS, o.K)
+    layout = widest_layout(N, o.K)
     nchildren = run_layers(exec, SphereSource(sphere, tables), transport, o.seed, N, orders,
                            ledger, layout, o.scattering, o.capacity)
     rec = run_record(exec, plan, t0)
@@ -280,9 +314,7 @@ function mc_run(sphere::UniformSphere, plan, exec, bands, o, t0)
     total = similar(orders[1])
     foreach(b -> merge!(total, b), orders)
     return ScatterResult([Spectrum(b) for b in orders], Spectrum(total), o.K, N, nchildren,
-                         ledger_sum(ledger, PRIMARY_WEIGHT), ledger_sum(ledger, SPAWNED),
-                         ledger_sum(ledger, SPAWNED_BY_PRIMARIES),
-                         ledger_sum(ledger, SCATTER_LOSS), plan, rec)
+                         ledger_totals(ledger)..., plan, rec)
 end
 
 # The one-zone generation tables of the sphere for about `Ns` primaries over the band,
@@ -292,10 +324,7 @@ function sphere_tables(sphere::UniformSphere, g)
     wgt = build_weight_table([zone], g.Ns / (log(g.nu_max) - log(g.nu_min));
                              n_esamp = g.n_esamp, nu_min = g.nu_min, nu_max = g.nu_max)
     N_target, dnmax = zone_nsuperphotons(zone, wgt)
-    N = max(1, round(Int, N_target))
-    g.tabulated || return GenerationTables(wgt, dnmax), N
-    gt = build_int_jnu_table(zone, wgt)
-    return GenerationTables(wgt, tabulated_dnmax(gt, wgt), gt), N
+    return GenerationTables(wgt, dnmax), max(1, round(Int, N_target))
 end
 
 # A plasma grid on a spacetime.
@@ -304,36 +333,35 @@ function mc_run(provider, plan, exec, bands, o, t0)
     rows isa InclinationBands ||
         throw(ArgumentError("the spectrum of a plasma grid is binned by InclinationBands; " *
                             "got $(nameof(typeof(rows)))"))
-    zones = emission_zones(plan; o.zones...)
-    isempty(zones) &&
+    st = plan.spacetime
+    sites = emission_sites(zone_blocks(provider), st, plan.params; seed = o.seed, o.zones...)
+    isempty(sites) &&
         throw(ArgumentError("mc_spectrum: no emitting zones (check the matter and the cuts)"))
     g = o.gen
-    jt = build_zone_emission_table(zones; n_esamp = g.n_esamp, nu_min = g.nu_min,
-                                   nu_max = g.nu_max)
-    wgt = build_weight_table(jt, g.Ns / (log(g.nu_max) - log(g.nu_min)))
-    Nsz, dnmax = zone_counts(jt, wgt)
-    lint = nothing
-    g.tabulated && ((lint, dnmax) = zone_int_jnu_tables(jt, wgt))
+    wgt, Nsz, dnmax = zone_tables(sites, g.Ns / (log(g.nu_max) - log(g.nu_min));
+                                  n_esamp = g.n_esamp, nu_min = g.nu_min, nu_max = g.nu_max)
     offset = zone_offsets(Nsz, o.seed)
     N = offset[end]
-    st = plan.spacetime
-    R_em = max(o.march.R_em, maximum(z -> 1.2 * proxy_distance(st, z.x)[2], zones))
+    R_em = max(o.march.R_em, maximum(z -> 1.2 * proxy_distance(st, z.x)[2], sites))
     ctl = CurvedMarch(st; C = o.march.C, escape = o.march.escape, R_em = R_em)
-    transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, provider, o),
+    transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, o, mean_weight(wgt)),
                             Val(o.absorption), Val(o.scattering))
-    orders = (ExactBins(rows; o.grid...),)
+    orders = ntuple(_ -> ExactBins(rows; o.grid...), o.K + 1)
     ledger = mc_ledger()
-    layout = MCStreamLayout(max(1, N), CURVED_MAX_STEPS, o.K)
-    run_layers(exec, ZoneSource(zones, wgt, dnmax, offset, lint), transport, o.seed, N,
-               orders, ledger, layout, o.scattering, o.capacity)
-    spec = Spectrum(orders[1])
+    layout = widest_layout(max(1, N), o.K)
+    source = ZoneSource(sites, provider, st, plan.params, wgt, EMISSIVITY_TABLE, dnmax, offset)
+    nchildren = run_layers(exec, source, transport, o.seed, N, orders, ledger, layout,
+                           o.scattering, o.capacity)
+    total = similar(orders[1])
+    foreach(b -> merge!(total, b), orders)
+    spec = Spectrum(total)
     nb = length(rows.lo)
-    mec2 = ME * CL * CL
+    rec = run_record(exec, plan, t0)
     return GRMHDSpectrumResult(collect(rows.incl_deg), rows.half_width_deg, spec.dOmega[1:nb],
                                [band(spec, k) for k in 1:nb], band(spec, nb + 1),
-                               mec2 * ledger_sum(ledger, EMITTED), mec2 * ledger_sum(ledger, ESCAPED),
-                               length(zones), N, ledger_count(ledger, ESCAPED), o.scattering,
-                               plan, run_record(exec, plan, t0))
+                               [Spectrum(b) for b in orders], o.K, length(sites), N,
+                               ledger_count(ledger, ESCAPED), nchildren,
+                               ledger_totals(ledger)..., o.scattering, plan, rec)
 end
 
 # Cumulative primary counts of the zones: zone `z` gets ⌊N_z⌋ primaries plus one with

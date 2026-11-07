@@ -1,17 +1,19 @@
 # Superphoton generation from one uniform zone in flat spacetime, where every invariant
 # is analytic: the momentum is null with E = −p_t = hν/mₑc² > 0, the ln ν histogram
 # follows min(∫j dΩ/w, dnmax), the pitch histogram follows j_ν(θ) marginalised over the
-# drawn ν, and Σ w hν closes the zone's emitted power. Tabulated generation keeps the
-# acceptance ≤ 1, stays within the clip region of the exact integrand, and draws the
-# same packets as the exact path. The sphere generator draws its points in the ball.
+# drawn ν, and Σ w hν closes the zone's emitted power. The count is the trapezoid rule
+# over the weight nodes, so a zone's expected count is the target exactly, and the
+# acceptance is at most 1 at every node. The sphere generator draws its points in the
+# ball.
 using Test, BlackLightPlus
 using StaticArrays
 using LinearAlgebra: dot
 using BlackLightPlus.Numerics: HPL, ME, CL, MCRng, primary_rng
 using BlackLightPlus.Matter: EmissionZone, UniformSphere
-using BlackLightPlus.MonteCarlo: GenerationTables, generate, weight_at, zone_nsuperphotons, j_nu,
-                      int_jnu_zone, int_jnu_at, tabulated_dnmax, table_zone, WEIGHT_FLOOR
-using BlackLightPlus.Data: build_weight_table, build_int_jnu_table
+using BlackLightPlus.MonteCarlo: GenerationTables, generate, weight_at, zone_nsuperphotons, zone_count,
+                      node_weight, mean_weight, j_nu, int_jnu_zone, table_zone, WEIGHT_FLOOR,
+                      EMISSIVITY_TABLE
+using BlackLightPlus.Data: build_weight_table
 
 const G_MINK = @SMatrix [-1.0 0.0 0.0 0.0; 0.0 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 1.0]
 const UCON = SVector(1.0, 0.0, 0.0, 0.0)
@@ -113,28 +115,24 @@ accepted_density(nu) = min(int_jnu_zone(ZONE.n_e, ZONE.theta_e, ZONE.B, nu) /
         @test abs((NS_EXPECT / NPH) * S / Lref - 1.0) < max(0.02, 5.0 * se)
     end
 
-    @testset "tabulated generation" begin
-        gt = build_int_jnu_table(ZONE, WGT)
-        dn = tabulated_dnmax(gt, WGT)
-        @test abs(dn / DNMAX - 1.0) < 1.0e-9
-        over = 0.0; under = 0.0; worst = 0.0
-        lo = log(NU_MIN); hi = log(NU_MAX)
-        for j in 0:39_989
-            nu = exp(lo + (hi - lo) * j / 39_989)
-            r = int_jnu_at(nu, gt) / int_jnu_zone(ZONE.n_e, ZONE.theta_e, ZONE.B, nu) - 1.0
-            over = max(over, r); under = max(under, -r)
-            worst = max(worst, (int_jnu_at(nu, gt) / (weight_at(nu, WGT) + WEIGHT_FLOOR)) / dn)
+    @testset "trapezoid counts and the acceptance" begin
+        n = length(WGT.lwgt) - 1
+        @test node_weight(0, n) == node_weight(n, n) == 0.5 && node_weight(1, n) == 1.0
+        # one zone carries the whole table: N_s = Ns' dlnν Σ c_m = 1e5 ln(ν_max/ν_min)
+        @test NS_EXPECT ≈ 1.0e5 * log(NU_MAX / NU_MIN) rtol = 1e-12
+        @test zone_count(ZONE.n_e, ZONE.theta_e, ZONE.B, ZONE.dV, WGT, EMISSIVITY_TABLE) ===
+              (NS_EXPECT, DNMAX)
+        worst = maximum(0:n) do m
+            nu = exp(m * WGT.dlnu + WGT.lnu_min)
+            (int_jnu_zone(ZONE.n_e, ZONE.theta_e, ZONE.B, nu) / (weight_at(nu, WGT) + WEIGHT_FLOOR)) / DNMAX
         end
-        @test over < 1.0e-12
-        @test under < 1.0e-2
         @test worst <= 1.0 + 1.0e-12
-        tt = GenerationTables(WGT, dn, gt)
-        nd = count(1:20_000) do i
-            a, _ = generate(ZONE, TABS, MCRng(0x7AB1E5, i))
-            b, _ = generate(ZONE, tt, MCRng(0x7AB1E5, i))
-            !(a.p == b.p && a.w == b.w)
-        end
-        @test nd / 20_000 < 1.0e-3
+        # the mean primary weight is the emitted photon rate over the count
+        Ndot = ZONE.dV / HPL * WGT.dlnu *
+               sum(node_weight(m, n) * int_jnu_zone(ZONE.n_e, ZONE.theta_e, ZONE.B,
+                                                    exp(m * WGT.dlnu + WGT.lnu_min)) for m in 0:n)
+        @test mean_weight(WGT) ≈ Ndot / NS_EXPECT rtol = 1e-10
+        @test sum(sp -> sp, (B.whnu ./ (HPL .* exp.(B.lnu)))) / NPH ≈ mean_weight(WGT) rtol = 0.02
     end
 
     @testset "sphere: emission points fill the ball" begin

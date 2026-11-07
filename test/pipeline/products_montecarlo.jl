@@ -1,9 +1,11 @@
 # The Monte Carlo spectrum product: the sphere plan, the thin sphere against its analytic
-# spectrum, the scattering sphere's orders and weight ledger, the torus spectrum on the
-# block deck against the transport-tier template, bitwise agreement across executors,
-# device counts, chunks and child-buffer capacities (the overflow rerun), the emission
-# zones, the programs' device contract, the hot-cross table the plan builds once, the
-# backend keyword and the run record.
+# spectrum with Σ N_z = Ns, the scattering sphere's orders, weight ledger and power
+# budget, the scattered power independent of the bias with absorption on, the torus
+# spectrum on the block deck against the transport-tier template with its per-order split
+# and power budget, bitwise agreement across executors, device counts, chunks and
+# child-buffer capacities (the overflow rerun), the emission zones, the programs' device
+# contract, the hot-cross table the plan builds once, the backend keyword and the run
+# record.
 using Test, BlackLightPlus, StaticArrays
 using BlackLightPlus.Plans: RunConfig, Plan, prepare, hotcross_table
 using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
@@ -13,12 +15,13 @@ using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperpose
                      inverse_metric
 using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Superphoton, GenerationTables, Opacities, Bias,
-                      FlatMarch, CurvedMarch, generate
+                      StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE
 using BlackLightPlus.Numerics: SIGMA_THOMSON, GNEWT, CL, ME, MCStreamLayout, primary_rng
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactBins, ExactScalars, ChildBuffer,
                      PolarBands, InclinationBands, band, nuLnu_total, nuLnu_solid, total_power,
-                     total_weight, mean_energy, scalar, add!, describe, backend!, reset_backend!
-using BlackLightPlus.Data: build_weight_table, zone_counts, build_zone_emission_table
+                     total_weight, mean_energy, scalar, add!, describe, backend!, reset_backend!,
+                     nuLnu_sigma
+using BlackLightPlus.Data: zone_tables, emission_sites
 const DK = Main.Decks
 
 allocs(f, args...) = (f(args...); @allocated f(args...))
@@ -30,17 +33,20 @@ torus_plan(snap) =
                       frequency_hz = 2.3e11);
             spacetime = KerrSchildCartesian(DK.TORUS_A), matter = snap)
 "Every number of a spectrum."
-sbits(s::Spectrum) = (s.count, DK.bits(s.sumw), DK.bits(s.sumwE))
+sbits(s::Spectrum) = (s.count, DK.bits(s.sumw), DK.bits(s.sumwE), DK.bits(s.sumwE2))
 same(a::Spectrum, b::Spectrum) = sbits(a) == sbits(b)
+"The ledger of a result, weights and powers."
+ledger(r) = (r.w_primary, r.w_children, r.w_first_order, r.scatter_loss, r.scatter_loss_final,
+             r.w_unspawned, r.emitted_power, r.escaped_power, r.absorbed_power, r.captured_power,
+             r.dropped_power)
 same(a::ScatterResult, b::ScatterResult) =
     all(same.(a.orders, b.orders)) && same(a.total, b.total) &&
     (a.n_primary, a.n_children) == (b.n_primary, b.n_children) &&
-    DK.bits((a.w_primary, a.w_children, a.w_first_order, a.scatter_loss)) ==
-    DK.bits((b.w_primary, b.w_children, b.w_first_order, b.scatter_loss))
+    DK.bits(ledger(a)) == DK.bits(ledger(b))
 same(a::GRMHDSpectrumResult, b::GRMHDSpectrumResult) =
-    all(same.(a.spectra, b.spectra)) && same(a.total, b.total) &&
-    (a.n_zones, a.n_gen, a.n_recorded) == (b.n_zones, b.n_gen, b.n_recorded) &&
-    DK.bits((a.emitted_power, a.escaped_power)) == DK.bits((b.emitted_power, b.escaped_power))
+    all(same.(a.spectra, b.spectra)) && same(a.total, b.total) && all(same.(a.orders, b.orders)) &&
+    (a.n_zones, a.n_gen, a.n_recorded, a.n_children) == (b.n_zones, b.n_gen, b.n_recorded, b.n_children) &&
+    DK.bits(ledger(a)) == DK.bits(ledger(b))
 
 const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV, (64, 997, 300, 4096))]
 
@@ -66,9 +72,15 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         bol = sum(((i == 0 || i == 4000) ? 1.0 : (isodd(i) ? 4.0 : 2.0)) *
                   analytic_nuLnu(s, exp(lo + i * h)) for i in 0:4000) * h / 3.0
         @test isapprox(total_power(spec) / bol, 1.0; atol = 0.03)
-        tab = mc_spectrum(p, 1_000_000; seed = 0xC0FFEE, tabulated = true, backend = :cpu)
-        @test abs(total_power(tab) / total_power(spec) - 1.0) < 1.0e-3
-        @test sum(tab.count) == sum(spec.count)
+        @test sum(spec.count) == 1_000_000                      # trapezoid counts: N = Ns
+        # per-bin standard errors: the residuals against the closed form are N(0, 1)
+        _, sig, neff = nuLnu_sigma(spec)
+        z = [(L[i] - analytic_nuLnu(s, nu[i])) / sig[i] for i in eachindex(nu)
+             if 1.0e9 <= nu[i] <= 1.0e14 && cnt[i] >= 200]
+        @test length(z) >= 100 && abs(sum(z) / length(z)) < 4.0 / sqrt(length(z))
+        @test 0.8 < sum(abs2, z) / length(z) < 1.2
+        @test all(i -> neff[i] <= cnt[i] * (1 + 1e-12), eachindex(cnt))
+        @test all(i -> 0.9 * cnt[i] <= neff[i], [i for i in eachindex(nu) if 1.0e9 <= nu[i] <= 1.0e14 && cnt[i] >= 200])
     end
 
     @testset "scattering sphere: orders and weight conservation" begin
@@ -83,7 +95,10 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test all(total_weight(o) > 0.0 for o in r.orders)
         @test all(mean_energy(r.orders[n + 1]) > 4.0 * mean_energy(r.orders[n]) for n in 1:3)
         @test r.total.count == sum(o.count for o in r.orders)
-        @test isapprox(r.w_children / r.scatter_loss, 1.0; atol = 0.05)
+        @test r.total.sumwE2 ≈ sum(o.sumwE2 for o in r.orders) rtol = 1e-12
+        @test isapprox((r.w_children + r.w_unspawned) / r.scatter_loss, 1.0; atol = 0.01)
+        @test r.w_unspawned == 0.0 && r.scatter_loss_final > 0.0 && r.captured_power == 0.0
+        @test r.absorbed_power == 0.0 && r.dropped_power == 0.0 && r.emitted_power > 0.0
         @test 0.0 < r.w_first_order < r.w_children && r.w_primary > 0.0
         τ = ss.n_e * SIGMA_THOMSON * ss.R
         @test 0.5τ < r.w_first_order / r.w_primary < τ
@@ -98,17 +113,43 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test length(r0.orders) == 1 && r0.n_children == 0 && r0.w_children == 0.0
     end
 
+    @testset "absorbing scattering sphere: the scattered power does not depend on the bias" begin
+        # τ_T = 0.2 and absorption in the steps that scatter: the escaped power of every
+        # order is the same for biases whose events per step differ a hundredfold (b dτ_s
+        # per step about 1 for b = 100, where the one-event-per-step rule was 14 % high)
+        ss = UniformSphere(n_e = 1.0e18, theta_e = 3.0, B = 30.0, R = 3.0e5)
+        ps = prepare(ss)
+        kw = (scattering = true, table = THOMSON, nu_max = 1.0e13, spec_nu_max = 1.0e18,
+              n_ebins = 50, absorption = true, max_scatt = 2, backend = :cpu)
+        ra = mc_spectrum(ps, 20_000; kw..., seed = 0xAB01, bias = Bias(1.0))
+        rb = mc_spectrum(ps, 20_000; kw..., seed = 0xAB02, bias = Bias(100.0))
+        @test rb.n_children > 30 * ra.n_children
+        @test abs((rb.w_children + rb.w_unspawned) / rb.scatter_loss - 1.0) < 0.05
+        @test ra.absorbed_power > 0.0 && rb.absorbed_power > 0.0
+        for n in 1:3
+            Pa = total_power(ra.orders[n]); Pb = total_power(rb.orders[n])
+            sa = ME_C2 * sqrt(sum(ra.orders[n].sumwE2)); sb = ME_C2 * sqrt(sum(rb.orders[n].sumwE2))
+            @test abs(Pa - Pb) < 5.0 * sqrt(sa^2 + sb^2)
+        end
+    end
+
     snap = DK.amr_deck()
     pt = torus_plan(snap)
     zones = emission_zones(pt)
 
     @testset "emission zones" begin
         @test pt.params == DK.torus_params()
-        @test zones == DK.torus_zones(snap.blocks, pt.spacetime, pt.params)
+        ref = DK.torus_zones(snap.blocks, pt.spacetime, pt.params)    # an independent serial decode
+        @test length(zones) == length(ref) && all(z.x == r.x && z.dV == r.dV for (z, r) in zip(zones, ref))
+        @test all(isapprox(z.n_e, r.n_e; rtol = 1e-14) && isapprox(z.theta_e, r.theta_e; rtol = 1e-14) &&
+                  isapprox(z.B, r.B; rtol = 1e-14) for (z, r) in zip(zones, ref))
         @test emission_zones(snap.blocks, pt.spacetime, pt.params) == zones
         @test length(zones) > 600 && all(z -> z.dV > 0.0 && z.n_e > 0.0 && z.theta_e > 0.0, zones)
         z2 = emission_zones(pt; stride = 2)
-        @test 0 < length(z2) < length(zones) / 4 && z2[1].dV ≈ 8.0 * zones[1].dV
+        @test 0 < length(z2) < length(zones) / 4
+        at = Dict(z.x => z for z in zones)
+        @test all(z -> haskey(at, z.x) && round(z.dV / at[z.x].dV) in 1:8, z2)   # an owned cell, n_own of them
+        @test emission_zones(pt; stride = 2, seed = 3) != z2 && emission_zones(pt; stride = 2) == z2
         z8 = emission_zones(pt; r_emit_max = 8.0)
         @test 0 < length(z8) < length(zones) && issubset(z8, zones)
         @test emission_zones(pt; max_zones = 10) == zones[1:10]
@@ -120,7 +161,8 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
     @testset "torus: the template run, energy, Compton tail" begin
         g = mc_spectrum(pt, 1_500; seed = 0xC0FFEE, C = 32.0, spec_nu_max = 1.0e24, n_ebins = 120,
                         backend = :cpu)
-        b0, l0, n0, _ = DK.torus_run(ThreadedExecutor(chunk = 64), snap.blocks, zones, 1_500, 0xC0FFEE)
+        b0, l0, n0, _ = DK.torus_run(ThreadedExecutor(chunk = 64), snap.blocks,
+                                     emission_sites(snap.blocks, pt.spacetime, pt.params), 1_500, 0xC0FFEE)
         s0 = Spectrum(b0)
         @test g isa GRMHDSpectrumResult && g.plan === pt && !g.scattering
         @test g.n_zones == length(zones) && g.n_gen == n0 > 1000
@@ -129,11 +171,21 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         @test g.dOmega == s0.dOmega[1:3]
         @test g.emitted_power == ME_C2 * scalar(l0, 6) && g.escaped_power == ME_C2 * scalar(l0, 5)
         @test 0.0 < g.escaped_power < g.emitted_power && 0 < g.n_recorded <= g.n_gen
+        @test g.absorbed_power == ME_C2 * scalar(l0, 8) && g.captured_power == ME_C2 * scalar(l0, 9)
+        # power budget of a thin run on a stationary spacetime: emitted = escaped + absorbed +
+        # captured + dropped, to rounding
+        @test g.escaped_power + g.absorbed_power + g.captured_power + g.dropped_power ≈
+              g.emitted_power rtol = 1e-10
+        @test length(g.orders) == 1 && same(band(g.orders[1], 4), g.total) && g.n_children == 0
+        @test g.w_children == g.scatter_loss == g.w_primary == 0.0
         nu, L = incl_nuLnu(g)
         @test size(L) == (3, 120) && L[2, :] == nuLnu_solid(g.spectra[2], g.dOmega[2])[2]
         gs = mc_spectrum(pt, 1_500; scattering = true, table = THOMSON, bias = 1.0e5, seed = 0xC0FFEE,
                          C = 32.0, n_ebins = 120, backend = :cpu)
-        @test gs.scattering && gs.n_gen == g.n_gen
+        @test gs.scattering && gs.n_gen == g.n_gen && length(gs.orders) == 4 && gs.max_scatt == 3
+        @test gs.total.count == sum(o.count[4:4, :] for o in gs.orders)
+        @test abs((gs.w_children + gs.w_unspawned) / gs.scatter_loss - 1.0) < 0.2
+        @test gs.n_children > 0 && gs.w_first_order <= gs.w_children
         nut, Lt, _ = nuLnu_total(g.total); nus, Ls, _ = nuLnu_total(gs.total)
         hi = 30.0 * nut[argmax(Lt)]
         @test sum(Ls[nus .> hi]) > sum(Lt[nut .> hi]) > 0.0
@@ -143,7 +195,8 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
     @testset "bitwise across executors, devices, chunks and capacities" begin
         thin = mc_spectrum(p, 6_000; seed = 7, n_ebins = 60, backend = :cpu)
         ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
-        kw = (scattering = true, table = THOMSON, seed = 0xBEEF, nu_max = 1.0e13, n_ebins = 60)
+        kw = (scattering = true, table = THOMSON, seed = 0xBEEF, nu_max = 1.0e13, n_ebins = 60,
+              bias = Bias(ss))
         sc = mc_spectrum(prepare(ss), 1_500; kw..., backend = ThreadedExecutor(chunk = 1))
         tk = (scattering = true, table = THOMSON, bias = 1.0e5, seed = 0xC0FFEE, C = 32.0,
               n_ebins = 80, stride = 2)
@@ -190,19 +243,22 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         lay = MCLayer(ph, [primary_rng(3, g) for g in 1:4], tr, sink)
         @test DK.device_isbits(lay) && allocs(lay, 2, 2) == 0
         blocks = snap.blocks
-        jt = build_zone_emission_table(zones[1:50])
-        wgt = build_weight_table(jt, 100.0)
-        _, dn = zone_counts(jt, wgt)
+        sites = emission_sites(blocks, pt.spacetime, pt.params)[1:50]
+        wgt, _, dn = zone_tables(sites, 100.0)
         off = collect(0:2:100)
         ctr = CurvedMarch(pt.spacetime; C = 32.0, R_em = 30.0)
         ztr = MCTransport(ctr, pt.spacetime, blocks, Opacities(pt.params; table = THOMSON, bias = Bias(1.0e5),
                                                                 max_scatt = 3), Val(true), Val(true))
         zsink = MCSink(ctr, (ExactBins(InclinationBands((17.0, 50.0), 10.0)),),
                        ChildBuffer(Superphoton, 4096, layout), mc_ledger())
-        zp = MCPrimary(ZoneSource(zones[1:50], wgt, dn, off, nothing), ztr, zsink, UInt32(1))
+        src = ZoneSource(sites, blocks, pt.spacetime, pt.params, wgt, EMISSIVITY_TABLE, dn, off)
+        zp = MCPrimary(src, ztr, zsink, UInt32(1))
         @test DK.device_isbits(zp) && allocs(zp, 17, 17) == 0
         @test ledger_count(zsink.ledger, 6) == 2
-        @test length(mc_ledger().n) == 6 * LEDGER_STRIPES
+        @test length(mc_ledger().n) == 11 * LEDGER_STRIPES
+        # the zone a primary is generated from is the site's, decoded again
+        z9 = BlackLightPlus.Products.emit(src, 17, primary_rng(1, 17))[1]
+        @test z9.x == sites[9].x && z9.ne0 == sites[9].n_e && z9.thetae0 == sites[9].theta_e
     end
 
     @testset "the plan's hot-cross table" begin
