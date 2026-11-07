@@ -915,11 +915,12 @@ its event's time.
 crosses the wavefront $\hat n\cdot\mathbf x=D$ of a distant observer along $\hat n$ at
 $t_e+D-\hat n\cdot\mathbf x_e$ in flat space, so $t_{\rm arr}=t_e-\hat n\cdot\mathbf x_e$ up to
 a constant common to all photons; it is constant along a straight line, so it does not depend on
-where the march stops. Beyond the escape sphere an outgoing ray of Kerr–Schild time keeps
+where the march stops. Beyond the stop an outgoing ray of Kerr–Schild time keeps
 $t-r-4M\ln(r-2M)$ constant, so the constant is $D+4M\ln D$ and the photon-dependent remainder
-$-4M\ln r_e$ varies by at most $4M\ln(1+1/C)\approx4M/C$ between photons (the escape step
-overshoots by about $r/C$), plus $O(Mb^2/r_e^2)$ for impact parameter $b$: $0.05\,M$ and
-$10^{-2}M$ at $C=80$, $r_e=10^3M$, $b=100\,M$. In flat space the arrival time is exact.
+$-4M\ln r_e$ varies by at most $4M\ln(1+1/C)\approx4M/C$ among the photons stopped at one radius
+(the stop overshoots by about $r/C$), while the bending left beyond the stop moves
+$\hat n\cdot\mathbf x_e$ by about $2Mb^2/r_e^2$ for impact parameter $b$, at most of order $2M$:
+far below the arrival bins of an orbit. In flat space the arrival time is exact.
 
 **Light curves.** Each photon is assigned to the observer along its own direction. An arrival
 bin of width $\Delta t$ in a row of solid angle $\Delta\Omega$ gives the isotropic-equivalent
