@@ -33,6 +33,20 @@ flat_photon(x, n, E; w = 1.0) = Superphoton(SVector(0.0, x...), ETA * SVector(E,
 
 peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
 
+# A sink that sums the children's weight and its first two moments in the fraction of a
+# unit step along x¹ (the photon of `E = 1e-6` from the origin), the child's stream its
+# parent's.
+struct StepSink <: BlackLightPlus.MonteCarlo.Sink
+    acc::Vector{Float64}
+end
+BlackLightPlus.MonteCarlo.child_stream(::StepSink, rng, event) = (rng, true)
+function BlackLightPlus.MonteCarlo.spawn!(s::StepSink, child, rng)
+    f = child.x[2] / 1.0e-6
+    s.acc[1] += child.w; s.acc[2] += child.w * f; s.acc[3] += child.w * f * f
+    return nothing
+end
+BlackLightPlus.MonteCarlo.record!(::StepSink, sph) = nothing
+
 @testset "Monte Carlo tracker" begin
     @testset "straight-line control" begin
         ctl = FlatMarch(SPH)
@@ -120,6 +134,65 @@ peak_bin(L, cnt) = argmax([c > 0 ? l : -Inf for (l, c) in zip(L, cnt)])
             u, f, _ = next_event(0.0, 1.0e3, dtau, MCRng(1, 3))
             @test u < 1.0
             @test expm1(-dtau * f) / expm1(-dtau) ≈ u rtol = 1e-9
+        end
+    end
+
+    @testset "state bias: one step at b of order 1" begin
+        # The bias b = event_bias(StateBias(0.3, …), Θₑ, w) of a step (1 ≤ b ≤ 63 on this grid)
+        # is chosen before the step's draws, so its events deposit the physical child weight
+        # w Δτ_s (1 − e^{−Δτ})/Δτ with the density ∝ e^{−Δτ f}: the deposit and the first two
+        # moments of the event fraction to 1e-3 over a grid of (Δτ_s, Δτ_a, w/w_ref, Θₑ).
+        sb = StateBias(0.3, 1.0, 1.0e6, 1)
+        grid = [(ds, da, wr, th) for ds in (0.1, 1.0) for da in (0.0, 1.0, 10.0)
+                for wr in (0.03, 1.0, 10.0) for th in (0.05, 1.0)]
+        mom(n, ds, dt) = ds * (n == 0 ? -expm1(-dt) / dt :
+                              n == 1 ? (-expm1(-dt) - dt * exp(-dt)) / dt^2 :
+                                       (2 - exp(-dt) * (dt^2 + 2dt + 2)) / dt^3)
+        res = Vector{NTuple{4,Float64}}(undef, length(grid))
+        Threads.@threads for k in eachindex(grid)
+            ds, da, wr, th = grid[k]
+            b, copies = event_bias(sb, 0, th, wr)
+            dt = ds + da
+            W = event_weight(wr, b, dt) / copies
+            M = ceil(Int, 3.0e7 / (b * ds))
+            m0 = 0.0; m1 = 0.0; m2 = 0.0
+            for i in 1:M
+                rng = MCRng(0x5B5B, k * 10^9 + i)
+                u = 0.0
+                while true
+                    u, f, rng = next_event(u, b * ds, dt, rng)
+                    u < 1.0 || break
+                    m0 += copies * W; m1 += copies * W * f; m2 += copies * W * f * f
+                end
+            end
+            res[k] = (b, m0 / (M * wr * mom(0, ds, dt)), m1 / (M * wr * mom(1, ds, dt)),
+                      m2 / (M * wr * mom(2, ds, dt)))
+        end
+        bs = first.(res)
+        @test minimum(bs) == 1.0 && count(<(10.0), bs) >= 24 && maximum(bs) > 50.0
+        @test all(r -> abs(r[2] - 1) < 1.0e-3 && abs(r[3] - 1) < 1.0e-3 && abs(r[4] - 1) < 1.5e-3, res)
+        # the same through the tracker's step: kick, child streams and sink, the event fraction
+        # read back from the child's position on a straight line
+        thom = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
+        s = UniformSphere(n_e = 1.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        E = 1.0e-6
+        for (ds, da, wr, th) in ((0.1, 1.0, 1.0, 0.05), (1.0, 0.0, 1.0, 1.0), (0.3, 10.0, 10.0, 0.05))
+            b, copies = event_bias(sb, 0, th, wr)
+            sink = StepSink(zeros(3))
+            m = BlackLightPlus.MonteCarlo.March(FlatMarch(s), Minkowski(), s,
+                                                Opacities(; table = thom, bias = sb, max_scatt = 1), sink)
+            y = vcat(SVector(0.0, 0.0, 0.0, 0.0), SVector(-E, E, 0.0, 0.0))
+            sph = Superphoton(SVector(0.0, 0.0, 0.0, 0.0), SVector(-E, E, 0.0, 0.0), wr)
+            stp = (it = 1, y = y, h = 1.0, tau_a = 0.0, tau_s = 0.0)
+            M = ceil(Int, 1.0e6 / (b * ds))
+            for i in 1:M
+                BlackLightPlus.MonteCarlo.step_events(m, sph, stp, wr, ds, ds + da, b, copies, 0,
+                                                      MCRng(0x5C5C, i))
+            end
+            dt = ds + da
+            @test abs(sink.acc[1] / (M * wr * mom(0, ds, dt)) - 1) < 4.0e-3
+            @test abs(sink.acc[2] / (M * wr * mom(1, ds, dt)) - 1) < 5.0e-3
+            @test abs(sink.acc[3] / (M * wr * mom(2, ds, dt)) - 1) < 6.0e-3
         end
     end
 
