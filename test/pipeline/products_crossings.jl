@@ -74,6 +74,12 @@ agree(a, b) = Decks.CROSS_HARDWARE ? maximum(abs.(a .- b)) <= 1.0e-9 * maximum(a
             q = render_crossings(p, d; backend = exec)
             @test all(agree(q.Ib[b], r.Ib[b]) && agree(q.steps, r.steps) for b in 1:3)
         end
+        # the plan's queue order changes no bit
+        pr = prepare(precise(RunConfig(camera = CameraConfig(inclination_deg = 60.0, fov = 16.0,
+                                                             resolution = 8)));
+                     spacetime = KerrSchildCartesian(0.9), matter = nothing, queue = reverse(1:64))
+        rr = render_crossings(pr, d; backend = :cpu)
+        @test all(Decks.bits(rr.Ib[b]) == Decks.bits(r.Ib[b]) for b in 1:3) && rr.steps == r.steps
         one = render_crossings(p, d; orders = (1,), backend = :cpu)
         @test Decks.bits(one.Ib[1]) == Decks.bits(r.Ib[2])
         @test length(crossing_outputs(3, 4)) == 16

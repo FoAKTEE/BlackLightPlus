@@ -42,8 +42,8 @@ grid, a frame window, an analytic source; or `nothing` for products that need no
 plasma). `mode` is the transfer mode of the imaging products, `lanes` the precision
 lanes ([`Lanes`](@ref), [`MixedLanes`](@ref)), `tile` the side of the image tiles of the
 Kerr queue order. `queue`, a permutation of the pixel indices `1:resolution²`, is the
-order in which `render`, `sensitivity`, `variants` and `shadow` queue the pixels in place
-of the derived one: for the next frame of a movie, for example,
+order in which `render`, `render_crossings`, `sensitivity`, `variants` and `shadow` queue
+the pixels in place of the derived one: for the next frame of a movie, for example,
 `march_sort_order(vec(shadow(plan).steps))` queues the longest marches of the previous
 frame first. The queue order changes no output bit.
 

@@ -120,9 +120,12 @@ order `n ∈ orders` at the `(n + 1)`-th crossing of the equator. With the preci
 [`render_analytic`](@ref) to rounding error away from the horizon. Returns `(I, Ib, rs,
 ts, phis, redshift_sign, steps, orders, plan, run)` as `render_analytic` (`ts` the
 Kerr–Schild time, `phis` the Kerr–Schild azimuth), each `npix × npix` (vectors for
-`coords`), and `steps`, the steps per ray.
+`coords`), and `steps`, the steps per ray. The pixels are queued in `plan.queue` order, as
+in [`render`](@ref) (the costly marches near the critical curve first), the coordinates
+in their order.
 
-Determinism: bitwise per item, whatever the executor, device count or chunking.
+Determinism: bitwise per item, whatever the executor, device count, chunking or queue
+order.
 """
 function render_crossings(plan::Plan, disk::EquatorialDisk; orders = (0, 1, 2), coords = nothing,
                           backend = nothing)
@@ -138,7 +141,7 @@ function render_crossings(plan::Plan, disk::EquatorialDisk; orders = (0, 1, 2), 
     N = coords === nothing ? npixels(plan) : length(gen.α)
     K = length(ot)
     outs = crossing_outputs(K, N)
-    foreach_item!(exec, prog, 1:N; outs)
+    foreach_item!(exec, prog, coords === nothing ? plan.queue : (1:N); outs)
     shape(v) = coords === nothing ? reshape(v, plan.camera.npix, plan.camera.npix) : v
     q(qq) = [shape(outs[(qq - 1) * K + b]) for b in 1:K]
     Ib, rs, ts, phis, rsgn = q(1), q(2), q(3), q(4), q(5)
