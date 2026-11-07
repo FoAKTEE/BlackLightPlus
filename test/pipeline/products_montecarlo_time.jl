@@ -65,18 +65,19 @@ function sine_fit(res, ω)
     return c[2] / c[1], sqrt(C[2, 2]) / c[1], c[3] / c[1], sqrt(C[3, 3]) / c[1]
 end
 
-# The first-order echo fraction per unit delay of the sin² shell, averaged over [a, b].
-function echo_fraction(a, b; r_in, Δ, nr = 200, nt = 200)
+# The first-order echo fraction per unit delay of the sin² shell after a flash uniform over
+# [0, δt], averaged over [a, b].
+function echo_fraction(a, b; r_in, Δ, δt, nr = 200, nt = 100, ns = 8)
     Ψ(τ, r) = 0.0 <= τ <= 2r ? 3 / (8r) * (1 + (1 - τ / r)^2) : 0.0
     s = 0.0
     for i in 1:nr
         r = r_in + (i - 0.5) / nr * Δ
         p = 2 * sin(π * (i - 0.5) / nr)^2
-        for j in 1:nt
-            s += p * Ψ(a + (j - 0.5) / nt * (b - a), r)
+        for j in 1:nt, k in 1:ns
+            s += p * Ψ(a + (j - 0.5) / nt * (b - a) - (k - 0.5) / ns * δt, r)
         end
     end
-    return s / (nr * nt)
+    return s / (nr * nt * ns)
 end
 
 # The torus deck's mesh with primitives symmetric under the rotation by π about z: the
@@ -237,16 +238,16 @@ end
         nb = 21
         r = mc_spectrum(prepare(src), 100_000; seed = 3, backend = :cpu, scattering = true,
                         max_scatt = 1, table = THOMSON, bias = Bias(1 / τr), medium = shell,
-                        step_frac = Δ / 8 / (r_in + Δ), window = (0.0, 1.0e-3),
+                        step_frac = Δ / 32 / (r_in + Δ), window = (0.0, 1.0e-3),
                         time_bins = (-0.05, 2.05, nb), nu_max = 1.0e12)
         @test abs(r.result.n_children / r.result.n_primary - 1) < 0.02     # b τ = 1 event per photon
-        @test r.result.w_unspawned < 0.005 * r.result.scatter_loss
+        @test r.result.w_unspawned < 1.0e-3 * r.result.scatter_loss
         _, L1, s1, _ = light_curve(r; order = 1)
         _, L0, _, _ = light_curve(r; order = 0)
         _, e = arrival_times(r)
         z = Float64[]
-        for k in 2:nb
-            f = τr * echo_fraction(e[k], e[k + 1]; r_in = r_in, Δ = Δ) * (e[k + 1] - e[k])
+        for k in 1:nb
+            f = τr * echo_fraction(e[k], e[k + 1]; r_in = r_in, Δ = Δ, δt = 1.0e-3) * (e[k + 1] - e[k])
             push!(z, (L1[k] / sum(L0) - f) / (s1[k] / sum(L0)))
         end
         @test maximum(abs, z) < 4.5 && 0.4 < sum(abs2, z) / length(z) < 1.8
