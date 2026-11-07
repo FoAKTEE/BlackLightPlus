@@ -93,7 +93,7 @@ structure. The adaptive tracer `trace_geodesic` is the one host-only solver.
 | Ray state | `const RayState{T} = SVector{8,T}`; `position(y)`, `momentum(y)`, `raystate(x, p)` |
 | Stencils | `primal(x)`; `corner_weights(f, n) -> (i0, d)`; `lerp8(c::NTuple{8}, d1, d2, d3)`, the one trilinear blend, association order fixed; `cr_weights`, `cr_axis`, `cr_sample` (Catmull-Rom); `loglinear_at(x, table, x0, dx, n)` |
 | Exact sum | 68 signed limbs of 31 bits per cell; `xsum_parts`, `xsum_add!(acc, x, I...)`, `xsum_atomic_add!(acc, x, I...)`, `xsum_round`, `xsum_zeros`, `xsum_round_all`, `XSUM_MAX_ADDENDS` |
-| RNG | `philox4x32`, `philox_rand`, `MCRng`; samplers `mc_uniform`, `mc_gauss`, `sample_direction`, `standard_gamma`, `chi_square`, each returning `(value, rng)`; `MCStreamLayout(n_primary, track_max, max_layer)`, `primary_rng(seed, gid)`, `child_rng(parent, event, layout)`, `stream_id`, `stream_layer` |
+| RNG | `philox4x32`, `philox_rand`, `MCRng`; samplers `mc_uniform`, `mc_gauss`, `sample_direction`, `standard_gamma`, `chi_square`, each returning `(value, rng)`; `MCStreamLayout(n_primary, max_events, max_layer)`, `widest_layout(n_primary, max_layer)`, `event_capacity(layout)`, `primary_rng(seed, gid)`, `run_rng(seed, k)`, `child_rng(parent, event, layout)`, `stream_id`, `stream_layer` |
 | Special | `bessel_i0`, `bessel_i1`, `bessel_k0`, `bessel_k1`, `bessel_k2` (A&S 9.8), `harmonic_bridge`, host `hypergeometric_2f1` |
 
 ### 3.2 Spacetime
@@ -220,18 +220,24 @@ march(mode, y0, prog)
 ```julia
 generate(zone::EmissionZone, tables::GenerationTables, rng) -> (Superphoton, rng)
 generate(sphere::UniformSphere, tables, rng)                 # uniform point, then the zone method
-GenerationTables(weights::WeightTable, dnmax[, int_jnu::IntJnuTable])
+GenerationTables(weights::WeightTable, dnmax[, emissivity::EmissivityTable])
+int_jnu(t::EmissivityTable, n_e, theta_e, B, nu)             # 4π n_e e² ν_c/c (√2π/27) F(K)
+zone_count(n_e, theta_e, B, dV, wgt, emis) -> (N_s, dnmax)   # trapezoid over the nodes
 
 rate_frame(provider) -> FluidFrame() | StaticFrame()         # StaticFrame for UniformSphere
 absorption_rate(state, p); absorption_rate(::StaticFrame, state, kcon)   # ν α_ν
 scattering_rate(table::HotcrossTable, state, p)              # ν n_e σ_h
 struct Bias{T}; b0::T; end; bias(b, nscatt)                  # max(1, b0 (n + 1)²)
+StateBias(b0, w_ref, b_max, split)                           # clamp(b0 A(Θₑ) w/w_ref, 1, b_max)
+event_bias(bias, nscatt, theta_e, w) -> (b, copies)
 Opacities(; params, table, bias = Bias(1.0), L_unit = 1.0, weight_min = MC_WEIGHT_MIN, max_scatt = 0)
 
-abstract type Sink end      # record!(sink, sph); spawn!(sink, child, rng, event); tally!(sink, sph, loss, spawned)
-may_scatter(provider, state); scatter_site(provider, st, x, params) -> (zone, ok)
+abstract type Sink end      # record!(sink, sph); child_stream(sink, rng, event) -> (rng, fits);
+                            # spawn!(sink, child, rng); tally!(sink, sph, ::MarchLedger)
+event_weight(w, b, dtau); next_event(u, lambda, dtau, rng) -> (u, frac, rng)
+scatter_site(provider, st, x, params) -> (zone, ok)
 FlatMarch(sphere; step_frac = SPHERE_STEP_FRAC, nmax = SPHERE_MAX_STEPS)
-CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS)
+CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS, plunge = true)
 track!(ctl, st, provider, opac, sph, rng, sink; absorb = Val(true), scatter = Val(false))
     -> (sph, recorded, rng)
 ```
@@ -242,14 +248,21 @@ track!(ctl, st, provider, opac, sph, rng, sink; absorb = Val(true), scatter = Va
   of `Transfer`; the provider supplies the plasma through `Matter.sample`; `absorb` and
   `scatter` are compile-time switches.
 - `rate_frame(provider)` selects the absorption rule; the two rules agree in exact
-  arithmetic on a null `k` and differ in rounding. Scattering is the biased
-  exponential-transform decision `scatter_event`; `may_scatter` (`state.valid`) and
-  `scatter_site` (the provider's sample) decide where and off what a photon scatters. The
-  sphere scatters on every step that accrues depth, the leaving step included, and always
-  kicks with its uniform plasma. A child's stream is `child_rng(rng, event, layout)`.
-- `bias` returns 1 unless `b0 (n + 1)²` exceeds 1, a NaN product included. Constants carry
-  no leading underscore. `fluid_tetrad` (imaging, e₍₃₎ along k) and `emission_tetrad`
-  (Monte Carlo, e₍₁₎ along b) are different physics and stay apart.
+  arithmetic on a null `k` and differ in rounding. The scattering events of a step are a
+  Poisson process of mean `b dτ_s` (`next_event`) at fractions drawn from the step's
+  depletion density, each child of weight `event_weight` (the exact scheme of
+  [Method](@ref "Monte Carlo spectral synthesis")); `scatter_site` (the provider's
+  sample at the event) decides off what a child is kicked, and an event at an invalid
+  site spawns nothing and is counted in the ledger. The sphere always kicks with its
+  uniform plasma. A child's kick and its march draw from `child_stream(sink, rng,
+  event)`, `child_rng(rng, event, layout)` of the ordinal `event` of its event along the
+  parent's march.
+- `bias` returns 1 unless `b0 (n + 1)²` exceeds 1, a NaN product included; `event_bias`
+  of a `StateBias` clamps `b0 A(Θₑ) w/w_ref` to `[1, b_max]`. A photon that may spawn no
+  more stops captured when a step moves it inward below `plunge_radius(st)` (the
+  innermost spherical photon orbit on Kerr, less `PLUNGE_MARGIN`). Constants carry no
+  leading underscore. `fluid_tetrad` (imaging, e₍₃₎ along k) and
+  `emission_tetrad` (Monte Carlo, e₍₁₎ along b) are different physics and stay apart.
 
 ## 4. Infrastructure tier
 
@@ -293,9 +306,12 @@ blend(sa::PlasmaPrimitives, sb::PlasmaPrimitives, w)          # the one time ble
   alpha_min)` onto an `ADMGrid`, `z4c_grid_spacetime`, `athenak_bin_snapshot(binfile;
   gamma)`. `write_npy(path, a)` writes `.npy` version 1.0.
 - `tables.jl` holds the threaded builders `load_hotcross`, `build_hotcross_table`,
-  `build_weight_table`, `build_zone_emission_table`, `zone_counts`, `build_int_jnu_table`
-  and `zone_int_jnu_tables`. Each threaded loop writes disjoint columns or merges exact
-  partial sums, so every table is independent of the thread count.
+  `build_weight_table`, `emission_sites` (the emission zones of a block mesh as compact
+  `ZoneSite` records, one randomly drawn owned cell per group of `stride³` cells) and
+  `zone_tables` (the weight table and the per-zone counts in two streaming passes over
+  the zones, the zone × frequency matrix never stored). Each threaded loop writes
+  disjoint slots or merges exact partial sums, so every table is independent of the
+  thread count.
 
 ### 4.2 Execution
 
@@ -434,7 +450,7 @@ struct Plan{S,Sg,P,M,T,Bg,H,L}
     horizon::H; escape::Float64; R_em::Float64; theta_o::Float64
     curve::Tuple{Vector{Float64},Vector{Float64}}
     lanes::L; queue::Vector{Int}; rescue::Vector{Int}
-    hotcross::Base.RefValue{Union{Nothing,HotcrossTable{Matrix{Float64}}}}   # memo of hotcross_table(plan)
+    hotcross::Base.RefValue{Union{Nothing,HotcrossTable{Matrix{Float64}}}}   # the process's table, at first use
 end
 ```
 
@@ -451,9 +467,9 @@ given, a permutation of the pixel indices validated by `queue_items` (for a movi
 `MixedLanes`. It throws `ArgumentError` for a spacetime that is not `Float64`, a geodesic
 lane the spacetime does not have, transfer or accumulator lanes other than `Float64`,
 `MixedLanes` off Kerr, and a `queue` that is not a permutation. A plan is immutable and
-backend-free; its one memo, `hotcross_table(plan)`, builds the Monte Carlo hot-cross table
-at the plan's first scattering run and keeps it, so later runs reuse the table and its
-device copies.
+backend-free; its one memo, `hotcross_table(plan)`, takes the process's Monte Carlo
+hot-cross table (built once, at the first scattering run of any plan) at the plan's
+first scattering run and keeps it, so every run reuses the table and its device copies.
 `prepare(sphere)` is the plan of the Monte Carlo sphere: `Minkowski()`, the sphere as
 matter in centimetres, `RunConfig()` and no parameter set; `output_type` and
 `imaging_program` reject such a plan.
@@ -542,21 +558,23 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   parameter set or a mass-scale tuple.
 
 `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max,
-spec_nu_min, spec_nu_max, n_esamp, n_ebins, tabulated, table, max_scatt, bias,
+spec_nu_min, spec_nu_max, n_esamp, n_ebins, table, max_scatt, bias, bias_max, split,
 absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` is the Monte
 Carlo product. The plan's matter selects the run. The sphere of `prepare(sphere)`
 marches straight lines (`FlatMarch`) and returns a `Spectrum`, or with `scattering =
 true` a `ScatterResult` of per-order spectra (`absorption` defaults to `false` there). A
 plasma grid on any spacetime (one snapshot, held fixed during transport) spreads the
-primaries over `emission_zones(plan; stride, r_emit_max, max_zones)` by their expected
-counts, marches geodesics (`CurvedMarch` with `C`, `escape`, `R_em`) and returns a
-`GRMHDSpectrumResult` of inclination bands. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
+primaries over `emission_zones(plan; stride, seed, r_emit_max, max_zones)` (every owned
+cell above the horizon at `stride = 1`) by their expected counts, marches geodesics
+(`CurvedMarch` with `C`, `escape`, `R_em`) and returns a `GRMHDSpectrumResult` of
+inclination bands and scattering orders with the weight and power ledger. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
 sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
 `ExactScalars`, and scattered children into the `ChildBuffer` of the cascade
 (`foreach_cascade!`): within each chunk of primaries the next generation tracks the
 children of the one before, up to `max_scatt` generations, and a generation whose buffer
 overflows is rerun at the counted capacity into scratch sums. The hot-cross table is the
-`table` given or `hotcross_table(plan)`. `gather!` follows the cascade and
+`table` given or `hotcross_table(plan)`; the importance bias is a `StateBias` of `b0 =
+bias` (1 by default), or the `Bias` or `StateBias` given. `gather!` follows the cascade and
 `Spectrum(bins)` rounds once per cell, so on one hardware the bins, the ledger and the
 children depend only on the plan,
 `Ns` and the keywords, whatever the executor, thread count, device count or chunking.
@@ -616,8 +634,8 @@ by function and product by product on the decks of `test/decks.jl`.
   ADM grid, a user metric and flat space (camera rays and exact-Kerr landings with their
   partials included); the `Data` samplers and readers, `decode` and `Analysis`; the
   analytic sources' scalars and validity; the transfer fits, tetrads and segment
-  operators; the Monte Carlo emissivities, hot cross section, generation, Compton kick and
-  sphere tracker with its children and streams. Stokes I images on every path: uniform
+  operators; the Monte Carlo emissivities `j_ν` and `α_ν`, hot cross section, emission
+  tetrad and Compton kick. Stokes I images on every path: uniform
   grid, native blocks, coordinate lists, the superposed binary, slow light on both
   providers, mixed lanes, the mass-scale ladder, the `:mass_scale` sensitivity image, the
   exact-Kerr maps, photon-ring layers, AMR mosaics with their level maps and ray counts,
@@ -637,6 +655,13 @@ by function and product by product on the decks of `test/decks.jl`.
   2e-11 of the image maximum even without FMA. BlackLightPlus's renders against the reference's
   two-phase CPU render, and the sensitivity derivatives, must agree within 1e-7 of the
   image maximum; their deviations are reported.
+- **The Monte Carlo estimator departs from the reference** where the reference's estimate
+  is biased or undersampled: the angle-integrated emissivity from the `F(K)` table, the
+  trapezoid counts, every owned cell a zone (or one drawn cell per group of `stride³`),
+  the Poisson events of a step with their exact child weights and points, the spawn at
+  every valid event site, the state bias and the ledger ([Method](@ref "Monte Carlo
+  spectral synthesis")). The Monte Carlo spectra, children and ledgers are therefore not
+  the reference's; the kernels listed above are.
 - **Exact sums.** Monte Carlo spectra are exact integer-limb sums: identical under 1, 3 and
   8 threads, several chunkings and pools of 1, 2, 3 and 5 host devices.
 
@@ -654,7 +679,7 @@ device comparisons of the `products`, `spectra` and `montecarlo` scripts run on 
 host devices; with `BLP_TEST_DEVICES=cuda` they run on the functional CUDA devices, the
 reference drivers and BlackLightPlus on the same device list, so an old-against-new comparison on
 the GPU itself is the same script. On the A100 the reference device drivers and BlackLightPlus are
-bitwise equal on every path, the Monte Carlo spectra included. A pool on the GPU against
+bitwise equal on every path but the Monte Carlo estimator above. A pool on the GPU against
 threads on the CPU is held at tolerance, not bitwise (`Decks.CROSS_HARDWARE`): the two
 targets contract floating-point operations differently: the images differ by 1e-13 to
 3e-10 of their maximum on the oracle and production decks, and the exact Monte Carlo sums
@@ -708,10 +733,10 @@ Every name of `names(BlackLightPlus)`. The keyword `backend` of a product defaul
 | `shadow` | `shadow(plan; backend)` | `NamedTuple` |
 | `sensitivity` | `sensitivity(plan, param::Symbol; backend)` | `NamedTuple` |
 | `variants` | `variants(plan, mass_scales; backend)` | `NamedTuple` |
-| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max, n_esamp, n_ebins, tabulated, table, max_scatt, bias, absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` | `Spectrum` (thin sphere), `ScatterResult` (scattering sphere), `GRMHDSpectrumResult` (grid) |
+| `mc_spectrum` | `mc_spectrum(plan, Ns; scattering = false, backend, bands, seed, nu_min, nu_max, n_esamp, n_ebins, table, max_scatt, bias, bias_max, split, absorption, capacity, C, escape, R_em, stride, r_emit_max, max_zones)` | `Spectrum` (thin sphere), `ScatterResult` (scattering sphere), `GRMHDSpectrumResult` (grid) |
 | `Image` | fields `I`, `Q`, `U`, `V` (`Matrix{Float64}`, `[iβ, iα]`), `plan`, `run` | result type |
 | `Trajectories` | fields `states`, `dls` (source → camera, `Float64`), `plan`, `run` | result type |
-| `Spectrum` | `Spectrum(bins::ExactBins; plan, run)`; fields `nu_min`, `nu_max`, `lnu_min`, `dlnu`, `n_ebins`, `n_bands`, `count`, `sumw`, `sumwE`, `dOmega`, `total_row`, `plan`, `run` | rounded spectrum (§4.2) |
+| `Spectrum` | `Spectrum(bins::ExactBins; plan, run)`; fields `nu_min`, `nu_max`, `lnu_min`, `dlnu`, `n_ebins`, `n_bands`, `count`, `sumw`, `sumwE`, `sumwE2`, `dOmega`, `total_row`, `plan`, `run` | rounded spectrum (§4.2) |
 | `ScatterResult` | fields `orders` (a `Spectrum` per scattering order), `total`, `max_scatt`, `n_primary`, `n_children`, `w_primary`, `w_children`, `w_first_order`, `scatter_loss`, `plan`, `run` | result type |
 | `GRMHDSpectrumResult` | fields `incl_deg`, `half_width_deg`, `dOmega`, `spectra` (one per band), `total`, `emitted_power`, `escaped_power`, `n_zones`, `n_gen`, `n_recorded`, `scattering`, `plan`, `run` | result type |
 | `write_npy` | `write_npy(path, a::AbstractMatrix{Float64})` | `path` |
@@ -772,13 +797,13 @@ comment or module docstring.
 | `physics/Transfer/march.jl` | The reverse (camera → source) transfer marches | `march` |
 | `physics/MonteCarlo/MonteCarlo.jl` | Monte Carlo Comptonization | includes, exports |
 | `physics/MonteCarlo/superphoton.jl` | The Monte Carlo packet | `Superphoton` |
-| `physics/MonteCarlo/emissivity.jl` | Emission-frame physics of superphoton generation | `j_nu`, `alpha_nu`, `emission_tetrad` |
+| `physics/MonteCarlo/emissivity.jl` | Emission-frame physics of superphoton generation | `j_nu`, `alpha_nu`, `EmissivityTable`, `int_jnu`, `emission_tetrad` |
 | `physics/MonteCarlo/hotcross.jl` | The thermally averaged Compton cross section | `HotcrossTable`, `alpha_inv_scatt` |
-| `physics/MonteCarlo/tables.jl` | Generation table records and lookups | `WeightTable`, `ZoneEmissionTable`, `IntJnuTable` |
+| `physics/MonteCarlo/tables.jl` | Generation table records and the per-zone count | `WeightTable`, `zone_count`, `mean_weight` |
 | `physics/MonteCarlo/generate.jl` | Superphoton generation from an emission zone | `GenerationTables`, `generate` |
 | `physics/MonteCarlo/scatter.jl` | The Compton kick | `scatter_superphoton` |
-| `physics/MonteCarlo/opacity.jl` | Opacity rates, the scattering bias, the opacity record | `rate_frame`, `Bias`, `Opacities` |
-| `physics/MonteCarlo/sinks.jl` | The sink protocol | `Sink`, `record!`, `spawn!`, `tally!` |
+| `physics/MonteCarlo/opacity.jl` | Opacity rates, the scattering biases, the opacity record | `rate_frame`, `Bias`, `StateBias`, `Opacities` |
+| `physics/MonteCarlo/sinks.jl` | The sink protocol and the march ledger | `Sink`, `record!`, `child_stream`, `spawn!`, `tally!`, `MarchLedger` |
 | `physics/MonteCarlo/track.jl` | The one superphoton tracker and its two march controls | `FlatMarch`, `CurvedMarch`, `track!` |
 | `infra/Data/Data.jl` | Containers and files | includes, exports |
 | `infra/Data/fluid_blocks.jl` | AthenaK meshblocks as a grid provider | `FluidBlocks`, `LeafTable`, `LevelHash`, `BlockScan` |
@@ -787,7 +812,7 @@ comment or module docstring.
 | `infra/Data/uniform_grid.jl` | The fluid resampled onto a uniform node grid | `UniformGrid`, `resample` |
 | `infra/Data/series.jl` | Slow light: series, two-frame windows, series provider | `SnapshotSeries`, `FrameWindow`, `SeriesProvider` |
 | `infra/Data/npy.jl` | NumPy `.npy` writer | `write_npy` |
-| `infra/Data/tables.jl` | Host builders of the Monte Carlo tables | `load_hotcross`, `build_weight_table`, … |
+| `infra/Data/tables.jl` | Host builders of the Monte Carlo tables and zones | `load_hotcross`, `emission_sites`, `zone_tables`, … |
 | `infra/Execution/Execution.jl` | Where programs run | includes, exports |
 | `infra/Execution/devices.jl` | Device handles and the device protocol | `HostDevice`, `CUDADevice`, `BackendUnavailable` |
 | `infra/Execution/pool.jl` | The device pool: lanes, shared queue, registry | `DevicePool` |

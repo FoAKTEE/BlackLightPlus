@@ -9,9 +9,13 @@ reference implementation live on the `blp` branch of the repository.
 ## The oracle
 
 The previous implementation is the reference: on identical decks the package reproduces
-its Stokes $I$ images on every path, its samplers, plasma decode, shadows and exact Monte
-Carlo sums bitwise on one hardware, and its $IQUV$ images, traces and torus Monte Carlo
-to round-off (bitwise under `julia -C generic`). On the A100 the reference device drivers
+its Stokes $I$ images on every path, its samplers, plasma decode, shadows and the Monte
+Carlo emissivities, hot cross section and Compton kick bitwise on one hardware, and its
+$IQUV$ images and traces to round-off (bitwise under `julia -C generic`). The Monte Carlo
+estimator departs from the reference's where that one is biased (the zones, the counts,
+the events of a step and their child weights; [Method](@ref "Monte Carlo spectral
+synthesis")), so the Monte Carlo spectra are validated against closed forms, against ray
+tracing and across biases instead. On the A100 the reference device drivers
 and the package agree bitwise, $IQUV$ included. Across hardware a GPU pool against CPU
 threads differs by the two targets' floating-point contraction: $10^{-14}$–$10^{-9}$ of the
 image maximum on the oracle decks, $10^{-12}$–$3\times10^{-10}$ on the production decks,

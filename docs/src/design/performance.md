@@ -58,7 +58,7 @@ capacity change the wall time and nothing else.
 | queue | cost order on Kerr, identity elsewhere | `prepare(cfg; queue = perm)` | the order pixels enter the queue; for a movie, `march_sort_order(vec(shadow(plan).steps))` of the previous frame |
 | cascade chunk | `cascade_chunk(exec, n)` | `foreach_cascade!(…; chunk)` | primaries per cascade chunk |
 | child slots | at least 4096, half the chunk | `mc_spectrum(…; capacity)` | first size of a generation's child buffer; overflow grows it and reruns |
-| hot-cross table | built once per plan | `mc_spectrum(…; table)` | `hotcross_table(plan)` memoises the table in the plan; a given table is used as is |
+| hot-cross table | built once per process | `mc_spectrum(…; table)` | `hotcross_table(plan)` takes the process's table at the plan's first use; a given table is used as is |
 | workgroup | backend's choice; 64 for IQUV imaging | `workgroupsize(prog)` | threads per block of the launch |
 | stack | backend's default; 32 KiB for the exact-Kerr program | `stack_bytes(prog)` | device stack per thread |
 
@@ -148,7 +148,7 @@ mechanism), *beyond* (BlackLightPlus has more than the reference), *not carried*
 |---|---|---|---|
 | Every scattering order inside each chunk; children on the device | `mc_gpu.jl` | `foreach_cascade!`, `cascade.jl` | same |
 | Overflow rerun at the exact size, per chunk and layer | `mc_gpu.jl` | per chunk and generation; on threads per photon | same |
-| Tables built once, uploaded concurrently | `mc_gpu.jl` | hot-cross table memoised in the plan; weight tables per call; uploads lazy per device | form |
+| Tables built once, uploaded concurrently | `mc_gpu.jl` | hot-cross and `F(K)` emissivity tables once per process; zone tables per call in two streaming threaded passes; uploads lazy per device | form |
 | Ancestry-keyed streams; exact accumulation | `rng.jl`, `exact_sum.jl` | `philox.jl`, `exactsum.jl`, `accumulators.jl` | same |
 | 64 ledger stripes | `mc_gpu.jl` | `LEDGER_STRIPES` | same |
 | Compton sampler behind a non-inlined call | `mc_gpu.jl` | inlined sampler | not carried (§4) |

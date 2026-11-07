@@ -389,31 +389,136 @@ packets carry covariant momentum and decay by Kirchhoff absorption along
 geodesics. Compton scattering uses the thermally averaged ("hot") Klein–Nishina
 cross section tabulated on a log-log $(\varepsilon,\Theta_e)$ grid, scattering
 electrons drawn from the relativistic Maxwellian by the
-[Canfield1987](@citet) sampler, exact Klein–Nishina/Thomson rest-frame
-kinematics, and the [Kahn1950](@citet) biased exponential-transform scatter
-trigger (unbiased by construction; bias only reduces variance). Spectra
+[Canfield1987](@citet) sampler and exact Klein–Nishina/Thomson rest-frame
+kinematics; the scattering events of a step follow the biased
+exponential transform [Kahn1950](@citet) in the exact form below. Spectra
 are binned in (exit angle, $\log\nu$) with grmonty normalization; the
-optically thin synchrotron sphere matches its closed form to a few percent
-per bin, and GRMHD spectra show the gravitationally redshifted synchrotron
-bump. On GPU, multi-order scattering is layered rather than recursive: the host
-relaunches once per scattering generation, and a launch whose child buffer
-overflows is rerun at the exact size, so no child is dropped. The march reads any
-spacetime through `proxy_distance`: the distance above the horizon proxy sets the
-step (grmonty's `stepsize`) and the capture, the radius the escape, so the same
-tracker runs on Kerr, on a binary at rest or in motion (the nearest hole at the
-photon's time) and on an ADM grid.
+optically thin synchrotron sphere matches its closed form within its per-bin
+standard errors, and GRMHD spectra show the gravitationally redshifted
+synchrotron bump. On GPU, multi-order scattering is layered rather than
+recursive: the host relaunches once per scattering generation, and a launch
+whose child buffer overflows is rerun at the exact size, so no child is dropped.
+The march reads any spacetime through `proxy_distance`: the distance above the
+horizon proxy sets the step (grmonty's `stepsize`) and the capture, the radius
+the escape, so the same tracker runs on Kerr, on a binary at rest or in motion
+(the nearest hole at the photon's time) and on an ADM grid.
+
+**The angle-integrated emissivity.** With $X=\nu/\nu_s$,
+$\nu_s=\tfrac29\nu_c\Theta_e^2\sin\theta$, $\nu_c=eB/2\pi m_ec$, the thermal fit of
+`thermal_synchrotron` is
+$j_\nu=(n_ee^2\nu_c/c)(\sqrt2\pi/27)\sin\theta\,G(X)$ with
+$G(X)=(X^{1/2}+2^{11/12}X^{1/6})^2e^{-X^{1/3}}$. It depends on $\nu$ and $\Theta_e$
+only through $K=\nu/(\tfrac29\nu_c\Theta_e^2)=X\sin\theta$, so
+
+```math
+\int j_\nu\,d\Omega=4\pi\!\int_0^{\pi/2}\! j_\nu\sin\theta\,d\theta
+=\frac{4\pi n_e e^2\nu_c}{c}\,\frac{\sqrt2\,\pi}{27}\,F(K),\qquad
+F(K)=\int_0^{\pi/2}\sin^2\theta\;G\!\left(\frac{K}{\sin\theta}\right)d\theta ,
+```
+
+exactly. `EmissivityTable` holds $\ln F$ and $d\ln F/d\ln K$ (the derivative under the
+integral) on 6,324 nodes, $\Delta\ln K\le0.02$ from $K=10^{-30}$ to $10^3$ and
+$\le0.005$ from $10^3$ to $3\times10^8$ (where the curvature of $\ln F$ grows as
+$K^{1/3}$), from a 2,048-interval Simpson rule; `int_jnu` interpolates by cubic Hermite
+polynomials, continues $\ln F$ along the first slope below the table ($F\propto K^{1/3}$)
+and returns 0 above it ($F<10^{-280}$). The table agrees with the 512-interval rule of
+`int_jnu_simpson` to $3\times10^{-9}$ and with an 8,192-interval rule to $7\times10^{-11}$
+over the whole range, and costs one logarithm and one exponential per evaluation. It is
+built once, when the package compiles, and generation reads the same function as the
+zone tables, so the frequency acceptance and its envelope stay consistent.
+
+**Zones, weights and counts.** A zone of proper volume $dV$ emits
+$d\dot N/d\ln\nu=(dV/h)\int j_\nu d\Omega$ photons per second per unit $\ln\nu$. The
+weight table $w_m=\sum_z\int j_\nu d\Omega(\nu_m)\,dV_z/(hN_s')$ on $n+1$ nodes over
+$[\nu_{\min},\nu_{\max}]$, $N_s'=N_s/\ln(\nu_{\max}/\nu_{\min})$, makes the generated
+density uniform in $\ln\nu$; zone $z$ receives
+$N_z=(dV_z/h)\,\Delta\ln\nu\sum_m c_m\int j_\nu d\Omega(\nu_m)/w_m$ primaries (rounded
+stochastically), with the trapezoid weights $c_0=c_n=\tfrac12$, $c_m=1$ inside. Then
+$\sum_zN_z=N_s'\Delta\ln\nu\sum_mc_m=N_s$: the expected number of primaries is the
+target, and the emitted power carries no excess of one end node. Both passes over the
+zones (the exact node sums of the weight table, then the counts) stream: the
+zone × frequency matrix is never stored. On a block mesh every cell centre that its
+block owns is a zone. A zone below the horizon proxy is dropped, since a photon emitted
+there is captured before its first step; this leaves every escaping estimate unchanged.
+For quick runs `stride = s` cuts each block into groups of $s^3$ cells and draws one of
+a group's $n_\mathrm{own}$ owned cells uniformly, on a stream of the seed, with the
+volume $n_\mathrm{own}\,\Delta V$ of the drawn cell: for any $f$,
+$\mathrm E\big[n_\mathrm{own}f(c)\Delta V(c)\big]=\sum_{c\in\text{owned}}f(c)\Delta V(c)$,
+so the strided zones are an unbiased quadrature of the stride-1 sum (a fixed cell per
+group is not: where the emissivity changes by decades within a group it moves the
+emission between radii).
+
+**Scattering within a step.** Over a step of absorption depth $a=\Delta\tau_a$ and
+scattering depth $s=\Delta\tau_s$ (trapezoid, rates uniform in the fraction $f$ of the
+step), $\Delta\tau=a+s$, a photon of weight $w$ scatters at $f$ with expected weight
+density $p(f)=w\,s\,e^{-\Delta\tau f}$ and leaves with $w\,e^{-\Delta\tau}$. The events of
+the step are a Poisson process of mean $bs$ for a bias $b\ge1$, at fractions drawn
+independently from $q(f)=\Delta\tau e^{-\Delta\tau f}/(1-e^{-\Delta\tau})$, each spawning a
+child of weight $W=w(1-e^{-\Delta\tau})/(b\Delta\tau)$. The expected child weight density
+is
+
+```math
+b s\cdot W\cdot q(f)=w\,s\,e^{-\Delta\tau f}=p(f)
+```
+
+for every $b$, $a$ and $s$, and $W\le w/b$. The parent decays deterministically by
+$e^{-\Delta\tau}$. The events are drawn as the points of a rate-$bs$ Poisson process on
+the CDF coordinate $u=(1-e^{-\Delta\tau f})/(1-e^{-\Delta\tau})\in[0,1)$, cumulated
+exponential gaps on the photon's stream, so a step without an event costs one uniform.
+The ledger of a march records, per step, the scattered weight
+$w s(1-e^{-\Delta\tau})/\Delta\tau$ (the expectation of the spawned weight) and the
+absorbed power $wEa(1-e^{-\Delta\tau})/\Delta\tau$; their sum with the final weight closes
+the photon's budget exactly. An event whose site is outside the plasma spawns nothing
+and its weight is counted (the trapezoid depth of a step that leaves the plasma), as is
+the scattered weight of the order `max_scatt`, which may not spawn.
+
+**The importance bias.** Let $b$ be any positive function of what is known before the
+step's draws: the photon (weight, energy, order, history) and the step's samples.
+Conditioned on that state, the expected child density is $p(f)$ whatever $b$, and the
+parent's weight does not depend on $b$ at all; by the tower property every expectation
+linear in the escaping photons, each bin of $\nu L_\nu$ included, is independent of the
+rule. The default `StateBias` is
+$b=\mathrm{clamp}(b_0A(\Theta_e)\,w/w_\mathrm{ref},1,b_\mathrm{max})$, with
+$A(\Theta_e)=1+4\Theta_e+16\Theta_e^2$ (the cold and hot limits of the mean energy gain
+$1+4\Theta_eK_3/K_2$ of one Thomson scattering, at most 15 % above it), $\Theta_e$ the
+larger end temperature of the step and $w_\mathrm{ref}$ the mean primary weight. A child
+then carries about $w_\mathrm{ref}/(b_0A)$ photons and the energy weight
+$w_\mathrm{ref}E/b_0$ whatever the gas that scattered it, so the rare scatterings of
+heavy seed photons off hot electrons, which feed the highest frequencies, are split into
+many light children rather than a few heavy ones; $b_\mathrm{max}$ bounds the events per
+step. With `split` $>1$, an event whose uncapped bias exceeds $b_\mathrm{max}$ spawns
+$m$ children of weight $W/m$ with independent kicks, which keeps the expected child
+density by linearity.
+
+**The estimator and its variance.** A bin collects
+$\nu L_\nu=(m_ec^2/\Delta\ln\nu)(4\pi/\Delta\Omega)\sum_jw_jE_j$. Its variance is estimated
+by $(m_ec^2/\Delta\ln\nu)^2(4\pi/\Delta\Omega)^2\sum_j(w_jE_j)^2$, the variance of a
+compound Poisson sum, accumulated exactly beside $\sum wE$ (`nuLnu_sigma`); the
+effective number of photons $N_\mathrm{eff}=(\sum wE)^2/\sum(wE)^2$ sets the relative
+error $N_\mathrm{eff}^{-1/2}$. Children of one parent that land in one bin are
+correlated, which this photon-level estimate does not see; seed-to-seed scatter checks
+it.
+
+**Photons certain to be captured.** On Kerr, the radial potential of a photon moving
+inward inside every spherical photon orbit has no root above the horizon
+[Teo2003, GrallaLupsasca2020NullGeodesics](@citep), so a photon that may spawn no more children stops, captured,
+once a step moves it inward below the prograde equatorial photon orbit less 0.02 M. No
+photon that would escape is stopped, and the bins are bitwise those of the full march.
 
 **Streams keyed by ancestry.** Randomness is the counter-based
 Philox4x32-10 generator [Salmon2011](@citep). Each photon's stream is named by
 its genealogy: a 128-bit identity
 $I=g+\sum_{j=1}^{k}e_j\,2^{G+(j-1)E}+k\,2^{124}$, with $g<2^G$ the primary's
-global index, $e_j<2^E$ the march step at which the layer-$j$ ancestor
-scattered, and $k\le15$ the scattering layer, carried in Philox key word 2 and
-counter words 2–4 (the draw index in counter word 1, the seed in key word 1).
-`MCStreamLayout` sizes $G$ from the primary count and $E$ from the step budget
-and rejects any run with $G+kE>124$, so distinct genealogies map to disjoint
-bit fields and hence distinct Philox inputs for every draw. A primary with
-$g<2^{32}$ has the stream `MCRng(seed, g)`. No stream depends on the thread,
+global index, $e_j<2^E$ the ordinal of the scattering event of the layer-$j$ ancestor
+along its parent's march, and $k\le15$ the scattering layer, carried in Philox key word
+2 and counter words 2–4 (the draw index in counter word 1, the seed in key word 1).
+`widest_layout` sizes $G$ from the primary count and gives the event field the widest
+width that fits, $E=\min(32,\lfloor(124-G)/k_{\max}\rfloor)$; an event beyond it spawns
+nothing and is counted. Distinct genealogies map to disjoint bit fields and hence
+distinct Philox inputs for every draw; identities with bit 123 set and $k=0$ name the
+host streams of a run (the cell drawn in a strided zone). A child's kick and its march
+draw from its own stream, so the parent's stream carries only its own events. A primary
+with $g<2^{32}$ has the stream `MCRng(seed, g)`. No stream depends on the thread,
 chunk, device or buffer slot that carries the photon.
 
 **Exact accumulation.** Spectrum bins and scattering diagnostics are summed

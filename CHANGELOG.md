@@ -7,6 +7,58 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `mc_spectrum` on a plasma grid emits from every cell centre its block owns by default
+  (`stride = 1`), above the horizon proxy; `stride = s` keeps one owned cell per group of
+  `s³`, drawn uniformly on a stream of the seed, with the group's owned volume, an
+  unbiased quadrature of the same emission. The fixed first cell of each group with the
+  whole group's volume moved emission between radii where the emissivity changes within
+  a group (on the AthenaK torus at stride 4, 70 % of the emitted power from
+  1.6–2.0 M and the escaping millimetre flux 20–27 % low).
+- The angle-integrated synchrotron emissivity is `4π n_e e² ν_c/c (√2π/27) F(K)`,
+  `K = ν/((2/9) ν_c Θₑ²)`, from the one-variable table `MonteCarlo.EmissivityTable`
+  (built when the package compiles; within 3e-9 of the former 512-interval quadrature,
+  now `int_jnu_simpson`). The zone tables (`Data.emission_sites`, `Data.zone_tables`)
+  are two streaming, threaded passes that never store the zone × frequency matrix: 21 s
+  on 32 threads for the 10,303,459 cells of the AthenaK torus snapshot, where the per-call
+  table took an hour and 33 GB.
+- The per-zone counts are the trapezoid rule over the weight nodes, so the expected
+  number of primaries is `Ns`; the counts and the emitted power were high by
+  `1/n_esamp` (+0.25 % at the default 400 intervals).
+- The scattering events of a step are a Poisson process of mean `b dτ_s` at points drawn
+  from the step's depletion, each child of weight `w (1 − e^{−Δτ})/(b Δτ)`: unbiased for
+  every bias with absorption on (the one child per step at the biased point was 14 % high
+  at `b dτ_s = 1` and 2.2 times high at 10 in steps thick to absorption), and no longer
+  capped at one child per step. A child kicks and marches on its own stream, named by the
+  ordinal of its event (`widest_layout`, `child_stream`); an event at a valid site spawns
+  even when the step leaves the plasma.
+- The default importance bias is `MonteCarlo.StateBias`,
+  `b = clamp(b0 A(Θₑ) w/w_ref, 1, bias_max)` with `A = 1 + 4Θₑ + 16Θₑ²` and `w_ref` the
+  mean primary weight, so a child carries the energy weight of a mean primary over `b0`
+  whatever the gas that scattered it; `bias = b0` sets its scale (1 by default),
+  `bias = Bias(b0)` is the constant bias `b0 (n + 1)²`, and `bias_max` and `split` are
+  new keywords. On the AthenaK torus at stride 1 and the same wall time, the summed
+  effective number of photons of the bins above 1e15 Hz is 34 times that of the constant
+  bias `b0 = 1e4` (the bins to 1e18 Hz hold 10³ and more each); a child's own bias is near
+  1, so the light scattered two and three times is sampled less. A number given as `bias`
+  now selects the state bias.
+- Every `Spectrum` carries `Σ (w E)²` per bin; `Execution.nuLnu_sigma` gives the standard
+  error and the effective number of photons of each bin.
+- `GRMHDSpectrumResult` holds the per-order spectra (`orders`, `max_scatt`) and the
+  ledger of `ScatterResult`; both carry the weight scattered in the steps that may spawn
+  (`scatter_loss`, `Δτ_s (1 − e^{−Δτ})/Δτ` of every step, so `w_children + w_unspawned`
+  estimates it with absorption on), in the steps of the last order
+  (`scatter_loss_final`), the weight of events that spawned nothing (`w_unspawned`), and
+  the emitted, escaped, absorbed, captured and dropped power. The `MonteCarlo.Sink`
+  protocol gains `child_stream`; `spawn!(sink, child, rng)` takes the child's stream and
+  `tally!(sink, sph, ::MarchLedger)` the march's ledger.
+- The tabulated generation (`tabulated`, `IntJnuTable`, `ZoneEmissionTable`,
+  `build_zone_emission_table`, `zone_counts`, `build_int_jnu_table`,
+  `zone_int_jnu_tables`) is gone: the exact acceptance costs one table lookup.
+- A photon that may spawn no more children stops, captured, once a step moves it inward
+  inside the innermost spherical photon orbit on Kerr (`Spacetime.plunge_radius`), and
+  the hot-cross table is built once per process; the bins are bitwise unchanged, and the
+  thin torus tracks 2.2 times as many photons per second.
+
 - `segment(::IQUV)` is exact in every case of the constant-coefficient transfer equation.
   At the dichroism-cone boundary |α_P| = α_I without rotation (or with ρ ∥ α) it takes the
   limit of the Landi Degl'Innocenti solution, in which the mode polarized against α̂ is
