@@ -42,6 +42,12 @@ const FIELDS = (:I, :Ib, :rs, :ts, :phis, :redshift_sign)
             q = render_analytic(p, disk; backend = exec)
             @test all(Decks.bits(getfield(q, f)) == Decks.bits(getfield(r, f)) for f in FIELDS)
         end
+        fast = render_analytic(p, disk; observables = false, backend = :cpu)
+        @test all(Decks.bits(getfield(fast, f)) == Decks.bits(getfield(r, f)) for f in (:I, :Ib, :rs, :redshift_sign))
+        @test all(all(isnan, m) for m in fast.ts) && all(all(isnan, m) for m in fast.phis)
+        fastp = render_analytic(p, disk; observables = false, backend = Decks.POOL_BACKEND)
+        @test Decks.CROSS_HARDWARE ? maximum(abs.(fastp.I .- fast.I)) <= 1e-9 * maximum(fast.I) :
+              Decks.bits(fastp.I) == Decks.bits(fast.I)
         one = render_analytic(p, disk; bands = (1,), backend = :cpu)
         @test Decks.bits(one.Ib[1]) == Decks.bits(r.Ib[2]) && one.bands == [1]
         far = render_analytic(p, disk; ro = 2000.0, backend = :cpu)

@@ -124,16 +124,16 @@ latitude (ordinary rays `cos²θs < u₊`; vortical rays the observer's hemisphe
 the horizon. `θ` is `θs` and `νθ` the sign of `p^θ` at emission, both of the original
 frame. ForwardDiff-generic.
 """
-@inline function surface_landing(prep, θs, m::Integer)
+@inline surface_landing(prep, θs, m::Integer) = surface_landing(prep, surface_terms(prep, θs), m)
+
+@inline function surface_landing(prep, st::NamedTuple, m::Integer)
     T = typeof(prep.sφ)
-    θs = float(θs)
-    c = prep.sθ * _surface_cos(θs)
-    s, reach = _source_terms(prep, c)
+    θs = st.θs
     νθn = (prep.pm_o > 0) == iseven(m) ? 1 : -1
-    Gθ, Gφ, Gt = _surface_angular(prep, s, m, νθn)
+    Gθ, Gφ, Gt = _surface_angular(prep, st.s, m, νθn)
     νθ = prep.sθ < 0 ? -νθn : νθn
     λo = prep.sφ * prep.λ
-    if !(reach && Gθ > 0 && Gθ <= prep.τtot)
+    if !(st.reach && Gθ > 0 && Gθ <= prep.τtot)
         return _landing(prep.rph, T(NaN), T(NaN), 1, false, λo, prep.η, θs, νθ)
     end
     rs, νr = _radius_at(prep, Gθ)
@@ -143,6 +143,23 @@ frame. ForwardDiff-generic.
     φs = -prep.sφ * (I_φ + prep.λ * Gφ) - T(π) / 2     # P3 Eq. 11 (sφ: a < 0 mirror)
     ts = -(I_t + prep.a * prep.a * Gt)                 # P3 Eq. 12
     return _landing(rs, φs, ts, νr, valid, λo, prep.η, θs, νθ)
+end
+
+"""
+    surface_terms(prep, θs) -> NamedTuple
+
+The surface-dependent, order-independent terms of the screen point of `prep` on the surface
+of polar angle `θs`: `θs`, the normalised `c = cos θs`, the source antiderivatives `s`,
+`reach` (the ray attains the latitude) and `m0` (0 when the first leg of the traced ray meets
+the surface). [`surface_landing`](@ref) and [`image_crossings`](@ref) accept it in place of
+`θs`, so the elliptic source terms are evaluated once per screen point and surface.
+"""
+@inline function surface_terms(prep, θs)
+    θs = float(θs)
+    c = prep.sθ * _surface_cos(θs)
+    s, reach = _source_terms(prep, c)
+    m0 = first(_surface_angular(prep, s, 0, prep.pm_o > 0 ? 1 : -1)) > 0 ? 0 : 1
+    return (θs = θs, c = c, s = s, reach = reach, m0 = m0)
 end
 
 """
@@ -158,12 +175,12 @@ the pole: the pair `{n, n + 1}` when `n ≡ m₀ (mod 2)`, none otherwise. Vorti
 the pair `{2n + m₀, 2n + m₀ + 1}`. Crossings whose landing is not valid are kept; the
 caller tests `valid`.
 """
-@inline function image_crossings(prep, θs, n::Integer)
-    c = prep.sθ * _surface_cos(float(θs))
-    s, reach = _source_terms(prep, c)
-    reach || return (0, 0, 0)
-    m0 = first(_surface_angular(prep, s, 0, prep.pm_o > 0 ? 1 : -1)) > 0 ? 0 : 1
+@inline image_crossings(prep, θs, n::Integer) = image_crossings(prep, surface_terms(prep, θs), n)
+
+@inline function image_crossings(prep, st::NamedTuple, n::Integer)
+    st.reach || return (0, 0, 0)
+    m0 = st.m0
     prep.vortical && return (2n + m0, 2n + m0 + 1, 2)
-    abs(c) <= abs(prep.co) && return (n + m0, 0, 1)
+    abs(st.c) <= abs(prep.co) && return (n + m0, 0, 1)
     return iseven(n - m0) ? (n, n + 1, 2) : (0, 0, 0)
 end

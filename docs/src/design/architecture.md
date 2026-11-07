@@ -517,6 +517,7 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   `SurfaceProgram(gen, theta_o, a, ro, materials, bands)` (in `analytic_surfaces.jl`)
   does the same for a tuple of surface materials at any polar angle into the `7K` outputs
   of `surface_outputs(K, n)` (Stokes I, Q, U and the first valid landing per band).
+  `RadiusProgram` is its intensity-only form (`radius_prep`, `band_radius`; `3K` outputs).
   `SpotProgram` and `FrameProgram` (in `analytic_movie.jl`) split a movie into the landings
   of every pixel once and one pass per frame.
 - The Monte Carlo programs `MCPrimary(source, transport, sink, seed)` and
@@ -539,7 +540,7 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
 | `render(plan; path::Trajectories, backend)` | `Image` | threads only |
 | `render(plan, coords; backend)` | `4 × n` `Matrix{Float64}`, rows I, Q, U, V | no `MixedLanes` |
 | `render_amr(plan; block = 16, max_level = 2, refine, backend)` | `(image, levels, nrays)` | no `MixedLanes`; `resolution % block == 0` |
-| `render_analytic(plan, disk; bands = (0, 1, 2), ro, backend)` | `(I, Ib, rs, ts, phis, redshift_sign, bands, plan, run)` | Kerr plan with the disk's spin |
+| `render_analytic(plan, disk; bands = (0, 1, 2), ro, observables, backend)` | `(I, Ib, rs, ts, phis, redshift_sign, bands, plan, run)` | Kerr plan with the disk's spin |
 | `photon_ring_layers(plan, disk; bands, dx, box, npts, ro, fudge, backend)` | `(I, Ib, masks, grid, N, box, dx, dxs, points, bands, plan, run)` | Kerr plan with the disk's spin |
 | `trace(plan; backend, adaptive = false)` | `Trajectories` | no `MixedLanes`; `adaptive` on threads only |
 | `shadow(plan; backend)` | `(fate, steps, null_error, radius, final, plan, run)` | no `MixedLanes` |

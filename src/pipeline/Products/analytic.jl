@@ -69,6 +69,42 @@ end
 
 stack_bytes(::AnalyticProgram) = 32 * 1024
 
+"""
+    RadiusProgram(gen, theta_o, a, ro, disk, bands)
+
+The intensity-only program of a steady axisymmetric disk, beside [`AnalyticProgram`](@ref):
+`radius_prep` and `band_radius` (no azimuth or time integrals), writing the band intensity,
+landing radius and emitted radial sign quantity-major into `3K` outputs; the intensity and
+radius equal those of `AnalyticProgram` bit for bit.
+"""
+struct RadiusProgram{G,D,B} <: Function
+    gen::G
+    theta_o::Float64
+    a::Float64
+    ro::Float64
+    disk::D
+    bands::B
+end
+Adapt.@adapt_structure RadiusProgram
+
+@inline function paint_radius(prep, n, disk)
+    l = band_radius(prep, n)
+    l.valid || return (0.0, NaN, NaN)
+    return (Float64(intensity(disk, l)), Float64(l.r), Float64(l.νr))
+end
+
+function (p::RadiusProgram)(item, i, outs::Vararg{Any,N}) where {N}
+    N == 3 * length(p.bands) ||
+        throw(ArgumentError("RadiusProgram: $N outputs for $(length(p.bands)) bands"))
+    α, β = image_coords(p.gen, item)
+    prep = radius_prep(α, β, p.theta_o, p.a; ro = p.ro)
+    maps = map(n -> paint_radius(prep, n, p.disk), p.bands)
+    store_all!(outs, i, (map(m -> m[1], maps)..., map(m -> m[2], maps)..., map(m -> m[3], maps)...))
+    return nothing
+end
+
+stack_bytes(::RadiusProgram) = 32 * 1024
+
 # The spin of the analytic tracer: the plan's Kerr spin, which the disk must share.
 function analytic_spin(plan::Plan, disk::EquatorialDisk)
     st = plan.spacetime
@@ -97,24 +133,34 @@ disk's spin; its matter is not used. Returns `(I, Ib, rs, ts, phis, redshift_sig
 bands, plan, run)`: per band `b` the image `Ib[b]` and the landing radius `rs[b]`, time
 of flight `ts[b]`, azimuth `phis[b]` and emitted radial-velocity sign
 `redshift_sign[b]` (each `npix × npix`, NaN off the disk; `Ib` zero there), and
-`I = Σ_b Ib[b]`, summed in band order. The pixels are visited in their index order, so
+`I = Σ_b Ib[b]`, summed in band order. `observables = false` skips the azimuth and time
+integrals ([`RadiusProgram`](@ref), about four times faster): `ts` and `phis` are NaN, the
+other maps are bit for bit those of the full program. The pixels are visited in their index order, so
 every chunk of the executor writes a contiguous run of each map.
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
 function render_analytic(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
-                         ro::Real = plan.camera.d, backend = nothing)
+                         ro::Real = plan.camera.d, observables::Bool = true, backend = nothing)
     t0 = time_ns()
     exec = resolve(backend)
     bt = map(Int, Tuple(bands))
-    prog = AnalyticProgram(plan.pixels, plan.theta_o, analytic_spin(plan, disk), Float64(ro),
-                           disk, bt)
+    a = analytic_spin(plan, disk)
     N = npixels(plan)
     K = length(bt)
-    outs = analytic_outputs(K, N)
-    foreach_item!(exec, prog, 1:N; outs)
     n = plan.camera.npix
-    Ib, rs, ts, phis, rsgn = ntuple(q -> band_maps(outs, q, K, n), ANALYTIC_QUANTITIES)
+    if observables
+        outs = analytic_outputs(K, N)
+        foreach_item!(exec, AnalyticProgram(plan.pixels, plan.theta_o, a, Float64(ro), disk, bt),
+                      1:N; outs)
+        Ib, rs, ts, phis, rsgn = ntuple(q -> band_maps(outs, q, K, n), ANALYTIC_QUANTITIES)
+    else
+        outs = ntuple(_ -> Vector{Float64}(undef, N), 3K)
+        foreach_item!(exec, RadiusProgram(plan.pixels, plan.theta_o, a, Float64(ro), disk, bt),
+                      1:N; outs)
+        Ib, rs, rsgn = ntuple(q -> band_maps(outs, q, K, n), 3)
+        ts = [fill(NaN, n, n) for _ in 1:K]; phis = [fill(NaN, n, n) for _ in 1:K]
+    end
     I = zeros(n, n)
     for b in 1:K
         I .+= Ib[b]
@@ -132,7 +178,7 @@ The layered photon-ring image of the equatorial disk on the Bardeen screen: the 
 spacing `dx` over `[-box, box]²` of lensing band 0 (`band_grid`), and for each order
 `n ∈ bands` its own lensing band (`lensing_band(a, θo, n; npts, box)`), whose in-band grid
 points alone are traced to their order-`n` landing and painted with the disk
-intensity ([`AnalyticProgram`](@ref) over the band's points). Confining each order to
+intensity ([`RadiusProgram`](@ref) over the band's points). Confining each order to
 its band keeps the `n ≥ 1` rings thin. `dx` may be a tuple with one spacing per band (AART's
 per-order resolution): a band with a finer spacing than the first is traced on its own grid
 (`band_points`, enumerated within the band, so the cost follows the band's area) and its
@@ -168,15 +214,15 @@ function photon_ring_layers(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
         if dxs[b] == dx0
             _, bmask, _ = band_grid(band...; dx = dx0, box = kw.box)
             items = findall(vec(bmask))
-            outs = analytic_outputs(1, N * N)
-            prog = AnalyticProgram(gen, θo, a, Float64(ro), disk, (Int(n),))
+            outs = ntuple(_ -> Vector{Float64}(undef, N * N), 3)
+            prog = RadiusProgram(gen, θo, a, Float64(ro), disk, (Int(n),))
             foreach_item!(exec, prog, items; outs)
             paint_band!(Ib[b], masks[b], outs[1], outs[2], items, N)
         else
             pts = band_points(band...; dx = dxs[b], box = kw.box)
             m = length(pts.α)
-            outs = analytic_outputs(1, m)
-            prog = AnalyticProgram(CoordList(pts.α, pts.β), θo, a, Float64(ro), disk, (Int(n),))
+            outs = ntuple(_ -> Vector{Float64}(undef, m), 3)
+            prog = RadiusProgram(CoordList(pts.α, pts.β), θo, a, Float64(ro), disk, (Int(n),))
             foreach_item!(exec, prog, 1:m; outs)
             points[b] = (α = pts.α, β = pts.β, I = outs[1])
             bin_band!(Ib[b], masks[b], pts, outs[1], pts.N, N)

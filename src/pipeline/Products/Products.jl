@@ -13,8 +13,10 @@ using ..Numerics: position, momentum, MCRng, MCStreamLayout, widest_layout, mc_u
                   ME, CL
 using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step, march_step,
                    inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance,
-                   surface_prep, surface_landing, image_crossings, ks_radius, raise_index,
-                   surface_crossing, EquatorialPlane, ClassicalRK4, march_step_compensated
+                   radius_prep, band_radius,
+                   surface_prep, surface_landing, image_crossings, surface_terms,
+                   ks_radius, raise_index, surface_crossing, EquatorialPlane, ClassicalRK4,
+                   march_step_compensated
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
                 sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
                 polarized_emission, EquatorialSpot, spot_amplitude, equatorial_disk_intensity
@@ -51,7 +53,7 @@ include("montecarlo.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
-       SurfaceProgram, surface_outputs, SpotProgram, FrameProgram, CrossingProgram,
+       SurfaceProgram, surface_outputs, SpotProgram, FrameProgram, RadiusProgram, CrossingProgram,
        crossing_outputs,
        StoredPathProgram, AdaptiveTraceProgram, TRACE_WINDOW, imaging_program, shadow_program,
        trace_outputs

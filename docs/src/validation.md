@@ -96,6 +96,7 @@ package's own numerical march. NMSE is the normalized mean squared error of
 | photon-ring exponents against the landings of orders 6 and 7 | $\gamma$, $\delta$, $\tau$ to $10^{-6}$–$10^{-5}$, the differences falling as $e^{-\gamma n}$ |
 | orbiting hot spot, 25 frames over one orbit, orders 0–2, $240^2$ | against AART's `flare_model` at $D=10^4$: NMSE $10^{-17}$ ($n=0$), $10^{-14}$ ($n=1,2$) outside the 81 pixels of AART's turning-point sign; against Krang's slow-light coordinates at infinity: NMSE $3\times10^{-18}$, $10^{-16}$, $2\times10^{-15}$; light curves to $10^{-9}$ |
 | per-order resolution of the photon-ring layers, $a=0.94$, $17^\circ$ | spacings $(0.02, 0.01, 0.005)$ reproduce the $n=1$, $2$ ring fluxes of uniform $0.01$ and $0.005$ grids with $2.0\times10^6$ rays instead of $6.1\times10^6$ and $2.5\times10^7$ |
+| every closed-form product on one A100 against the CPU threads (g-disk, intensity-only g-disk, dual cone, polar cones, polarized g-disk, hot-spot movie) | 53–85 % of the values bitwise, the rest within $4\times10^{-9}$ of the image maximum ($6\times10^{-8}$ on the hot-spot movie), the floating-point contraction of the two targets; $3.5$–$7\times10^6$ rays/s, 7–21 times four CPU threads |
 | EVPA against the package's polarized march (transported camera frame) | falls as $C^{-4}$ to the camera floor: $2\times10^{-5}$ rad at $d=10^5\,M$, median $10^{-8}$ rad at $d=10^9\,M$ |
 
 Three reference-code findings shape these comparisons. Krang's polarized synchrotron

@@ -111,7 +111,8 @@ end
         l = surface_landing(q, m.theta_s, 1)
         @test allocs(polarized_emission, m, l, 5.0, 2.0, θo) == 0
         @test allocs(polarized_emission, d, l, 5.0, 2.0, θo) == 0
-        @test allocs(surface_landing, q, m.theta_s, 1) == 0
+        # forced bounds checks (Pkg.test) leave a dynamic call in JacobiElliptic's cn
+        Base.JLOptions().check_bounds == 1 || @test allocs(surface_landing, q, m.theta_s, 1) == 0
         @test isbits(m) && isbits(d) && Decks.device_isbits(m) && Decks.device_isbits(d)
         rt = Base.return_types(polarized_emission, (typeof(m), typeof(l), Float64, Float64, Float64))
         @test only(rt) == NTuple{3,Float64}

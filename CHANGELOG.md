@@ -7,6 +7,12 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `render_analytic(plan, disk; observables = false)` runs `Products.RadiusProgram`
+  (`Spacetime.radius_prep`, `band_radius`): the landing radius without the azimuth and time
+  integrals, the intensity, radius and radial sign bit for bit those of the full path, about
+  four times faster on the CPU; `photon_ring_layers` uses it. `Spacetime.surface_terms`
+  evaluates the source terms of a surface once per screen point, which `SurfaceProgram`
+  shares across orders.
 - `photon_ring_layers(...; dx = (dx0, dx1, dx2, …))` takes one spacing per band (AART's
   per-order resolution): a band finer than the first is traced on its own grid, enumerated
   within the band by `Analysis.band_points` (the in-band nodes of `band_grid`, row by row from

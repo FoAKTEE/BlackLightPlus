@@ -6,7 +6,7 @@ using Test, BlackLightPlus, StaticArrays, ForwardDiff
 using BlackLightPlus.Spacetime: KerrSchildCartesian, PlaneParallelCamera, CameraFrame, camera_ray, ks_radius,
                      horizon_radius, trace_geodesic, conserved_quantities, radial_roots,
                      angular_turning_points, analytic_angular_integrals, pixel_prep, band_landing,
-                     Landing, critical_curve, kerr_horizon
+                     Landing, critical_curve, kerr_horizon, radius_prep, band_radius
 
 landing(α, β, θo, a, n; ro = 1000.0) = band_landing(pixel_prep(α, β, θo, a; ro = ro), n)
 
@@ -196,5 +196,21 @@ end
         # a neighbouring ray with r4 outside the horizon keeps its images
         q = pixel_prep(-4.0, 0.03, θo, a; ro = 1e15)
         @test band_landing(q, 0).valid
+    end
+    @testset "radius-only path == band_landing, bit for bit" begin
+        nb = 0
+        for a in (0.94, -0.5, 0.99), inc in (17.0, 80.0, 120.0), ro in (1e3, Inf)
+            θo = deg2rad(inc)
+            for α in range(-9.7, 9.3; length = 17), β in range(-9.9, 9.1; length = 17)
+                p = pixel_prep(α, β, θo, a; ro = ro); q = radius_prep(α, β, θo, a; ro = ro)
+                for n in 0:3
+                    l = band_landing(p, n); r = band_radius(q, n)
+                    @test (l.r, l.νr, l.valid, l.λ, l.η, l.νθ) === (r.r, r.νr, r.valid, r.λ, r.η, r.νθ)
+                    @test isnan(r.φ) && isnan(r.t)
+                    nb += l.valid
+                end
+            end
+        end
+        @test nb > 3000
     end
 end

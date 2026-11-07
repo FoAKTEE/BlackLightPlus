@@ -383,21 +383,7 @@ mirror. ForwardDiff-generic.
     # νθ = sign(β)(−1)^m of the normalised frame, flipped back through the equator mirror
     νθ = (prep.ang.pm_o > 0) == iseven(n + prep.ang.Hβ) ? 1 : -1
     νθ = prep.sθ < 0 ? -νθ : νθ
-    r1, r2, r3, r4 = prep.roots
-    local rs, νr
-    if prep.is_case2
-        r31 = r3 - r1; r41 = r4 - r1; r42 = r4 - r2
-        sn2 = JacobiElliptic.sn(real(sqrt(r31 * r42)) * Gθ / 2 - prep.Fr, prep.kr)^2
-        rs = real((r4 * r31 - r3 * r41 * sn2) / (r31 - r41 * sn2))
-        νr = Gθ > prep.τturn ? -1 : 1
-    else
-        r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
-        A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
-        cn3 = JacobiElliptic.cn(sqrt(A * B) * Gθ - prep.Fr, prep.kr)
-        r1r = real(r1); r2r = real(r2)
-        rs = ((A * r1r - B * r2r) - (A * r1r + B * r2r) * cn3) / ((A - B) - (A + B) * cn3)
-        νr = 1
-    end
+    rs, νr = _equatorial_radius(prep, Gθ)
     # sn/cn are periodic: a Gθ beyond the Mino budget aliases to a ghost radius.
     valid = isfinite(rs) && rs > prep.rph && Gθ <= prep.τtot
     I_r, I_φ, I_t = _radial_from_parts(rs, prep.roots, prep.a, prep.λ, prep.η,
@@ -405,6 +391,107 @@ mirror. ForwardDiff-generic.
     φs = -prep.sφ * (I_φ + prep.λ * Gφ) - T(π) / 2     # P3 Eq. 11 (sφ: a < 0 mirror)
     ts = -(I_t + prep.a * prep.a * Gt)                 # P3 Eq. 12
     return _landing(rs, φs, ts, νr, valid, prep.sφ * prep.λ, prep.η, θeq, νθ)
+end
+
+# The source radius at Mino time Gθ and its emitted radial sign: the sn inversion of case II
+# (P1 Eqs. 30–32), the cn inversion of case III (P2 Eqs. B57–B75).
+@inline function _equatorial_radius(prep, Gθ)
+    r1, r2, r3, r4 = prep.roots
+    if prep.is_case2
+        r31 = r3 - r1; r41 = r4 - r1; r42 = r4 - r2
+        sn2 = JacobiElliptic.sn(real(sqrt(r31 * r42)) * Gθ / 2 - prep.Fr, prep.kr)^2
+        return real((r4 * r31 - r3 * r41 * sn2) / (r31 - r41 * sn2)), Gθ > prep.τturn ? -1 : 1
+    else
+        r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
+        A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
+        cn3 = JacobiElliptic.cn(sqrt(A * B) * Gθ - prep.Fr, prep.kr)
+        r1r = real(r1); r2r = real(r2)
+        return ((A * r1r - B * r2r) - (A * r1r + B * r2r) * cn3) / ((A - B) - (A + B) * cn3), 1
+    end
+end
+
+"""
+    radius_prep(α, β, θo, a; ro = 1000) -> NamedTuple
+
+The part of [`pixel_prep`](@ref) that the landing radius needs: the normalised domain, the
+roots, the angular terms `K`, `F_o` of the polar Mino time and the radial modulus, observer
+amplitude, turning time and budget; no azimuth or time integrals. Consumed by
+[`band_radius`](@ref), whose radius, radial sign and validity equal those of
+`band_landing` bit for bit.
+"""
+@inline function radius_prep(α::T, β, θo, a; ro = T(1000)) where {T}
+    sθ = cos(θo) < 0 ? -one(T) : one(T)
+    if sθ < 0
+        θo = oftype(θo, π) - θo
+        β = -β
+    end
+    sφ = a < 0 ? -one(T) : one(T)
+    α = sφ * α
+    a = float(abs(a))
+    a < 1e-6 && (a = oftype(a, 1e-6))
+    rph = kerr_horizon(a)
+    λ, η = conserved_quantities(α, β, θo, a)
+    z = zero(λ + η + a + β + ro)
+    if η < 0
+        c = Complex(z)
+        return (vortical = true, sφ = sφ, sθ = sθ, a = a, rph = rph, λ = λ, η = η,
+                is_case2 = true, roots = (c, c, c, c),
+                ang = (K = z, F_o = z, Hβ = 0, pm_o = z, den = z), kr = z, Fr = z,
+                τturn = z, τtot = z)
+    end
+    roots = radial_roots(λ, η, a)
+    u_p, u_m = angular_turning_points(λ, η, a)
+    k = u_p / u_m
+    arg = asin(clamp(cos(θo) / sqrt(u_p), -one(T), one(T)))
+    ang = (K = JacobiElliptic.K(k), F_o = JacobiElliptic.F(arg, k), Hβ = β >= 0 ? 1 : 0,
+           pm_o = β >= 0 ? one(T) : -one(T), den = abs(a) * sqrt(-u_m))
+    r1, r2, r3, r4 = roots
+    is_case2 = _isreal_c(r4, T(1e-10) * max(abs(r4), one(T)))
+    if is_case2
+        r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
+        kr = real(r32 * r41 / (r31 * r42))
+        x2 = isinf(ro) ? real(sqrt(r31 / r41)) : real(sqrt((ro - r4) * r31 / ((ro - r3) * r41)))
+        Fr = JacobiElliptic.F(asin(clamp(x2, -one(T), one(T))), kr)
+        τturn = 2 / real(sqrt(r31 * r42)) * Fr
+        τtot = τturn + _tau_max_case2(r1, r2, r3, r4, T)
+        if real(r4) <= rph
+            x2h = real(sqrt((rph - r4) * r31 / ((rph - r3) * r41)))
+            τtot = τturn - 2 / real(sqrt(r31 * r42)) *
+                   JacobiElliptic.F(asin(clamp(x2h, -one(T), one(T))), kr)
+        end
+    else
+        r21 = r2 - r1; r31 = r3 - r1; r32 = r3 - r2; r41 = r4 - r1; r42 = r4 - r2
+        A = real(sqrt(r32 * r42)); B = real(sqrt(r31 * r41))
+        kr = ((A + B)^2 - real(r21)^2) / (4 * A * B)
+        Fr = JacobiElliptic.F(acos(clamp(_x3_obs(ro, A, B, r1, r2), -one(T), one(T))), kr)
+        τturn = zero(kr)
+        τtot = _mino_to_horizon_case3(ro, r1, r2, r3, r4, rph)
+    end
+    return (vortical = false, sφ = sφ, sθ = sθ, a = a, rph = rph, λ = λ, η = η,
+            is_case2 = is_case2, roots = roots, ang = ang, kr = kr, Fr = Fr, τturn = τturn,
+            τtot = τtot)
+end
+
+"""
+    band_radius(prep, n::Integer) -> Landing
+
+The equatorial landing radius of order `n` from `prep = radius_prep(…)`: `r`, `νr`, `valid`,
+`λ`, `η`, `θ = π/2` and `νθ` as from `band_landing`, with `φ` and `t` NaN. The cost of an
+image of a steady axisymmetric source, which reads only these.
+"""
+@inline function band_radius(prep, n::Integer)
+    T = typeof(prep.sφ)
+    θeq = T(π) / 2
+    λo = prep.sφ * prep.λ
+    prep.vortical && return _landing(prep.rph, T(NaN), T(NaN), 1, false, λo, prep.η, θeq, 1)
+    g = prep.ang
+    m = n + g.Hβ
+    Gθ = (2 * m * g.K - g.pm_o * g.F_o) / g.den
+    νθ = (g.pm_o > 0) == iseven(m) ? 1 : -1
+    νθ = prep.sθ < 0 ? -νθ : νθ
+    rs, νr = _equatorial_radius(prep, Gθ)
+    valid = isfinite(rs) && rs > prep.rph && Gθ <= prep.τtot
+    return _landing(rs, T(NaN), T(NaN), νr, valid, λo, prep.η, θeq, νθ)
 end
 
 # Photon-shell (λ, η) at shell radius r (P2 Eqs. 38–39), with Δ(r) = `kerr_delta`.

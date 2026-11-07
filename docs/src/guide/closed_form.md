@@ -18,6 +18,9 @@ disk = render_analytic(plan, EquatorialDisk(0.94); bands = (0, 1, 2), backend = 
 disk.Ib[2]          # the n = 1 photon ring alone
 ```
 
+`observables = false` skips the landing azimuth and time (NaN maps), which a steady
+axisymmetric disk does not read, for about a fourth of the cost.
+
 ## Polarized surfaces and cones
 
 `SynchrotronSurface` is a thin surface of constant polar angle emitting power-law

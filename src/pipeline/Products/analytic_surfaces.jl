@@ -6,9 +6,9 @@
     SurfaceProgram(gen, theta_o, a, ro, materials, bands)
 
 One screen point of the exact-Kerr surface tracer: `(α, β) = image_coords(gen, item)`,
-`prep = surface_prep(α, β, theta_o, a; ro)` once, then for each order `n` of `bands`
-(an `NTuple{K,Int}`) and each material of the tuple `materials` the crossings
-`image_crossings(prep, surface_angle(material), n)`, their landings and
+`prep = surface_prep(α, β, theta_o, a; ro)` and each material's `surface_terms` once, then
+for each order `n` of `bands` (an `NTuple{K,Int}`) and each material of the tuple
+`materials` the crossings `image_crossings`, their landings and
 `polarized_emission(material, landing, α, β, theta_o)`, summed. Called as
 `prog(item, i, outs...)` with the `7K` vectors of [`surface_outputs`](@ref):
 `outs[(q - 1) K + b][i]` is quantity `q` of band `b`, the quantities being Stokes I, Q,
@@ -37,9 +37,9 @@ quantity-major.
 surface_outputs(K::Integer, n::Integer) =
     ntuple(_ -> Vector{Float64}(undef, n), SURFACE_QUANTITIES * K)
 
-# Stokes and the first valid landing of one material's crossings of order n.
-@inline function paint_material(prep, mat, n, α, β, θo)
-    θs = surface_angle(mat)
+# Stokes and the first valid landing of one material's crossings of order n; `θs` is the
+# material's `surface_terms`.
+@inline function paint_material(prep, mat, θs, n, α, β, θo)
     m1, m2, k = image_crossings(prep, θs, n)
     S = (0.0, 0.0, 0.0)
     L = (NaN, NaN, NaN, NaN)
@@ -57,16 +57,17 @@ surface_outputs(K::Integer, n::Integer) =
     return (S[1] + S2[1], S[2] + S2[2], S[3] + S2[3]), L
 end
 
-# One band: the materials' Stokes summed in tuple order, the first valid landing.
-@inline function paint_band(prep, mats::Tuple, n, α, β, θo)
-    S, L = paint_material(prep, first(mats), n, α, β, θo)
-    return _paint_rest(prep, Base.tail(mats), n, α, β, θo, S, L)
+# One band: the materials' Stokes summed in tuple order, the first valid landing; `terms`
+# holds each material's `surface_terms`.
+@inline function paint_band(prep, mats::Tuple, terms::Tuple, n, α, β, θo)
+    S, L = paint_material(prep, first(mats), first(terms), n, α, β, θo)
+    return _paint_rest(prep, Base.tail(mats), Base.tail(terms), n, α, β, θo, S, L)
 end
-@inline _paint_rest(prep, ::Tuple{}, n, α, β, θo, S, L) = (S..., L...)
-@inline function _paint_rest(prep, mats::Tuple, n, α, β, θo, S, L)
-    S2, L2 = paint_material(prep, first(mats), n, α, β, θo)
+@inline _paint_rest(prep, ::Tuple{}, ::Tuple{}, n, α, β, θo, S, L) = (S..., L...)
+@inline function _paint_rest(prep, mats::Tuple, terms::Tuple, n, α, β, θo, S, L)
+    S2, L2 = paint_material(prep, first(mats), first(terms), n, α, β, θo)
     L = isnan(L[1]) ? L2 : L
-    return _paint_rest(prep, Base.tail(mats), n, α, β, θo,
+    return _paint_rest(prep, Base.tail(mats), Base.tail(terms), n, α, β, θo,
                        (S[1] + S2[1], S[2] + S2[2], S[3] + S2[3]), L)
 end
 
@@ -80,7 +81,8 @@ function (p::SurfaceProgram)(item, i, outs::Vararg{Any,N}) where {N}
         throw(ArgumentError("SurfaceProgram: $N outputs for $(length(p.bands)) bands"))
     α, β = image_coords(p.gen, item)
     prep = surface_prep(α, β, p.theta_o, p.a; ro = p.ro)
-    maps = map(n -> paint_band(prep, p.materials, n, α, β, p.theta_o), p.bands)
+    terms = map(m -> surface_terms(prep, surface_angle(m)), p.materials)
+    maps = map(n -> paint_band(prep, p.materials, terms, n, α, β, p.theta_o), p.bands)
     store_all!(outs, i, surface_major(maps))
     return nothing
 end
