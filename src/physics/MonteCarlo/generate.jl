@@ -35,9 +35,12 @@ by rejection against `jmax`, the azimuth uniformly; the momentum is null in the
 emission tetrad of the zone and covariant in coordinates, the weight is `w(ν)`, the
 optical depths and scattering count are zero, and the emission diagnostics are the
 zone's `x¹`, `x²`, `n_e`, `Θₑ`, `B`. Each rejection loop stops after `REJECT_MAX_ITER`
-proposals with the last one. Pure and allocation-free.
+proposals with the last one. Pure and allocation-free. Compiled as a function of its own,
+never inlined, so every program that generates from a zone runs the same machine code, bit
+for bit, whatever surrounds the call (its dot products are `@simd` reductions, whose
+rounding follows the inlining context).
 """
-@inline function generate(zone::EmissionZone, tables::GenerationTables, rng::MCRng)
+@noinline function generate(zone::EmissionZone, tables::GenerationTables, rng::MCRng)
     wgt = tables.weights
     dnmax = tables.dnmax
     emis = tables.emissivity
