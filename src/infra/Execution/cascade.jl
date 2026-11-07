@@ -52,9 +52,10 @@ counts twice nor changes the compiled program. On a `PoolExecutor` each lane pas
 chunk's range to the device without staging, keeps the chunk's children in two
 lane-resident buffers swapped per generation and reads back only their count; a
 generation that can spawn records into lane scratch, added into the device's totals once
-its children fit, and an overflowing generation runs again in full. A device generation
-starts with `capacity` child slots (`nothing`: at least `MIN_CHILD_SLOTS`, half the
-chunk). On a `ThreadedExecutor` worker tasks pull the chunks and run their items in
+its children fit, and an overflowing generation runs again in full with slots for its
+counted children and an eighth more. A device generation starts with `capacity` child
+slots (`nothing`: at least `MIN_CHILD_SLOTS`, half the chunk and the slots the lane grew to
+in its earlier chunks of the call). On a `ThreadedExecutor` worker tasks pull the chunks and run their items in
 order into the shared totals, with two task-local buffers of `capacity` slots
 (`nothing`: `MIN_CHILD_SLOTS`) that grow; only an item whose children overflow runs
 again.
@@ -269,9 +270,10 @@ function run_cascade!(exec::PoolExecutor, c::Cascade, chunks)
     twins = (ProgramTwins(pool, c.primary), ProgramTwins(pool, c.layer))
     spawned = Threads.Atomic{Int}(0)
     fresh = fill(true, length(pool.lanes))
+    caps = zeros(Int, length(pool.lanes))
     try
         foreach_chunk(pool, chunks) do lane, r
-            Threads.atomic_add!(spawned, chunk_generations!(lane, c, twins, r, fresh))
+            Threads.atomic_add!(spawned, chunk_generations!(lane, c, twins, r, fresh, caps))
         end
     finally
         foreach(s -> s === nothing || empty!(s), (c.slot, child_slot(c.layer)))
@@ -281,15 +283,20 @@ end
 
 # Every generation of the primaries `r` on `lane`; returns the children spawned. `fresh`
 # marks the lanes whose scratch arrays have not been zeroed in this call; a scratch array
-# allocated for a generation is zeroed before its launch as well.
-function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}, fresh)
+# allocated for a generation is zeroed before its launch as well. `caps[k]` carries the
+# child slots lane `k` grew to in its earlier chunks of the call, so that only its first
+# chunk runs an overflowing generation twice; an overflow grows the slots to the counted
+# children and an eighth more.
+function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}, fresh,
+                            caps::Vector{Int})
     if c.slot === nothing
         launch!(lane, c.primary, program_twin!(twins[1], lane), r, length(r), ())
         return 0
     end
     T = eltype(c.slot.photons)
-    cap = c.capacity === nothing ? max(MIN_CHILD_SLOTS, cld(length(r), 2)) : Int(c.capacity)
     k = findfirst(l -> l === lane, twins[1].pool.lanes)
+    cap = c.capacity === nothing ? max(MIN_CHILD_SLOTS, cld(length(r), 2), caps[k]) :
+          Int(c.capacity)
     ctr = lane_buffer(lane, (:cascade, :count), Int64, 1)
     spawned = 0
     m = 0
@@ -316,7 +323,8 @@ function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}
             n_out = get_count(lane, ctr)
             if !final && n_out > slots
                 drain_lane!(lane, swap.pairs, false)
-                slots = cap = n_out
+                slots = cap = n_out + n_out ÷ 8
+                c.capacity === nothing && (caps[k] = cap)
                 continue
             end
             final || drain_lane!(lane, swap.pairs, true)

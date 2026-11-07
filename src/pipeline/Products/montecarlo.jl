@@ -235,9 +235,10 @@ cm for a plan without parameters). Binning: `bands` (`PolarBands(6)` for the sph
 Scattering runs as a cascade over chunks of primaries ([`Execution.foreach_cascade!`](@ref)):
 within a chunk, each layer's children are tracked by the next layer, up to `max_scatt`
 layers, and stay on the worker that runs the chunk. On devices a layer starts with a
-child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries);
-a layer whose buffer overflows is rerun into zeroed scratch accumulators with a buffer of
-the counted size, so no child is lost or counted twice. On threads each task's two child
+child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries
+and the slots the device grew to in the run's earlier chunks); a layer whose buffer
+overflows is rerun into zeroed scratch accumulators with a buffer for the counted
+children, so no child is lost or counted twice. On threads each task's two child
 buffers start with `capacity` slots (`nothing`: 4096) and grow; a photon whose children
 overflow is rerun the same way.
 
