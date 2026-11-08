@@ -1,6 +1,6 @@
 # The exact-Kerr surface products: polarized band maps and their sums, several surfaces in
 # one image, the g-disk through the surface path, the observer at infinity, executor
-# independence and the argument checks.
+# independence, the band sums bitwise their broadcast forms and the argument checks.
 using Test, BlackLightPlus, StaticArrays
 using BlackLightPlus.Plans: CameraConfig, RunConfig, prepare
 using BlackLightPlus.Products: render_analytic, SurfaceProgram, surface_outputs
@@ -29,6 +29,10 @@ agree(a, b) = Decks.CROSS_HARDWARE ?
     @test r.bands == [0, 1] && length(r.Ib) == 2 && r.plan === p
     @test all(size(m) == (16, 16) for f in SFIELDS[4:end] for m in getfield(r, f))
     @test r.I == r.Ib[1] + r.Ib[2] && r.Q == r.Qb[1] + r.Qb[2] && r.U == r.Ub[1] + r.Ub[2]
+    bsum(maps) = (I = zero(maps[1]); for m in maps; I .+= m; end; I)
+    @test all(Decks.bits(getfield(r, f)) == Decks.bits(bsum(getfield(r, g)))
+              for (f, g) in ((:I, :Ib), (:Q, :Qb), (:U, :Ub)))
+    @test r.I !== r.Q && r.Q !== r.U && all(getfield(r, f) isa Matrix{Float64} for f in (:I, :Q, :U))
     @test count(>(0), r.Ib[1]) > 100
     @test all(sqrt.(r.Qb[1] .^ 2 .+ r.Ub[1] .^ 2) .<= r.Ib[1] .* (1 + 1e-12) .+ 1e-300)
     # a pixel: the band sum of both cones' crossings

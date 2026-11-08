@@ -100,10 +100,9 @@ function analytic_movie(plan::Plan, spot::EquatorialSpot; times, bands = (0, 1, 
     n = plan.camera.npix
     ts = collect(Float64, times)
     frames = Array{Float64}(undef, n, n, length(ts))
-    buf = Vector{Float64}(undef, N)
     for (k, t) in enumerate(ts)
-        foreach_item!(exec, FrameProgram(A, X, Y, TS, spot.profile, t), 1:N; outs = (buf,))
-        frames[:, :, k] .= reshape(buf, n, n)
+        foreach_item!(exec, FrameProgram(A, X, Y, TS, spot.profile, t), 1:N;
+                      outs = (view(frames, :, :, k),))
     end
     dpix = plan.camera.fov / n
     lc = [sum(view(frames, :, :, k)) * dpix^2 for k in eachindex(ts)]

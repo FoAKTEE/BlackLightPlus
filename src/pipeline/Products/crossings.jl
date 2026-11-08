@@ -145,10 +145,7 @@ function render_crossings(plan::Plan, disk::EquatorialDisk; orders = (0, 1, 2), 
     shape(v) = coords === nothing ? reshape(v, plan.camera.npix, plan.camera.npix) : v
     q(qq) = [shape(outs[(qq - 1) * K + b]) for b in 1:K]
     Ib, rs, ts, phis, rsgn = q(1), q(2), q(3), q(4), q(5)
-    I = zero(Ib[1])
-    for b in 1:K
-        I .+= Ib[b]
-    end
+    I, = band_sums((Ib,), size(Ib[1]))
     return (I = I, Ib = Ib, rs = rs, ts = ts, phis = phis, redshift_sign = rsgn,
             steps = shape(outs[end]), orders = collect(ot), plan = plan,
             run = run_record(exec, plan, t0))

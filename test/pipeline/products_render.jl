@@ -1,8 +1,8 @@
 # Full-frame and coordinate renders: the image record and its run metadata, a grid
 # provider and an analytic source on both executors, coordinate lists against the pixel
 # grid, the mixed-lane partition and the rescue of the critical curve, the two-phase
-# render along stored trajectories, the fast-light limit of a frame window, and the
-# polarized image of an analytic torus.
+# render along stored trajectories, the fast-light limit of a frame window, the polarized
+# image of an analytic torus, and the image planes bitwise their broadcast forms.
 using Test, BlackLightPlus, StaticArrays
 using BlackLightPlus.Plans: CameraConfig, PlasmaConfig, RunConfig, Lanes, MixedLanes, prepare
 using BlackLightPlus.Products: Image, render, trace
@@ -45,6 +45,14 @@ same(a, b) = Decks.bits(planes(a)) == Decks.bits(planes(b))
         @test w.I isa Matrix{Float64} && size(w.I) == (12, 12) && pointer(w.I) == pointer(v)
         @test all(iszero, w.Q) && w.Q !== w.U && w.U !== w.V
         @test Image(p, Float32.(v), img.run).I == reshape(Float64.(Float32.(v)), 12, 12)
+        @test all(Decks.bits(m) == Decks.bits(zeros(12, 12)) for m in (w.Q, w.U, w.V))
+        # a Stokes vector per pixel: the four planes, each its component's comprehension
+        s = [SVector(x, -x, x / 3, -0.0) for x in vcat(v[1:140], [NaN, -0.0, Inf, -NaN])]
+        z = Image(p, s, img.run)
+        @test all(Decks.bits(m) == Decks.bits(reshape([o[k] for o in s], 12, 12))
+                  for (k, m) in enumerate(planes(z)))
+        @test all(m isa Matrix{Float64} for m in planes(z)) && length(unique(objectid, planes(z))) == 4
+        @test_throws DimensionMismatch Image(p, s[1:143], img.run)
     end
 
     @testset "$name on both executors" for (name, matter) in (("torus grid provider", Decks.TorusDeck()),

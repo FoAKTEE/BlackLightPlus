@@ -116,7 +116,7 @@ regularized emission time). Returns `(I, Q, U, Ib, Qb, Ub, rs, ts, phis, redshif
 bands, plan, run)`: per band `b` the Stokes maps `Ib[b]`, `Qb[b]`, `Ub[b]` (Q > 0 north,
 U > 0 north-east, north the projected spin axis, east `−α`) and the landing radius, time,
 azimuth and radial sign of the first valid crossing (NaN without one), each
-`npix × npix`, and the band sums `I`, `Q`, `U` in band order.
+`npix × npix`, and the band sums `I`, `Q`, `U` in band order from zero.
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
@@ -134,10 +134,7 @@ function render_analytic(plan::Plan, materials::Union{SurfaceMaterial,Tuple};
     foreach_item!(exec, prog, 1:N; outs)
     n = plan.camera.npix
     Ib, Qb, Ub, rs, ts, phis, rsgn = ntuple(q -> band_maps(outs, q, K, n), SURFACE_QUANTITIES)
-    I = zeros(n, n); Q = zeros(n, n); U = zeros(n, n)
-    for b in 1:K
-        I .+= Ib[b]; Q .+= Qb[b]; U .+= Ub[b]
-    end
+    I, Q, U = band_sums((Ib, Qb, Ub), (n, n))
     return (I = I, Q = Q, U = U, Ib = Ib, Qb = Qb, Ub = Ub, rs = rs, ts = ts, phis = phis,
             redshift_sign = rsgn, bands = collect(bt), plan = plan,
             run = run_record(exec, plan, t0))

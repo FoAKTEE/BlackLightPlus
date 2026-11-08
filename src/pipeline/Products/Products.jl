@@ -48,6 +48,7 @@ using ..Analysis: refinement_indicator, needs_refinement, lensing_band, band_gri
 const PACKAGE_VERSION = pkgversion(@__MODULE__)
 
 include("programs.jl")
+include("epilogues.jl")
 include("image.jl")
 include("trace.jl")
 include("sensitivity.jl")
@@ -68,6 +69,8 @@ export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, Analy
        crossing_outputs,
        StoredPathProgram, AdaptiveTraceProgram, TRACE_WINDOW, imaging_program, shadow_program,
        trace_outputs
+# host epilogues
+export BandSum, Fill, Split
 # Monte Carlo programs
 export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER_STRIPES,
        mc_ledger, ledger_sum, ledger_count, TimeProfile, profile_area, clip_profile, sample_time,

@@ -1,6 +1,7 @@
 # The marched image of the equatorial disk: the precise march against the closed form on
 # the two comparison configurations, the convergence of the production integrator with
-# the camera at infinity, executor independence, the program layout and the checks.
+# the camera at infinity, executor independence, the program layout, the band sum bitwise
+# its broadcast form, and the checks.
 using Test, BlackLightPlus, StaticArrays, Statistics
 using BlackLightPlus.Plans: CameraConfig, RunConfig, prepare, precise, PRECISE_C, PRECISE_CAPTURE
 using BlackLightPlus.Products: render_crossings, render_analytic, CrossingProgram, crossing_outputs
@@ -16,6 +17,8 @@ const Decks = Main.Decks
 relerr(m, c) = [abs.(m.Ib[b] .- c.Ib[b]) ./ maximum(c.Ib[b]) for b in 1:3]
 agree(a, b) = Decks.CROSS_HARDWARE ? maximum(abs.(a .- b)) <= 1.0e-9 * maximum(abs.(b)) :
               Decks.bits(a) == Decks.bits(b)
+# the band sum as a broadcast, band after band from zero
+bsum(maps) = (I = zero(maps[1]); for m in maps; I .+= m; end; I)
 
 @testset "marched disk" begin
     @testset "the precise march is the closed form" begin
@@ -70,6 +73,9 @@ agree(a, b) = Decks.CROSS_HARDWARE ? maximum(abs.(a .- b)) <= 1.0e-9 * maximum(a
         d = EquatorialDisk(0.9)
         r = render_crossings(p, d; backend = :cpu)
         @test r.I == r.Ib[1] + r.Ib[2] + r.Ib[3] && r.orders == [0, 1, 2] && size(r.steps) == (8, 8)
+        @test r.I isa Matrix{Float64} && Decks.bits(r.I) == Decks.bits(bsum(r.Ib))
+        c = render_crossings(p, d; coords = [(4.0, 3.0), (-5.5, 1.0), (2.0, -6.5)], backend = :cpu)
+        @test c.I isa Vector{Float64} && length(c.I) == 3 && Decks.bits(c.I) == Decks.bits(bsum(c.Ib))
         for exec in (PoolExecutor(Decks.devices(2); chunk = 5),)
             q = render_crossings(p, d; backend = exec)
             @test all(agree(q.Ib[b], r.Ib[b]) && agree(q.steps, r.steps) for b in 1:3)

@@ -22,16 +22,21 @@ struct Image{P,R}
 end
 
 # A Stokes I output vector becomes the I plane itself when it is a `Vector{Float64}`.
+# The zero planes and the split of a Stokes vector into planes run on Julia threads.
 function Image(plan::Plan, out::AbstractVector{<:Real}, run)
     n = plan.camera.npix
-    return Image(reshape(convert(Vector{Float64}, out), n, n), zeros(n, n), zeros(n, n),
-                 zeros(n, n), plan, run)
+    I = reshape(convert(Vector{Float64}, out), n, n)
+    Q, U, V = filled_maps(0.0, 3, (n, n))
+    return Image(I, Q, U, V, plan, run)
 end
 
 function Image(plan::Plan, out::AbstractVector{<:SVector{4}}, run)
     n = plan.camera.npix
-    I, Q, U, V = ntuple(k -> reshape([o[k] for o in out], n, n), 4)
-    return Image(I, Q, U, V, plan, run)
+    length(out) == n * n ||
+        throw(DimensionMismatch("Image: $(length(out)) pixels for a $n × $n camera"))
+    planes = ntuple(_ -> Matrix{Float64}(undef, n, n), 4)
+    host_epilogue!(Split(out), planes, length(out))
+    return Image(planes..., plan, run)
 end
 
 Base.show(io::IO, img::Image) =

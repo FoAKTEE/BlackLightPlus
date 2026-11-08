@@ -1,11 +1,12 @@
-# Closed-form movies: frames equal to the landing-wise intensity, the light curve, fast and
-# slow light, the observer at infinity, executor independence and the argument checks.
+# Closed-form movies: frames equal to the landing-wise intensity, the frames written in
+# place bitwise the frame program's own output, the light curve, fast and slow light, the
+# observer at infinity, executor independence and the argument checks.
 using Test, BlackLightPlus
 using BlackLightPlus.Plans: CameraConfig, RunConfig, prepare
-using BlackLightPlus.Products: analytic_movie
+using BlackLightPlus.Products: analytic_movie, FrameProgram
 using BlackLightPlus.Spacetime: KerrSchildCartesian, pixel_prep, band_landing
 using BlackLightPlus.Matter: EquatorialDisk, EquatorialSpot, intensity
-using BlackLightPlus.Execution: PoolExecutor
+using BlackLightPlus.Execution: PoolExecutor, ThreadedExecutor, foreach_item!
 const Decks = Main.Decks
 
 @testset "exact-Kerr movies" begin
@@ -30,6 +31,15 @@ const Decks = Main.Decks
         @test m.frames[k + (j - 1) * 576] == v
     end
     @test m.lightcurve ≈ [sum(m.frames[:, :, j]) * (24.0 / 24)^2 for j in 1:3]
+    # each frame is the frame program's output over the landing maps, bit for bit
+    vecs(ms) = Tuple(vec.(ms))
+    for (j, t) in enumerate(times)
+        buf = Vector{Float64}(undef, 576)
+        foreach_item!(ThreadedExecutor(), FrameProgram(vecs(m.A), vecs(m.x), vecs(m.y), vecs(m.ts),
+                                                       spot.profile, t), 1:576; outs = (buf,))
+        @test Decks.bits(m.frames[:, :, j]) == Decks.bits(buf)
+    end
+    @test Decks.bits(m.lightcurve) == Decks.bits([sum(view(m.frames, :, :, j)) * (24.0 / 24)^2 for j in 1:3])
     @test count(>(0), m.frames) > 50
     @test length(unique(round.(m.lightcurve; sigdigits = 6))) == 3       # the spot moves
     fast = analytic_movie(p, spot; times = times, bands = (0, 1), ro = 1e4, slow = false, backend = :cpu)

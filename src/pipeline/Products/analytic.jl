@@ -133,7 +133,7 @@ disk's spin; its matter is not used. Returns `(I, Ib, rs, ts, phis, redshift_sig
 bands, plan, run)`: per band `b` the image `Ib[b]` and the landing radius `rs[b]`, time
 of flight `ts[b]`, azimuth `phis[b]` and emitted radial-velocity sign
 `redshift_sign[b]` (each `npix × npix`, NaN off the disk; `Ib` zero there), and
-`I = Σ_b Ib[b]`, summed in band order. `observables = false` skips the azimuth and time
+`I = Σ_b Ib[b]`, summed in band order from zero. `observables = false` skips the azimuth and time
 integrals ([`RadiusProgram`](@ref), about four times faster): `ts` and `phis` are NaN, the
 other maps are bit for bit those of the full program. The pixels are visited in their index order, so
 every chunk of the executor writes a contiguous run of each map.
@@ -159,12 +159,10 @@ function render_analytic(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
         foreach_item!(exec, RadiusProgram(plan.pixels, plan.theta_o, a, Float64(ro), disk, bt),
                       1:N; outs)
         Ib, rs, rsgn = ntuple(q -> band_maps(outs, q, K, n), 3)
-        ts = [fill(NaN, n, n) for _ in 1:K]; phis = [fill(NaN, n, n) for _ in 1:K]
+        nan = filled_maps(NaN, 2K, (n, n))
+        ts, phis = nan[1:K], nan[K+1:2K]
     end
-    I = zeros(n, n)
-    for b in 1:K
-        I .+= Ib[b]
-    end
+    I, = band_sums((Ib,), (n, n))
     return (I = I, Ib = Ib, rs = rs, ts = ts, phis = phis, redshift_sign = rsgn,
             bands = collect(bt), plan = plan, run = run_record(exec, plan, t0))
 end
