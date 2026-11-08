@@ -1,8 +1,9 @@
 # The sink protocol: where a tracked superphoton's products go. `track!` hands each
-# escaped photon to `record!`, each scattered child to `spawn!` on the stream that
-# `child_stream` names for its event, and the photon's ledger to `tally!`. Device sinks
-# write through atomics; the accumulators that implement them for both executors are
-# `Execution.ExactBins`, `Execution.ExactScalars` and `Execution.ChildBuffer`.
+# escaped photon to `record!`, each scattering event that spawns to `branch!` with the
+# stream that `child_stream` names for it (the default kicks the child and hands it to
+# `spawn!`), and the photon's ledger to `tally!`. Device sinks write through atomics; the
+# accumulators that implement them for both executors are `Execution.ExactBins`,
+# `Execution.ExactScalars` and `Execution.ChildBuffer`.
 
 """
     Sink
@@ -11,8 +12,9 @@ Receiver of the products of [`track!`](@ref). A sink implements `record!(sink, s
 (an escaped photon), `child_stream(sink, rng, event)` (the stream of a scattering
 event's child) and `spawn!(sink, child, rng)` (a scattered child on its stream), and
 may implement `tally!(sink, sph, ledger)` (the [`MarchLedger`](@ref) of one tracked
-photon; the default ignores it). A sink used inside a kernel is `isbits` after
-`Adapt.adapt` and writes only through atomics.
+photon; the default ignores it) and `branch!(sink, ev, rng)` (a scattering event that
+spawns; the default kicks its child and hands it to `spawn!`). A sink used inside a
+kernel is `isbits` after `Adapt.adapt` and writes only through atomics.
 """
 abstract type Sink end
 
@@ -42,12 +44,28 @@ event advanced past the draws of its kick.
 """
 function spawn! end
 
+"""
+    branch!(sink::Sink, ev::ScatterEvent, rng::MCRng) -> nothing
+
+Receive the scattering event `ev` of a march step that spawns a child, with the child's
+stream `rng` from [`child_stream`](@ref) before any draw. The default runs the kick
+inside the march, `child, rng = kick(ev, rng)`, and hands the child to
+`spawn!(sink, child, rng)`.
+"""
+@inline function branch!(sink::Sink, ev, rng)
+    child, crng = kick(ev, rng)
+    spawn!(sink, child, crng)
+    return nothing
+end
+
 "Outcomes of a march in a [`MarchLedger`](@ref): recorded, captured by the horizon, ended by the step limit."
 const ESCAPED_MARCH = 1
 "See [`ESCAPED_MARCH`](@ref)."
 const CAPTURED_MARCH = 2
 "See [`ESCAPED_MARCH`](@ref)."
 const DROPPED_MARCH = 3
+"The outcome field of a [`MarchState`](@ref) whose march has not stopped."
+const LIVE_MARCH = 0
 
 """
     MarchLedger

@@ -6,7 +6,8 @@
 # and stops plunging photons without changing the bins; the torus deck over Kerr gives
 # null seeds inside emitting zones, conserves energy without scattering, peaks in the
 # synchrotron band and grows a Compton tail with scattering, identically under every
-# executor.
+# executor; the march cut into segments of any length is one march, and every spawning
+# event reaches the sink's `branch!`.
 using Test, BlackLightPlus
 using StaticArrays
 using LinearAlgebra: dot, norm
@@ -19,7 +20,10 @@ using BlackLightPlus.MonteCarlo: Superphoton, FlatMarch, CurvedMarch, Opacities,
                       VectorSink, track!, escaped, captured, plunging, escape_direction,
                       alpha_nu, generate, GenerationTables, zone_nsuperphotons, event_weight,
                       next_event, bias, event_bias, amplification, HotcrossTable, NW, NT,
-                      ESCAPED_MARCH, CAPTURED_MARCH, DROPPED_MARCH, SPHERE_STEP_FRAC
+                      ESCAPED_MARCH, CAPTURED_MARCH, DROPPED_MARCH, LIVE_MARCH, SPHERE_STEP_FRAC,
+                      CURVED_MAX_STEPS,
+                      March, MarchState, march_open, march_steps, march_close, ScatterEvent,
+                      kick, MarchLedger
 using BlackLightPlus.Transfer: march_control, geodesic_step, max_steps
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, nuLnu_total, scalar, addends
 using BlackLightPlus.Data: build_weight_table, load_hotcross, emission_sites
@@ -46,6 +50,71 @@ function BlackLightPlus.MonteCarlo.spawn!(s::StepSink, child, rng)
     return nothing
 end
 BlackLightPlus.MonteCarlo.record!(::StepSink, sph) = nothing
+
+# A sink that counts the `branch!` calls of a march and otherwise forwards to a VectorSink;
+# its branch kicks the child and hands it to the VectorSink.
+struct CountSink <: BlackLightPlus.MonteCarlo.Sink
+    inner::VectorSink
+    n::Base.RefValue{Int}
+end
+BlackLightPlus.MonteCarlo.record!(s::CountSink, sph) = BlackLightPlus.MonteCarlo.record!(s.inner, sph)
+BlackLightPlus.MonteCarlo.child_stream(s::CountSink, rng, event) =
+    BlackLightPlus.MonteCarlo.child_stream(s.inner, rng, event)
+BlackLightPlus.MonteCarlo.spawn!(s::CountSink, child, rng) = error("a spawn outside branch!")
+BlackLightPlus.MonteCarlo.tally!(s::CountSink, sph, l) = BlackLightPlus.MonteCarlo.tally!(s.inner, sph, l)
+function BlackLightPlus.MonteCarlo.branch!(s::CountSink, ev::ScatterEvent, rng)
+    s.n[] += 1
+    child, crng = kick(ev, rng)
+    BlackLightPlus.MonteCarlo.spawn!(s.inner, child, crng)
+    return nothing
+end
+
+# The march of `sph` cut into segments of at most `K` loop iterations: one compiled loop for
+# every `K`, which is a runtime argument. Returns `march_close`'s result and the stopped
+# state.
+@noinline function march_segments(m, sph, rng, K::Int)
+    s = march_open(m, sph, rng)
+    M = max_steps(m.ctl)
+    while s.outcome == LIVE_MARCH
+        it0 = Int(s.it)
+        s = march_steps(m, s, min(it0 - 1 + min(K, M), M))
+        s.outcome == LIVE_MARCH && Int(s.it) <= it0 && error("a segment without progress")
+    end
+    return march_close(m, s), s
+end
+
+# Every photon of `photons` (pairs of a photon and its stream) through `run(sph, rng, sink)`
+# into a VectorSink of `layout` per chunk of consecutive photons, the chunks on threads: the
+# results, and the sinks' escapes, children and ledgers concatenated, in photon order.
+function march_all(run, photons, layout)
+    nc = 8
+    ranges = [((c - 1) * length(photons) ÷ nc + 1):(c * length(photons) ÷ nc) for c in 1:nc]
+    sinks = [VectorSink(layout) for _ in 1:nc]
+    res = Vector{Any}(undef, length(photons))
+    Threads.@threads for c in 1:nc
+        for i in ranges[c]
+            res[i] = run(photons[i]..., sinks[c])
+        end
+    end
+    return res, reduce(vcat, [s.escaped for s in sinks]), reduce(vcat, [s.children for s in sinks]),
+           reduce(vcat, [s.ledger for s in sinks])
+end
+
+# Relative differences: of two numbers, and of two vectors against their largest magnitude.
+rel(a, b) = a == b ? 0.0 : abs(a - b) / max(abs(a), abs(b))
+vrel(a, b) = a == b ? 0.0 : maximum(abs.(a .- b)) / max(maximum(abs.(a)), maximum(abs.(b)))
+# Two end photons of the entry photon `e`: position and momentum as vectors, the weight
+# against the entry weight, the energy and the depths each against itself.
+photon_diff(a, b, e) = max(vrel(a.x, b.x), vrel(a.p, b.p), abs(a.w - b.w) / e.w, rel(a.E, b.E),
+                           rel(a.tau_abs, b.tau_abs), rel(a.tau_scatt, b.tau_scatt))
+# Two ledgers of the entry photon `e`: the outcome and the event count equal, the weights
+# against the entry weight, the absorbed power against the entry power, the energy.
+function ledger_diff(a::MarchLedger, b::MarchLedger, e)
+    (a.outcome == b.outcome && a.events == b.events) || return Inf
+    return max(abs(a.absorbed - b.absorbed) / (e.w * e.E), rel(a.E, b.E),
+               maximum(f -> abs(getfield(a, f) - getfield(b, f)) / e.w,
+                       (:scatter_loss, :scatter_loss_final, :spawned, :unspawned, :w)))
+end
 
 @testset "Monte Carlo tracker" begin
     @testset "straight-line control" begin
@@ -206,8 +275,8 @@ BlackLightPlus.MonteCarlo.record!(::StepSink, sph) = nothing
         for (ds, da, wr, th) in ((0.1, 1.0, 1.0, 0.05), (1.0, 0.0, 1.0, 1.0), (0.3, 10.0, 10.0, 0.05))
             b, copies = event_bias(sb, 0, th, wr)
             sink = StepSink(zeros(3))
-            m = BlackLightPlus.MonteCarlo.March(FlatMarch(s), Minkowski(), s,
-                                                Opacities(; table = thom, bias = sb, max_scatt = 1), sink)
+            m = March(FlatMarch(s), Minkowski(), s, Opacities(; table = thom, bias = sb, max_scatt = 1),
+                      sink, Val(false), Val(true))
             y = vcat(SVector(0.0, 0.0, 0.0, 0.0), SVector(-E, E, 0.0, 0.0))
             sph = Superphoton(SVector(0.0, 0.0, 0.0, 0.0), SVector(-E, E, 0.0, 0.0), wr)
             stp = (it = 1, y = y, h = 1.0, tau_a = 0.0, tau_s = 0.0)
@@ -385,6 +454,124 @@ BlackLightPlus.MonteCarlo.record!(::StepSink, sph) = nothing
         end
         @test worst < 1.0e-8
         @test inside
+    end
+
+    @testset "march pieces: segments of any length are one march" begin
+        @test isbitstype(MarchState) && sizeof(MarchState) == 344
+        Z = BlackLightPlus.Matter.EmissionZone{Float64}
+        @test isbitstype(ScatterEvent{Z}) && sizeof(ScatterEvent{Z}) == 552
+        Ks = (1, 2, 7, 32, typemax(Int))
+        # 10⁴ primaries of the torus zones, absorbing, without scattering
+        wgt = build_weight_table(zones, 1000.0)
+        tabs = [(z, zone_nsuperphotons(z, wgt)[2]) for z in zones]
+        tabs = filter(t -> t[2] > 0.0, tabs)
+        thin = [generate(tabs[mod1(i, length(tabs))][1], GenerationTables(wgt, tabs[mod1(i, length(tabs))][2]),
+                         primary_rng(0x5E65, i)) for i in 1:10_000]
+        kerr = KerrSchildCartesian(DK.TORUS_A)
+        R_em = max(100.0, maximum(z -> 1.2 * ks_radius(kerr, z.x), zones))
+        # the curved march as the torus deck takes it, and one stopped by a step limit of 64
+        for (label, ctl) in (("torus", CurvedMarch(kerr; C = 32.0, escape = 1.0e3, R_em = R_em)),
+                             ("torus nmax 64", CurvedMarch(kerr; C = 32.0, escape = 1.0e3, R_em = R_em,
+                                                           nmax = 64)))
+            layout = MCStreamLayout(10_000, CURVED_MAX_STEPS, 0)
+            opac = Opacities(params)
+            ref = march_all((sph, rng, sink) -> track!(ctl, kerr, blocks, opac, sph, rng, sink),
+                            thin, layout)
+            seg = Dict(K => march_all((sph, rng, sink) -> march_segments(
+                                          March(ctl, kerr, blocks, opac, sink, Val(true), Val(false)),
+                                          sph, rng, K), thin, layout) for K in Ks)
+            for K in Ks
+                @test all(i -> seg[K][1][i][1] === seg[1][1][i][1] && seg[K][1][i][2] === seg[1][1][i][2],
+                          eachindex(thin))
+                @test seg[K][2] == seg[1][2] && all(seg[K][2] .=== seg[1][2]) && all(seg[K][4] .=== seg[1][4])
+            end
+            label == "torus" && @test any(r -> r[2].outcome == ESCAPED_MARCH, seg[1][1])
+            label == "torus nmax 64" && @test any(r -> r[2].outcome == DROPPED_MARCH, seg[1][1])
+            # against track!: within 1e-11 (another inlining context on the host)
+            @test all(i -> ref[1][i].recorded == seg[1][1][i][1].recorded &&
+                           ref[1][i].rng === seg[1][1][i][1].rng, eachindex(thin))
+            @test maximum(i -> photon_diff(ref[1][i].sph, seg[1][1][i][1].sph, thin[i][1]),
+                          eachindex(thin)) <= 1.0e-11
+            @test length(ref[2]) == length(seg[1][2]) && length(ref[4]) == length(thin)
+            @test maximum(i -> ledger_diff(ref[4][i][2], seg[1][4][i][2], thin[i][1]),
+                          eachindex(thin)) <= 1.0e-11
+        end
+        # 10⁴ primaries of the scattering sphere, three orders, children and their streams
+        thom = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
+        s = UniformSphere(n_e = 1.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        stabs, _ = DK.sphere_tables(s, 1000; nu_min = 1.0e8, nu_max = 1.0e13)
+        scat = [generate(s, stabs, primary_rng(0x5E66, i)) for i in 1:10_000]
+        layout = MCStreamLayout(10_000, 2^20, 3)
+        opac = Opacities(; table = thom, bias = Bias(s), max_scatt = 3)
+        for ctl in (FlatMarch(s), FlatMarch(Float64(s.R), SPHERE_STEP_FRAC, 8))
+            ref = march_all((sph, rng, sink) -> track!(ctl, Minkowski(), s, opac, sph, rng, sink;
+                                                       absorb = Val(false), scatter = Val(true)),
+                            scat, layout)
+            seg = Dict(K => march_all((sph, rng, sink) -> march_segments(
+                                          March(ctl, Minkowski(), s, opac, sink, Val(false), Val(true)),
+                                          sph, rng, K), scat, layout) for K in Ks)
+            @test length(seg[1][3]) > (ctl.nmax == 8 ? 100 : 1000)
+            for K in Ks
+                @test all(i -> seg[K][1][i][1] === seg[1][1][i][1] && seg[K][1][i][2] === seg[1][1][i][2],
+                          eachindex(scat))
+                @test all(seg[K][3] .=== seg[1][3]) && all(seg[K][4] .=== seg[1][4])
+            end
+            @test maximum(i -> photon_diff(ref[1][i].sph, seg[1][1][i][1].sph, scat[i][1]),
+                          eachindex(scat)) <= 1.0e-11
+            @test maximum(i -> ledger_diff(ref[4][i][2], seg[1][4][i][2], scat[i][1]),
+                          eachindex(scat)) <= 1.0e-11
+            @test [c[2] for c in ref[3]] == [c[2] for c in seg[1][3]]           # the same streams
+            @test maximum(i -> photon_diff(ref[3][i][1], seg[1][3][i][1], ref[3][i][1]),
+                          eachindex(ref[3])) <= 1.0e-11
+        end
+        # a live state holds the next iteration, a stopped one the iteration that stopped it
+        # and is returned unchanged
+        ctl = FlatMarch(s)
+        m = March(ctl, Minkowski(), s, opac, VectorSink(layout), Val(false), Val(true))
+        j = findfirst(p -> march_steps(m, march_open(m, p...), typemax(Int)).it > 4, scat)
+        s0 = march_open(m, scat[j]...)
+        @test s0.it == 1 && s0.outcome == LIVE_MARCH && s0.entry === scat[j][1] && s0.r_prev == Inf
+        @test s0.w === scat[j][1].w && s0.rng === scat[j][2] && s0.nev == 0
+        s3 = march_steps(m, s0, 3)
+        @test s3.outcome == LIVE_MARCH && s3.it == 4 && s3.r_prev < Inf
+        sall = march_steps(m, s3, typemax(Int))
+        @test sall.outcome == ESCAPED_MARCH && sall.it > 4
+        @test march_steps(m, sall, typemax(Int)) === sall
+        @test march_steps(m, s0, typemax(Int)) === sall
+    end
+
+    @testset "branch!: one per spawning event, the inline kick" begin
+        thom = HotcrossTable(fill(log10(SIGMA_THOMSON), NW + 1, NT + 1))
+        s = UniformSphere(n_e = 3.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        tabs, _ = DK.sphere_tables(s, 1000; nu_min = 1.0e8, nu_max = 1.0e13)
+        layout = MCStreamLayout(2_000, 2^20, 2)
+        plain = VectorSink(layout)
+        counted = CountSink(VectorSink(layout), Ref(0))
+        opac = Opacities(; table = thom, bias = Bias(30.0), max_scatt = 2)
+        for g in 1:2_000
+            sp, rng = generate(s, tabs, primary_rng(11, g))
+            ra = track!(FlatMarch(s), Minkowski(), s, opac, sp, rng, plain; absorb = Val(false),
+                        scatter = Val(true))
+            rb = track!(FlatMarch(s), Minkowski(), s, opac, sp, rng, counted; absorb = Val(false),
+                        scatter = Val(true))
+            @test ra.sph === rb.sph && ra.rng === rb.rng
+        end
+        @test length(plain.children) > 1000 && counted.n[] == length(plain.children)
+        @test all(plain.children .=== counted.inner.children)       # the default: kick, spawn!
+        @test all(plain.ledger .=== counted.inner.ledger)
+        @test sum(l -> l[2].events, plain.ledger) >= counted.n[]
+        # kick of an event: the parent's momentum, the site's plasma, the child's fields
+        zone = BlackLightPlus.Matter.emission_zone(s, SVector(0.0, 1.0, 0.0, 0.0),
+                                                   BlackLightPlus.Spacetime.metric_and_inverse(
+                                                       Minkowski(), SVector(0.0, 1.0, 0.0, 0.0)))
+        parent = Superphoton(SVector(0.0, 0.0, 0.0, 0.0), SVector(-1.0e-6, 1.0e-6, 0.0, 0.0), 2.0;
+                             nscatt = 1, x1i = 0.25, ne0 = 3.0)
+        ev = ScatterEvent(SVector(0.0, 1.0, 0.0, 0.0), parent.p, zone, 0.5, 0.1, 0.2, parent)
+        child, crng = kick(ev, MCRng(7, 3))
+        p_new, _, r_new = BlackLightPlus.MonteCarlo.scatter_superphoton(parent.p, zone, MCRng(7, 3))
+        @test child.p === p_new && crng === r_new && child.x === ev.x && child.w == 0.5
+        @test child.nscatt == 2 && child.tau_abs == 0.1 && child.tau_scatt == 0.2
+        @test child.x1i == 0.25 && child.ne0 == 3.0 && child.E == -p_new[1]
     end
 
     @testset "torus: energy, synchrotron peak, Compton tail" begin

@@ -1,7 +1,7 @@
 """
     MonteCarlo
 
-Monte Carlo Comptonization: superphotons, emissivities, hot-cross-section lookup, generation, the Compton kick, opacity rates, the `Sink` protocol and the one tracker.
+Monte Carlo Comptonization: superphotons, emissivities, hot-cross-section lookup, generation, the Compton kick, opacity rates, scattering events, the `Sink` protocol, the one tracker and its march pieces.
 """
 module MonteCarlo
 
@@ -25,8 +25,10 @@ include("tables.jl")
 include("generate.jl")
 include("scatter.jl")
 include("opacity.jl")
+include("events.jl")
 include("sinks.jl")
 include("track.jl")
+include("march_state.jl")
 
 # superphotons
 export Superphoton, photon_position, photon_momentum, photon_weight, photon_energy,
@@ -51,11 +53,15 @@ export lorentz_boost, sample_y, sample_electron_gamma, sample_mu, sample_electro
 # opacities
 export MC_WEIGHT_MIN, FluidFrame, StaticFrame, rate_frame, absorption_rate, scattering_rate,
        Bias, bias, amplification, StateBias, event_bias, Opacities
+# scattering events
+export ScatterEvent, kick
 # sinks
-export Sink, record!, child_stream, spawn!, tally!, MarchLedger, ESCAPED_MARCH, CAPTURED_MARCH,
-       DROPPED_MARCH, NullSink, VectorSink
+export Sink, record!, child_stream, spawn!, branch!, tally!, MarchLedger, ESCAPED_MARCH,
+       CAPTURED_MARCH, DROPPED_MARCH, LIVE_MARCH, NullSink, VectorSink
 # the tracker
 export SPHERE_STEP_FRAC, SPHERE_MAX_STEPS, CURVED_MAX_STEPS, FlatMarch, CurvedMarch, escaped,
        captured, plunging, escape_direction, event_weight, next_event, scatter_site, track!
+# the march cut at its loop back edge
+export March, MarchState, march_open, march_steps, march_close
 
 end # module
