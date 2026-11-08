@@ -10,13 +10,13 @@ using LinearAlgebra: dot, det
 import Adapt
 using ForwardDiff: Dual, value, partials
 using ..Numerics: position, momentum, MCRng, MCStreamLayout, widest_layout, mc_uniform, primary_rng,
-                  ME, CL, HPL, XSUM_NSLOT, XSUM_MAX_ADDENDS, xsum_add!
+                  ME, CL, HPL, XSUM_NSLOT, XSUM_MAX_ADDENDS, xsum_add!, tang_log
 using ..Spacetime: KerrSchildCartesian, Minkowski, MarchBudget, march_control, rk4_step, march_step,
                    inverse_metric, trace_geodesic, pixel_prep, band_landing, npixels, proxy_distance,
                    radius_prep, band_radius,
                    surface_prep, surface_landing, image_crossings, surface_terms,
                    ks_radius, raise_index, surface_crossing, EquatorialPlane, ClassicalRK4,
-                   march_step_compensated, helical_symmetry
+                   march_step_compensated, helical_symmetry, horizon_floor
 using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneSite, intensity,
                 sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
                 polarized_emission, EquatorialSpot, spot_amplitude, equatorial_disk_intensity,
@@ -57,6 +57,7 @@ include("amr.jl")
 include("montecarlo.jl")
 include("montecarlo_tables.jl")
 include("montecarlo_time.jl")
+include("mc_order.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
@@ -68,7 +69,7 @@ export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, Analy
 export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER_STRIPES,
        mc_ledger, ledger_sum, ledger_count, TimeProfile, profile_area, clip_profile, sample_time,
        time_stream, place, TimedSource, arrival_time, record_arrival!, TimedRecord, TimedPrimary,
-       TimedLayer
+       TimedLayer, photon_key
 # products and results
 export Image, Trajectories, render, render_amr, render_analytic, render_crossings,
        photon_ring_layers, trace, shadow, sensitivity, variants, analytic_movie

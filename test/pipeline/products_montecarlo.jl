@@ -4,23 +4,25 @@
 # spectrum on the block deck against the transport-tier template with its per-order split
 # and power budget, bitwise agreement across executors, device counts, chunks and
 # child-buffer capacities (the overflow rerun), the emission zones, the programs' device
-# contract, the process's hot-cross table, the backend keyword and the run record.
+# contract, the process's hot-cross table, the backend keyword, the run record and the
+# photon order key.
 using Test, BlackLightPlus, StaticArrays
+using Adapt: Adapt
 using BlackLightPlus.Plans: RunConfig, Plan, prepare, hotcross_table
 using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
                     MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render, grid_tables,
-                    grid_zones, ZoneSums, ZoneCounts, hotcross_build
+                    grid_zones, ZoneSums, ZoneCounts, hotcross_build, photon_key, PHOTON_KEYS
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
-                     inverse_metric, proxy_distance
+                     inverse_metric, proxy_distance, SuperposedKerrSchild, horizon_floor
 using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Superphoton, GenerationTables, Opacities, Bias,
                       StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE, ZoneNodes
-using BlackLightPlus.Numerics: SIGMA_THOMSON, GNEWT, CL, ME, MCStreamLayout, primary_rng
+using BlackLightPlus.Numerics: SIGMA_THOMSON, GNEWT, CL, ME, MCStreamLayout, primary_rng, mc_uniform
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactBins, ExactScalars, ChildBuffer,
                      PolarBands, InclinationBands, band, nuLnu_total, nuLnu_solid, total_power,
                      total_weight, mean_energy, scalar, add!, describe, backend!, reset_backend!,
-                     nuLnu_sigma
+                     nuLnu_sigma, foreach_item!
 using BlackLightPlus.Data: zone_tables, emission_sites
 const DK = Main.Decks
 
@@ -49,6 +51,46 @@ same(a::GRMHDSpectrumResult, b::GRMHDSpectrumResult) =
     DK.bits(ledger(a)) == DK.bits(ledger(b))
 
 const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV, (64, 997, 300, 4096))]
+
+"Writes the order key of the state `ys[g]` on `st` under `ctl` to `out[i]`."
+struct KeyProgram{S,C,V}
+    st::S
+    ctl::C
+    ys::V
+end
+Adapt.@adapt_structure KeyProgram
+(k::KeyProgram)(g, i, out) = (@inbounds out[i] = photon_key(k.st, k.ctl, k.ys[g]); nothing)
+
+"The state at `x` with covariant momentum `p`."
+state(x, p) = SVector{8,Float64}(x..., p...)
+
+"""
+`n` states of the stream `seed`: radii log-uniform in `[10⁻³, 10⁵]`, isotropic
+directions, momenta with every spatial sign.
+"""
+function key_cloud(n; seed = 0x5eed)
+    ys = Vector{SVector{8,Float64}}(undef, n)
+    for g in 1:n
+        rng = primary_rng(seed, g)
+        u = zeros(6)
+        for j in 1:6
+            u[j], rng = mc_uniform(rng)
+        end
+        r = 10.0^(8.0 * u[1] - 3.0)
+        c = 2.0 * u[2] - 1.0
+        sn = sqrt(1.0 - c * c)
+        ys[g] = state((0.0, r * sn * cospi(2u[3]), r * sn * sinpi(2u[3]), r * c),
+                      (-1.0, 2.0 * u[4] - 1.0, 2.0 * u[5] - 1.0, 2.0 * u[6] - 1.0))
+    end
+    return ys
+end
+
+"The key of `y` with the shell `s`, the octant of the position and that of `g^{iν} p_ν` by the StaticArrays product."
+function expected_key(st, s, y)
+    oct(v) = 4 * signbit(v[1]) + 2 * signbit(v[2]) + signbit(v[3])
+    k = inverse_metric(st, y[SVector(1, 2, 3, 4)]) * y[SVector(5, 6, 7, 8)]
+    return (s * 8 + oct(y[SVector(2, 3, 4)])) * 8 + oct(k[SVector(2, 3, 4)])
+end
 
 @testset "Monte Carlo spectra" begin
     s = UniformSphere()
@@ -393,4 +435,55 @@ const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV,
         gs = mc_spectrum(pb, 1_000; scattering = true, table = THOMSON, seed = 0xC0FFEE, C = 32.0, backend = :cpu)
         @test gs.scattering && gs.n_recorded > 0 && all(isfinite, gs.total.sumw)
     end
+end
+
+@testset "photon order key" begin
+    kerr = KerrSchildCartesian(0.9)
+    bin = SuperposedKerrSchild([0.5, 0.5], [0.0, 0.3], [(3.0, 0.0, 0.0), (-3.0, 0.0, 0.0)])
+    flat = FlatMarch(10.0, 0.05, 100)
+    mink = CurvedMarch(Minkowski(); R_em = 30.0)
+    # the shell floor: the horizon floor, else the march radius times e^-6.4
+    cases = ((Minkowski(), flat, 10.0 * exp(-6.4)), (Minkowski(), mink, 30.0 * exp(-6.4)),
+             (kerr, CurvedMarch(kerr), horizon_floor(kerr)), (bin, CurvedMarch(bin), 0.9))
+    p = (-1.0, 0.3, -0.2, 0.1)
+    n = SVector(1.0, -2.0, 2.0) / 3.0                       # octant 2
+    for (st, ctl, r_min) in cases
+        # the centre of shell j is shell j; past the last shell, the last
+        for j in 0:127
+            y = state((0.0, (r_min * exp(0.05 * (j + 0.5)) * n)...), p)
+            @test photon_key(st, ctl, y) == expected_key(st, j, y)
+        end
+        far = state((0.0, (r_min * exp(9.0) * n)...), p)
+        @test photon_key(st, ctl, far) == expected_key(st, 127, far) >= 127 * 64
+        # r = 0, r = r_min and below: shell 0, octants still from the sign bits
+        for y in (state((0.0, 0.0, 0.0, 0.0), p), state((0.0, -0.0, 0.0, -0.0), p),
+                  state((0.0, 0.0, 0.0, r_min), p), state((0.0, (0.5 * r_min * n)...), p))
+            @test photon_key(st, ctl, y) == expected_key(st, 0, y) < 64
+        end
+        @test photon_key(st, ctl, state((0.0, -0.0, 0.0, -0.0), p)) ==
+              5 * 8 + photon_key(st, ctl, state((0.0, 0.0, 0.0, 0.0), p))
+        # a non-finite entry of the position or the momentum: key 0
+        for bad in (NaN, Inf, -Inf), j in 1:8
+            y = setindex(state((0.0, (2.0 * n)...), p), bad, j)
+            @test photon_key(st, ctl, y) == 0
+        end
+        ys = key_cloud(20_000)
+        ks = [photon_key(st, ctl, y) for y in ys]
+        @test all(k -> 0 <= k < PHOTON_KEYS, ks) && PHOTON_KEYS == 8192
+        @test length(unique(ks .% 64)) == 64 && extrema(ks .÷ 64) == (0, 127)
+        @test allocs(photon_key, st, ctl, ys[1]) == 0
+        # the same keys on threads and on host pools of every device count
+        prog = KeyProgram(st, ctl, ys)
+        @test DK.device_isbits(prog)
+        for exec in (ThreadedExecutor(), POOLS..., PoolExecutor(DK.hosts(1)))
+            out = fill(-1, length(ys))
+            foreach_item!(exec, prog, 1:length(ys); outs = (out,))
+            @test out == ks
+        end
+    end
+    # a radius that overflows has shell 0; an inverse metric that is not finite, key 0
+    @test photon_key(Minkowski(), flat, state((0.0, 1.0e200, -1.0e200, 1.0), p)) == 2 * 8 + 2
+    @test !all(isfinite, inverse_metric(bin, SVector(0.0, 3.0, 0.0, 0.0)))
+    @test photon_key(bin, CurvedMarch(bin), state((0.0, 3.0, 0.0, 0.0), p)) == 0
+    @test photon_key(kerr, CurvedMarch(kerr), state((0.0, 1.0e200, 0.0, 0.0), p)) == 0
 end
