@@ -76,10 +76,14 @@ function (p::Split)(item, i, outs::Vararg{Any,N}) where {N}
     return nothing
 end
 
+# Items per chunk of an epilogue: each costs a few nanoseconds, so a chunk of 2^14 is
+# tens of microseconds of work or more, and an image of up to 2^14 pixels runs as one task.
+const EPILOGUE_CHUNK = 2^14
+
 # `prog` over the items `1:n` of the host arrays `outs` on Julia threads.
 function host_epilogue!(prog, outs::Tuple, n::Integer)
     isempty(outs) && return outs
-    return foreach_item!(ThreadedExecutor(), prog, 1:n; outs)
+    return foreach_item!(ThreadedExecutor(chunk = EPILOGUE_CHUNK), prog, 1:n; outs)
 end
 
 """

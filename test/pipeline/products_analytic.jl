@@ -98,6 +98,10 @@ bsum(maps) = (I = zero(maps[1]); for m in maps; I .+= m; end; I)
               Decks.bits(Q) == Decks.bits(bsum(Qb))
         @test any(i -> signbit(bsum(Ib[1:1])[i]) != signbit(Ib[1][i]), eachindex(I))  # a -0 became +0
         @test Decks.bits(only(band_sums((Matrix{Float64}[],), (2, 2)))) == Decks.bits(zeros(2, 2))
+        # maps of several epilogue chunks (2^14 items each)
+        big = [reshape([vals[mod1(k * b + 5b, 10)] for k in 1:201 * 199], 201, 199) for b in 1:3]
+        @test Decks.bits(only(band_sums((big,), (201, 199)))) == Decks.bits(bsum(big))
+        @test all(Decks.bits(m) == Decks.bits(fill(NaN, 201, 199)) for m in filled_maps(NaN, 2, (201, 199)))
         nan = filled_maps(NaN, 4, (5, 3))
         @test length(nan) == 4 && all(Decks.bits(m) == Decks.bits(fill(NaN, 5, 3)) for m in nan)
         @test isempty(filled_maps(0.0, 0, (5, 3)))
