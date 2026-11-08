@@ -7,9 +7,9 @@
 # density scale of a run (`mass_scale_cgs`, the density unit being mass_scale / (GM/c²)³)
 # is the one at which its unpolarized 230 GHz image seen from inclination 17° holds
 # 0.5 Jy: `m87_calibrate` root-finds it on that image, with the run's plasma, metric,
-# camera and field of view, at the step divisor C = 320 and a pixel count at which the
-# flux has converged. M87_DENSITY_SCALE records the scale of every run and its
-# calibration image, as m87_calibrate.jl gives them.
+# camera, field of view and pixel grid, at the step divisor C = 320. M87_DENSITY_SCALE
+# records the scale of every run, its calibration image and the uncertainty of its 0.5 Jy,
+# as m87_calibrate.jl gives them.
 module M87Scaling
 
 using Printf
@@ -34,30 +34,38 @@ const M87_FREQUENCY_HZ = 230.0e9
 const M87_FLUX_JY = 0.5                           # 230 GHz flux density
 const M87_INCLINATION_DEG = 17.0                  # inclination of the calibration image
 const M87_C = 320.0                               # step divisor of the calibration image
-const M87_FLUX_RTOL = 1.0e-3                      # |F/0.5 Jy - 1| at the calibrated scale
+const M87_FLUX_RTOL = 1.0e-3                      # |F/0.5 Jy - 1| of the root, on the calibration image
 
 """
     M87_DENSITY_SCALE
 
 The calibrated density scale of every GRMHD run, by snapshot number: `mass_scale_g`, the
-code mass unit `m_bh_msun` (the total mass of a binary), and the calibration image
+code mass unit `m_bh_msun` (the total mass of a binary), the calibration image
 (inclination 17°, full field of view `fov` in GM/c², `res` pixels per side, step divisor
-`C`) with the flux `flux_jy` it holds there. At these scales the flux of the calibration
-image changes by 4e-6 from 768 to 1536 pixels per side (00999); for the binaries it scatters
-by 0.13 % and 0.08 % rms over 480–1920 pixels per side, without a trend, about a mean within
-0.15 % of the 960-pixel value, the quadrature scatter of the compact bright gas next to the
-black holes. Doubling C to 640 changes it by at most 3e-4.
+`C`) with the flux `flux_jy` it holds there, and `flux_rtol`, the bound on |F/0.5 Jy - 1|
+at that scale on any pixel grid of the field.
+
+The root holds the calibration image to M87_FLUX_RTOL = 1e-3. For 00999 the flux of the
+field changes by 4e-6 from 768 to 1536 pixels per side, so `flux_rtol` is that tolerance.
+For the binaries the flux depends on the pixel grid: over nine grids of 480–1920 pixels per
+side it scatters by 0.13 % (00455) and 0.08 % (00122) rms without a trend, the quadrature
+scatter of the compact bright gas next to the black holes, and lies within 3.3e-3 and
+2.9e-3 of 0.5 Jy on every grid. `flux_rtol` is that pixel scatter; with dlnF/dlnms ≈ 2 it
+fixes the binary scales to 1.7e-3 and 1.5e-3. Doubling C to 640 changes the flux by at
+most 3e-4.
 """
 const M87_DENSITY_SCALE = Dict{String,NamedTuple}(
     # Kerr accretion flow, AthenaK 00999 on Kerr a = 0.9, R_high = 10 (fig_pol_hires.jl)
     "00999" => (mass_scale_g = 2.272651712e23, m_bh_msun = 6.5e9, fov = 30.0, res = 768,
-                C = 320.0, flux_jy = 0.5000296497),
-    # binary GRMHD, AthenaK 00455, separation 25 M, R_high = 40 (fig_eht_bbh.jl)
+                C = 320.0, flux_jy = 0.5000296497, flux_rtol = 1.0e-3),
+    # binary GRMHD, AthenaK 00455, separation 25 M, R_high = 40 (fig_eht_bbh.jl);
+    # flux_rtol: the 800-pixel grid, 0.498380 Jy
     "00455" => (mass_scale_g = 1.589253825e28, m_bh_msun = 1.3e10, fov = 56.0, res = 960,
-                C = 320.0, flux_jy = 0.5000122263),
-    # binary GRMHD, AthenaK 00122, separation 16 M, R_high = 40 (fig_eht_bbh.jl)
+                C = 320.0, flux_jy = 0.5000122263, flux_rtol = 3.3e-3),
+    # binary GRMHD, AthenaK 00122, separation 16 M, R_high = 40 (fig_eht_bbh.jl);
+    # flux_rtol: the 480-pixel grid, 0.501443 Jy
     "00122" => (mass_scale_g = 7.007445187e20, m_bh_msun = 1.3e10, fov = 56.0, res = 960,
-                C = 320.0, flux_jy = 0.5000071296),
+                C = 320.0, flux_jy = 0.5000071296, flux_rtol = 2.9e-3),
 )
 
 "The calibrated density scale (g) of run `run` (snapshot number, e.g. \"00455\")."
