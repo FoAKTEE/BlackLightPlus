@@ -43,6 +43,7 @@ makedocs(;
             "Architecture" => "design/architecture.md",
             "Design principles" => "design/principles.md",
             "Performance" => "design/performance.md",
+            "GPU execution" => "design/gpu_execution.md",
             "Verification record" => "design/verification.md",
             "Repository standard" => "design/standards.md",
         ],
