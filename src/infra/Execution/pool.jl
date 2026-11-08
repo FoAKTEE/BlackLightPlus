@@ -34,11 +34,12 @@ ResidencyCache() = ResidencyCache(ReentrantLock(), Dict{UInt,Tuple{WeakRef,Any}}
     DevicePool(devices; lanes = 2, chunk = :auto)
 
 Persistent multi-device runtime over `devices` (device handles or CUDA ordinals): `lanes`
-worker tasks per device, spawned once, a shared work queue, and one residency cache per
-device ([`resident`](@ref)). `chunk` is the chunk setting of the executors built on the
-pool with `PoolExecutor(pool)`: a positive item count, or `:auto`, sized per run
-([`chunk_for`](@ref)). Every device must be functional (`BackendUnavailable` otherwise). Run Julia with more threads than devices so the workers of different devices
-run concurrently. `close(pool)` stops the workers and releases their buffers; a pool built
+worker tasks per device, spawned once, a shared work queue, one residency cache per device
+([`resident`](@ref)) and the child slots each device has learned ([`learned_slots`](@ref)).
+`chunk` is the chunk setting of the executors built on the pool with `PoolExecutor(pool)`:
+a positive item count, or `:auto`, sized per run ([`chunk_for`](@ref)). Every device must
+be functional (`BackendUnavailable` otherwise). Run Julia with more threads than devices
+so the workers of different devices run concurrently. `close(pool)` stops the workers and releases their buffers; a pool built
 here is the caller's to close, a pool obtained through `PoolExecutor(devices)` or
 [`resolve`](@ref) belongs to the process registry and is closed at exit.
 """
@@ -48,6 +49,8 @@ mutable struct DevicePool
     const chunk::Union{Int,Symbol}
     const post_lock::ReentrantLock
     const resident::Vector{ResidencyCache}
+    const slots::Vector{Int}
+    const slots_lock::ReentrantLock
     @atomic open::Bool
 end
 
@@ -101,7 +104,8 @@ function DevicePool(devices; lanes::Integer = 2, chunk = :auto)
         push!(ls, lane)
     end
     return DevicePool(devs, ls, setting, ReentrantLock(),
-                      [ResidencyCache() for _ in devs], true)
+                      [ResidencyCache() for _ in devs], zeros(Int, length(devs)),
+                      ReentrantLock(), true)
 end
 
 Base.isopen(pool::DevicePool) = @atomic pool.open
@@ -118,6 +122,23 @@ function device_slot(pool::DevicePool, dev)
     d = findfirst(==(device(dev)), pool.devices)
     d === nothing && throw(ArgumentError("$(device(dev)) is not a device of $pool"))
     return d
+end
+
+"""
+    learned_slots(pool, dev) -> Int
+
+The most children that a non-final generation of a cascade chunk has spawned on the
+device `dev` of `pool` so far (0 before the first), recorded by every lane of the device
+under the pool's lock: a term of the child-slot rule of [`foreach_cascade!`](@ref).
+"""
+learned_slots(pool::DevicePool, dev) =
+    @lock pool.slots_lock pool.slots[device_slot(pool, dev)]
+
+# Record that a generation on `dev` spawned `n` children.
+function learn_slots!(pool::DevicePool, dev, n::Integer)
+    d = device_slot(pool, dev)
+    @lock pool.slots_lock pool.slots[d] = max(pool.slots[d], Int(n))
+    return nothing
 end
 
 # The first lane of `dev`; lanes are stored device-major.

@@ -12,6 +12,9 @@ const CASCADE_CHUNK = 2^20
 "Fewest child slots a chunk's generation starts with."
 const MIN_CHILD_SLOTS = 4096
 
+"Most child slots per primary of a chunk that the memory budget of a device grants."
+const BUDGET_SLOTS_PER_PRIMARY = 16
+
 """
     cascade_chunk(exec, n) -> Int
 
@@ -53,12 +56,14 @@ chunk's range to the device without staging, keeps the chunk's children in two
 lane-resident buffers swapped per generation and reads back only their count; a
 generation that can spawn records into lane scratch, added into the device's totals once
 its children fit, and an overflowing generation runs again in full with slots for its
-counted children and an eighth more. A device generation starts with `capacity` child
-slots (`nothing`: at least `MIN_CHILD_SLOTS`, half the chunk and the slots the lane grew to
-in its earlier chunks of the call). On a `ThreadedExecutor` worker tasks pull the chunks and run their items in
-order into the shared totals, with two task-local buffers of `capacity` slots
-(`nothing`: `MIN_CHILD_SLOTS`) that grow; only an item whose children overflow runs
-again.
+counted children and an eighth more, a rerun that [`describe`](@ref) counts. Every
+non-final device generation of every chunk starts with `capacity` child slots, or without
+one with [`child_slots`](@ref): at least `MIN_CHILD_SLOTS`, half the chunk, the most
+children a non-final generation on the device has spawned so far, and the slots an eighth
+of the device's free memory holds, at most `BUDGET_SLOTS_PER_PRIMARY` per primary. On a
+`ThreadedExecutor` worker tasks pull the chunks and run their items in order into the
+shared totals, with two task-local buffers of `capacity` slots (`nothing`:
+`MIN_CHILD_SLOTS`) that grow; only an item whose children overflow runs again.
 
 Determinism: the accumulated totals, the set of children and the returned count are
 bitwise independent of the executor, the chunking, the device count, the lane and the
@@ -72,6 +77,7 @@ function foreach_cascade!(exec::Executor, primary, layer, n::Integer, depth::Int
     capacity === nothing || capacity >= 1 ||
         throw(ArgumentError("foreach_cascade!: capacity must be positive"))
     exec.used[] = Int(chunk)
+    exec isa PoolExecutor && (exec.reruns[] = 0)
     n == 0 && return 0
     slot = child_slot(primary)
     c = Cascade(primary, layer, slot, slot === nothing ? 0 : Int(depth), capacity)
@@ -270,10 +276,10 @@ function run_cascade!(exec::PoolExecutor, c::Cascade, chunks)
     twins = (ProgramTwins(pool, c.primary), ProgramTwins(pool, c.layer))
     spawned = Threads.Atomic{Int}(0)
     fresh = fill(true, length(pool.lanes))
-    caps = zeros(Int, length(pool.lanes))
     try
         foreach_chunk(pool, chunks) do lane, r
-            Threads.atomic_add!(spawned, chunk_generations!(lane, c, twins, r, fresh, caps))
+            Threads.atomic_add!(spawned,
+                                chunk_generations!(lane, c, twins, r, fresh, exec.reruns))
         end
     finally
         foreach(s -> s === nothing || empty!(s), (c.slot, child_slot(c.layer)))
@@ -281,22 +287,43 @@ function run_cascade!(exec::PoolExecutor, c::Cascade, chunks)
     return spawned[]
 end
 
+"""
+    child_slots(pool, dev, m, T) -> Int
+
+The child slots that a non-final generation of a cascade chunk of `m` primaries starts
+with on the device `dev` of `pool` when the call gives no `capacity`:
+`max(MIN_CHILD_SLOTS, cld(m, 2), learned_slots(pool, dev),
+min(slot_budget(pool, dev, T), BUDGET_SLOTS_PER_PRIMARY * m))` for children of type `T`.
+"""
+child_slots(pool::DevicePool, dev, m::Integer, ::Type{T}) where {T} =
+    max(MIN_CHILD_SLOTS, cld(m, 2), learned_slots(pool, dev),
+        min(slot_budget(pool, dev, T), BUDGET_SLOTS_PER_PRIMARY * m))
+
+"""
+    slot_budget(pool, dev, T) -> Int
+
+The child slots of type `T` that an eighth of the free memory of `dev` holds per buffer
+side and lane: `free_bytes(dev) ÷ 8 ÷ (2 × lanes × (sizeof(T) + sizeof(MCRng)))`, `lanes`
+the lanes per device of `pool`; 0 on a device whose [`free_bytes`](@ref) is 0.
+"""
+slot_budget(pool::DevicePool, dev, ::Type{T}) where {T} =
+    free_bytes(device(dev)) ÷ 8 ÷ (2 * lanes_per_device(pool) * (sizeof(T) + sizeof(MCRng)))
+
 # Every generation of the primaries `r` on `lane`; returns the children spawned. `fresh`
 # marks the lanes whose scratch arrays have not been zeroed in this call; a scratch array
-# allocated for a generation is zeroed before its launch as well. `caps[k]` carries the
-# child slots lane `k` grew to in its earlier chunks of the call, so that only its first
-# chunk runs an overflowing generation twice; an overflow grows the slots to the counted
-# children and an eighth more.
+# allocated for a generation is zeroed before its launch as well. A non-final generation
+# starts with `capacity` slots or, without one, with `child_slots`; an overflow grows the
+# slots to the counted children and an eighth more and adds one to `reruns`; a generation
+# whose children fit records their count with the pool.
 function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}, fresh,
-                            caps::Vector{Int})
+                            reruns::Threads.Atomic{Int})
     if c.slot === nothing
         launch!(lane, c.primary, program_twin!(twins[1], lane), r, length(r), ())
         return 0
     end
+    pool = twins[1].pool
     T = eltype(c.slot.photons)
-    k = findfirst(l -> l === lane, twins[1].pool.lanes)
-    cap = c.capacity === nothing ? max(MIN_CHILD_SLOTS, cld(length(r), 2), caps[k]) :
-          Int(c.capacity)
+    k = findfirst(l -> l === lane, pool.lanes)
     ctr = lane_buffer(lane, (:cascade, :count), Int64, 1)
     spawned = 0
     m = 0
@@ -308,7 +335,9 @@ function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}
         parents = g == 0 ? nothing :
                   Generation(map(a -> readonly(lane.dev, a),
                                  lane_children(lane, T, isodd(g) ? :a : :b, m))...)
-        slots = final ? 0 : cap
+        slots = final ? 0 :
+                c.capacity === nothing ? child_slots(pool, lane.dev, length(r), T) :
+                Int(c.capacity)
         while true
             out = ChildBuffer(lane_children(lane, T, isodd(g) ? :b : :a, slots)..., ctr,
                               c.slot.layout, nothing)
@@ -323,11 +352,14 @@ function chunk_generations!(lane::PoolLane, c::Cascade, twins, r::UnitRange{Int}
             n_out = get_count(lane, ctr)
             if !final && n_out > slots
                 drain_lane!(lane, swap.pairs, false)
-                slots = cap = n_out + n_out ÷ 8
-                c.capacity === nothing && (caps[k] = cap)
+                slots = n_out + n_out ÷ 8
+                Threads.atomic_add!(reruns, 1)
                 continue
             end
-            final || drain_lane!(lane, swap.pairs, true)
+            if !final
+                drain_lane!(lane, swap.pairs, true)
+                learn_slots!(pool, lane.dev, n_out)
+            end
             m = final ? 0 : n_out
             spawned += n_out
             break

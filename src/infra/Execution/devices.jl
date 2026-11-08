@@ -8,8 +8,8 @@
 
 A place where a `PoolExecutor` launches kernels. A device answers [`backend`](@ref),
 [`activate!`](@ref), [`functional`](@ref), [`stage_alloc`](@ref)/[`stage_free`](@ref),
-[`free!`](@ref), [`prepare_launch!`](@ref) and [`readonly`](@ref). Devices compare by
-value, so two handles of the same device are interchangeable.
+[`free!`](@ref), [`free_bytes`](@ref), [`prepare_launch!`](@ref) and [`readonly`](@ref).
+Devices compare by value, so two handles of the same device are interchangeable.
 """
 abstract type AbstractDevice end
 
@@ -134,6 +134,15 @@ Release the device memory of the array `x` now instead of at garbage collection
 (`CUDA.unsafe_free!` on a `CUDADevice`); a no-op for host arrays.
 """
 free!(::AbstractDevice, x) = nothing
+
+"""
+    free_bytes(dev) -> Int
+
+Bytes of memory free for allocation on `dev` now: the driver's free memory of a
+`CUDADevice` (CUDA extension), `0` on every other device. The cascade grants child slots
+from an eighth of it ([`foreach_cascade!`](@ref)); `0` turns that budget off.
+"""
+free_bytes(::AbstractDevice) = 0
 
 """
     prepare_launch!(dev, prog)

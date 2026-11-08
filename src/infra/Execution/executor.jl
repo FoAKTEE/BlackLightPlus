@@ -39,15 +39,16 @@ Runs a program on the devices of a [`DevicePool`](@ref): items are cut into chun
 the pool's lanes (`lanes` per device), and each chunk is one launch of the program's device
 twin on the lane's device, its outputs copied back into the host arrays. `devices` are
 device handles or CUDA ordinals; executors built with the same devices and `lanes` share
-one registered pool and its residency caches, whatever their chunk. Executors compare
-equal when they share the pool and the chunk setting.
+one registered pool, its residency caches and its learned child slots, whatever their
+chunk. Executors compare equal when they share the pool and the chunk setting.
 """
 struct PoolExecutor <: Executor
     pool::DevicePool
     chunk::Union{Int,Symbol}
     used::Threads.Atomic{Int}
+    reruns::Threads.Atomic{Int}
     PoolExecutor(pool::DevicePool, chunk) =
-        new(pool, chunk_setting(chunk), Threads.Atomic{Int}(0))
+        new(pool, chunk_setting(chunk), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 PoolExecutor(pool::DevicePool; chunk = pool.chunk) = PoolExecutor(pool, chunk)
 PoolExecutor(devices; lanes::Integer = 2, chunk = :auto) =
@@ -264,14 +265,16 @@ Where and how `exec` runs, as plain data for a result's `run` record:
 `(kind, devices, lanes, chunk, threads)` with `kind` `:threads` or `:pool`, `devices` the
 device names, `lanes` the workers per device (0 for threads), `chunk` the items per chunk
 of the executor's last run (its setting, an integer or `:auto`, before the first run) and
-`threads` the Julia thread count.
+`threads` the Julia thread count. A pool adds `reruns`: the generations of its last
+cascade ([`foreach_cascade!`](@ref)) that ran again because their children overflowed
+their slots (0 before the first).
 """
 describe(e::ThreadedExecutor) =
     (kind = :threads, devices = String[], lanes = 0, chunk = last_chunk(e),
      threads = Threads.nthreads())
 describe(e::PoolExecutor) =
     (kind = :pool, devices = string.(e.pool.devices), lanes = lanes_per_device(e.pool),
-     chunk = last_chunk(e), threads = Threads.nthreads())
+     chunk = last_chunk(e), threads = Threads.nthreads(), reruns = e.reruns[])
 
 Base.show(io::IO, e::ThreadedExecutor) =
     print(io, "ThreadedExecutor(chunk = ", repr(e.chunk), ") on ", Threads.nthreads(),

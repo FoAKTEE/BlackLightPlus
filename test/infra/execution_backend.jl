@@ -131,7 +131,7 @@ end
                 threads = Threads.nthreads())
     p = PoolExecutor(Decks.hosts(2); lanes = 2, chunk = 7)
     @test describe(p) == (kind = :pool, devices = ["HostDevice(1)", "HostDevice(2)"],
-                          lanes = 2, chunk = 7, threads = Threads.nthreads())
+                          lanes = 2, chunk = 7, threads = Threads.nthreads(), reruns = 0)
     for (e, kind) in ((ThreadedExecutor(), "ThreadedExecutor"), (p, "PoolExecutor"))
         s = sprint(show, e)
         @test !isempty(s) && occursin(kind, s) && occursin("Julia threads", s)

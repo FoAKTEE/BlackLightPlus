@@ -34,8 +34,8 @@ export Executor, ThreadedExecutor, PoolExecutor, foreach_item!, describe,
        resolve, backend, backend!, BackendUnavailable
 # devices and the pool
 export AbstractDevice, HostDevice, CUDADevice, DevicePool, select_devices, cuda_loaded,
-       activate!, functional, stage_alloc, stage_free, free!, prepare_launch!, stack_bytes,
-       readonly, upload, workgroupsize, chunk_hint
+       activate!, functional, stage_alloc, stage_free, free!, free_bytes, prepare_launch!,
+       stack_bytes, readonly, upload, workgroupsize, chunk_hint
 # residency
 export resident, device_program
 # ray sources

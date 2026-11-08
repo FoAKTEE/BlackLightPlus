@@ -3,8 +3,8 @@
 
 CUDA methods of the `Execution` device protocol for `CUDADevice`: activation, the
 KernelAbstractions backend, the functional probe, page-locked staging buffers, early
-release of device arrays, the per-thread stack limit, read-only loads through the
-constant cache, and the idle-device selection behind `select_devices`.
+release of device arrays, the free device memory, the per-thread stack limit, read-only
+loads through the constant cache, and the idle-device selection behind `select_devices`.
 """
 module BlackLightPlusCUDAExt
 
@@ -12,7 +12,7 @@ using BlackLightPlus, CUDA
 using Adapt: Adapt
 using BlackLightPlus.Execution: CUDADevice
 import BlackLightPlus.Execution: backend, activate!, functional, stage_alloc, stage_free, free!,
-                      prepare_launch!, stack_bytes, readonly, select_devices
+                      free_bytes, prepare_launch!, stack_bytes, readonly, select_devices
 
 backend(::CUDADevice) = CUDA.CUDABackend()
 
@@ -38,6 +38,9 @@ end
 stage_free(::CUDADevice, mem::CUDA.HostMemory) = CUDA.free(mem)
 
 free!(::CUDADevice, x::CUDA.CuArray) = CUDA.unsafe_free!(x)
+
+# The driver's free memory of the device (`cuMemGetInfo`).
+free_bytes(d::CUDADevice) = CUDA.device!(() -> Int(CUDA.memory_info()[1]), d.ordinal)
 
 function prepare_launch!(::CUDADevice, prog)
     bytes = stack_bytes(prog)
