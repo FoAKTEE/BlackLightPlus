@@ -14,7 +14,7 @@ capacity change the wall time and nothing else.
   `ThreadedExecutor` calls it from Julia threads on the host arrays; `PoolExecutor` runs its
   device twin through the single `_foreach!` kernel on the lanes of a `DevicePool`. The
   program supplies its launch traits: `workgroupsize` (64 for the polarized imaging
-  program, else the backend's choice), `stack_bytes` (32 KiB for the exact-Kerr program)
+  program, 32 for the Monte Carlo primary and layer programs, else the backend's choice), `stack_bytes` (32 KiB for the exact-Kerr program)
   and `chunk_hint` (an upper bound on its chunk under `:auto`).
 - **Threads.** The items are cut into chunks in queue order; one worker task per thread
   pulls the next chunk from one queue (`run_workers!`), so the long marches at the head of
@@ -38,12 +38,25 @@ capacity change the wall time and nothing else.
 - **Accumulators.** Monte Carlo bins, the weight ledger and the scalar diagnostics are exact
   integer-limb sums (`ExactBins`, `ExactScalars`) written through atomics; each device that
   runs a chunk writes a zeroed twin that `gather!` folds into the host sums.
+- **Tables on the run's executor.** The Monte Carlo zone tables (the weight table, every
+  zone's count and envelope) and the hot-cross table are built where the run executes: on
+  threads by the host builders of `Data`, on a pool by device programs (`ZoneSums`,
+  `ZoneCounts`, `HotcrossSigma`) with the same arithmetic. Their logarithms and
+  exponentials are `tang_log` and `tang_exp`, Base's table-driven algorithms written with
+  explicit fused multiply-adds, which a device computes to the host's bits (the vendor
+  library's `exp` and `log` differ in the last bit), the node coordinates and the Jüttner
+  normalisations come from the host, and the per-node sums are exact limb sums, so the
+  tables are bitwise the same on every executor. The zones and tables of the last grid
+  run are kept for the next run on the same blocks, spacetime, parameters, zone options
+  and generation settings.
 - **The cascade.** Scattering runs as a cascade (`foreach_cascade!`): a chunk of primaries
   and every scattering generation of their children run on the worker that took the chunk.
   On a lane the children live in two device buffers swapped per generation, and the only
   host read per generation is their count; a generation records into lane scratch sums
   that are folded into the device's totals once its children fit, and a generation whose
-  children overflow the buffer runs again in full after the buffer grows. On threads each
+  children overflow the buffer runs again in full after the buffer grows to the counted
+  children and an eighth more; a lane starts its later chunks of the run with the slots
+  it grew to. On threads each
   task keeps two growing buffers and reruns only the photon whose children overflowed.
   Child streams are keyed by genealogy and the sums are exact, so the spectrum does not
   depend on the chunking, the lane or the arrival order.
@@ -55,11 +68,12 @@ capacity change the wall time and nothing else.
 | executor | `:auto` | `backend` keyword > `backend!` > `BLP_BACKEND` > `:auto` | GPUs when CUDA is loaded and a device is idle, else threads |
 | chunk | `:auto` | `ThreadedExecutor(; chunk)`, `PoolExecutor(devices; chunk)`, `DevicePool(devices; chunk)` | items per launch or per thread task; `describe(exec).chunk` reports the chunk of the last run |
 | lanes | 2 | `PoolExecutor(devices; lanes)` | worker tasks and streams per device; pools differ per lane count |
-| queue | cost order on Kerr, identity elsewhere | `prepare(cfg; queue = perm)` | the order pixels enter the queue; for a movie, `march_sort_order(vec(shadow(plan).steps))` of the previous frame |
+| queue | cost order on Kerr, identity elsewhere | `prepare(cfg; queue = perm)` | the order pixels enter the queue of `render`, `render_crossings`, `shadow`, `sensitivity` and `variants`; for a movie, `march_sort_order(vec(shadow(plan).steps))` of the previous frame |
 | cascade chunk | `cascade_chunk(exec, n)` | `foreach_cascade!(…; chunk)` | primaries per cascade chunk |
-| child slots | at least 4096, half the chunk | `mc_spectrum(…; capacity)` | first size of a generation's child buffer; overflow grows it and reruns |
-| hot-cross table | built once per process | `mc_spectrum(…; table)` | `hotcross_table(plan)` takes the process's table at the plan's first use; a given table is used as is |
-| workgroup | backend's choice; 64 for IQUV imaging | `workgroupsize(prog)` | threads per block of the launch |
+| child slots | at least 4096, half the chunk, and the slots the lane grew to in the run | `mc_spectrum(…; capacity)` | first size of a generation's child buffer; overflow grows it and reruns |
+| hot-cross table | built once per process, on the first run's executor | `mc_spectrum(…; table)` | `hotcross_table(plan)` takes the process's table at the plan's first use; a given table is used as is |
+| zones and zone tables | kept from the last grid run | the run's blocks, spacetime, parameters, zone options, generation settings | a run that matches the last one reuses its `emission_sites` and its tables; any change rebuilds them |
+| workgroup | backend's choice; 64 for IQUV imaging, 32 for the Monte Carlo primaries and layers | `workgroupsize(prog)` | threads per block of the launch |
 | stack | backend's default; 32 KiB for the exact-Kerr program | `stack_bytes(prog)` | device stack per thread |
 
 **The `:auto` chunk rule** (`chunk_for`), applied per run from the item count `n`, the
@@ -148,7 +162,7 @@ mechanism), *beyond* (BlackLightPlus has more than the reference), *not carried*
 |---|---|---|---|
 | Every scattering order inside each chunk; children on the device | `mc_gpu.jl` | `foreach_cascade!`, `cascade.jl` | same |
 | Overflow rerun at the exact size, per chunk and layer | `mc_gpu.jl` | per chunk and generation; on threads per photon | same |
-| Tables built once, uploaded concurrently | `mc_gpu.jl` | hot-cross and `F(K)` emissivity tables once per process; zone tables per call in two streaming threaded passes; uploads lazy per device | form |
+| Tables built once, uploaded concurrently | `mc_gpu.jl` | `F(K)` emissivity table at compilation; hot-cross table once per process and zone tables per grid run, each on the run's executor (device programs on a pool, bitwise the host builders), the zones and tables of the last run kept; uploads lazy per device | beyond |
 | Ancestry-keyed streams; exact accumulation | `rng.jl`, `exact_sum.jl` | `philox.jl`, `exactsum.jl`, `accumulators.jl` | same |
 | 64 ledger stripes | `mc_gpu.jl` | `LEDGER_STRIPES` | same |
 | Compton sampler behind a non-inlined call | `mc_gpu.jl` | inlined sampler | not carried (§4) |
@@ -222,3 +236,61 @@ Carlo legs at 128 threads stand at 1.10 and 1.09.
 The rows still below 1 at best, mixed precision (0.88), native-block IQUV (0.90) and the
 binary Stokes I image (0.89), are kernel-level differences (§4, the camera-ray kernel) that
 the kernel audit tracks.
+
+## 6. The Monte Carlo tables and the march on both backends
+
+Measured on 2026-11-07 on `anta`, before (`be1bc9b`, and the trees before each change named
+in the rows) and after this record's changes; scripts, logs and the figure in
+`results/blp/mc_audit/speed/gpu/`. CPU rows: Julia threads on the shared host (load 25–95,
+so CPU times scatter by about 15 %); GPU rows: one A100 with the four host threads of its
+Slurm allocation. Every output is bitwise unchanged on each backend, and CPU against GPU
+is unchanged.
+
+**Monte Carlo**, AthenaK torus 00999 at stride 1 (10,303,459 zones), 10⁶ primaries; CPU
+32 threads; the Compton phase at constant bias 10⁴ (7,302,016 children).
+
+| phase | CPU before | CPU after | A100 before | A100 after |
+|---|--:|--:|--:|--:|
+| emission sites, on the host for both | 1.07 s | 0.88 s | 1.95 s | 2.04 s |
+| zone tables | 20.8 s | 16.4 s | 154 s | 0.60 s |
+| hot-cross table, once per process | 0.59 s | 0.54 s | 3.33 s | 0.05 s |
+| thin photon phase, before the plunge stop and now | 24.7 s | 11.3 s | 8.84 s | 3.74 s |
+| Compton photon phase | 63.0 s | 62.5 s | 74.8 s | 62.5 s |
+| thin `mc_spectrum` call | 35.9 s | 31.7 s | 146 s | 16.0 s |
+| the same call repeated | 31.0 s | 10.5 s | 150 s | 4.1 s |
+
+The first device zone tables of a process add 15–17 s of compilation. The plunge stop
+alone is 2.2× on the CPU and 2.1× on the A100 (24.9 → 11.3 s and 7.94 → 3.74 s in one
+tree); the blocks of one warp bring the A100's thin phase from 4.34 to 3.74 s and, with the
+child slots carried across chunks, its Compton phase from 74.8 to 62.5 s, the rate of 32
+CPU threads. The Compton phase does not stop plunging photons that may still spawn.
+
+**Imaging.** GPU best of five calls; CPU best of four on 16 threads, the trees
+interleaved (torus), or best of two on 32 threads (closed form, crossings).
+
+| path | trees | CPU before → after | A100 before → after |
+|---|---|--:|--:|
+| torus Stokes I 768², ghost layers | `cc4ce14` → `9f436c9` | 21.9 → 21.6 s | 0.465 → 0.457 s |
+| torus IQUV 384², degenerate-limit segment | `5515dfa` → `cc4ce14` | 12.4 → 12.6 s | 0.540 → 0.544 s |
+| torus IQUV 384², small-absorption segment | `9f436c9` → `be1bc9b` | 12.3 → 13.0 s | 0.538 → 0.562 s |
+| Kerr disk 2048², radius-only path, product | observables on → off | 1.70 → 0.52 s | 0.458 → 0.305 s |
+| Kerr disk 2048², radius-only path, program | observables on → off | 1.47 → 0.33 s | 0.205 → 0.036 s |
+| marched disk B 500², production, cost-ordered queue | `be1bc9b` → this tree | 3.60 → 3.39 s | 0.208 → 0.163 s |
+| marched disk B 500², precise, cost-ordered queue | `be1bc9b` → this tree | 5.37 → 4.91 s | 1.753 → 1.647 s |
+
+The ghost layers cost neither backend anything measurable; the small-absorption segment
+costs about 5 % of the IQUV march on both; the radius-only program is 4.4 times faster
+than the full one on the CPU and 5.7 times on the A100.
+
+What stays on the host of a GPU run: the site scan (`emission_sites`, 2–3 s at stride 1 on
+four threads: its plasma decode contracts StaticArrays `muladd` chains, which a device
+compiles differently) and the stochastic rounding of the counts (`zone_offsets`, one
+stream in zone order); with the zones kept, a repeated run skips both the scan and the
+tables. The closed-form radius path is bound by its host work on the GPU: at 2048² its
+kernel takes 0.036 s, the product 0.31 s, most of it allocating and first touching the
+288 MB of returned maps and filling the 192 MB of NaN observables it skips. The precise
+march runs on the A100 at 52–61× four CPU threads on comparison A and 19× on B, where the
+production march runs at 69–150×: Verner 9 keeps fifteen stage vectors live at the
+255-register cap; a stage loop with one call site of the right-hand side, or a non-inlined
+right-hand side, is not faster on B (2.41 and 1.80 s against 1.90 s) and changes the CPU
+bits of the step, so the step stays as it is.

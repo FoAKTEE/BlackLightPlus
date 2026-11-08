@@ -7,6 +7,32 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- A Monte Carlo run on a pool builds its tables on the devices: the zone tables (the
+  weight table and every zone's count and envelope, `Products.grid_tables`) and the
+  process's hot-cross table (`Products.hotcross_build`, at the first scattering run), as
+  device programs with the arithmetic of the host builders. Their logarithms and
+  exponentials are `Numerics.tang_log` and `tang_exp`, Base's table-driven algorithms with
+  explicit fused multiply-adds, which a CUDA kernel computes to the host's bits (CUDA's own
+  `exp` and `log` differ in the last bit), and the per-node sums are exact limb sums, so the
+  tables are bitwise those of the host builders on every executor and every spectrum is
+  unchanged bit for bit on the CPU and on the GPU. On the AthenaK torus at stride 1
+  (10.3 M zones) on one A100 the zone tables take 0.60 s where the job's four host threads
+  took 154 s, the hot-cross table 0.05 s for 3.3 s, and a thin `mc_spectrum` call of 10⁶
+  primaries 16 s for 146 s.
+- `mc_spectrum` keeps the emission zones and the zone tables of the last grid run and
+  reuses them in a run on the same blocks, spacetime, parameters, zone options (and seed,
+  above stride 1) and generation settings: a repeated stride-1 call takes 10.5 s for 31 s
+  on 32 CPU threads and 4.1 s for 150 s on one A100. The per-zone count reads the weight
+  nodes evaluated once (`MonteCarlo.ZoneNodes`): the host zone tables take 16 s for 21 s
+  on 32 threads.
+- On a device, a cascade lane starts its later chunks with the child slots it grew to,
+  and the Monte Carlo primary and layer programs launch in blocks of one warp; with both,
+  the torus photon phase on one A100 is 1.16 (thin) and 1.20 (Compton) times faster, bit
+  for bit; the Compton phase now runs at the rate of 32 CPU threads.
+- `render_crossings` queues the plan's pixels in its cost order, as `render` does: the
+  marched disk of the code comparison at 500² is 1.08–1.28 times faster on one A100 and
+  1.06–1.09 times on 32 CPU threads, bit for bit.
+
 - `StateBias` takes an order factor `f` (`mc_spectrum(…; bias_order = f)`, 1 by default):
   the bias of a photon scattered `n` times is `clamp(b0 A(Θₑ) (w/w_ref) fⁿ, 1, bias_max)`.
   Without it a child's own bias is near 1, so the light scattered two and three times

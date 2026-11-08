@@ -27,6 +27,15 @@ The executors size their chunks from the item count, the output size and the dev
 thread counts, so no leg depends on a chunk setting; on one A100 the automatic chunk
 matches or beats the best chunk of a sweep on every leg.
 
+## The Monte Carlo tables and the march, CPU and GPU
+
+Each speed-up of the Monte Carlo and imaging paths holds on both backends
+([Performance](@ref) §6). On the AthenaK torus at stride 1 (10.3 M zones, 10⁶ primaries) the
+zone tables take 16 s on 32 CPU threads and 0.60 s on one A100, bitwise the same; a
+thin `mc_spectrum` call takes 32 s on the CPU and 16 s on the A100 (146 s before
+the device tables), and a repeated call on the same snapshot 10.5 s and 4.1 s. The
+plunge stop halves the thin photon phase on both (2.3× on the CPU, 2.1× on the A100).
+
 ## Against the reference implementation
 
 On identical decks the package and the reference implementation it replaced (the `blp`

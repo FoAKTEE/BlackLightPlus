@@ -236,6 +236,7 @@ with the density unit 2.749183e-22 g cm⁻³; the spheres are those of the bug h
 | Torus Compton, stride 1, equal wall time | summed effective photon number above 1e15 Hz 34 times that of the constant `b0 = 1e4` |
 | Thread count and hardware | 1 against 16 threads bitwise; 16 threads against one A100: equal counts in every cell, sums within 1.2e-11 |
 | Speed, 32 threads | stride-1 zone tables 21 s (10,303,459 zones; 61 min before); thin torus photon phase 2.2× by the plunge stop, bitwise |
+| Tables on the device | zone tables (weights, counts and envelopes at strides 1 and 8) and hot-cross table built on the A100 bitwise those of the host builders; the thin and Compton torus bins of a run with them bitwise those of the host-built tables on the A100 and on 32 threads, in every cell of every order ([Performance](@ref) §6) |
 
 ## 6. Running on `anta`
 
