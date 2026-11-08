@@ -202,11 +202,13 @@ lane_sharing() = LANE_SHARING[]
 """
     lane_check!(on::Bool) -> Bool
 
-The lane check, a debug switch, off by default: while on, every eviction from a
-residency cache and every [`gather!`](@ref) of accumulator or child twins, each of which
-frees device arrays, first asserts that the queue of every lane of the device is idle
-and throws an `ErrorException` naming the busy lane otherwise. Returns the previous
-setting; `lane_check()` reads it.
+The lane check, a debug switch, off by default: while on, every [`gather!`](@ref) of
+accumulator or child twins, which frees their device arrays without waiting for the
+lanes, first asserts that the queue of every lane of each twin's device is idle and
+throws an `ErrorException` naming the busy lane otherwise. An eviction from a residency
+cache waits for every lane of the device ([`sync_lanes`](@ref)) before it frees and is
+not checked; a lane frees its own buffers while the other lanes run. Returns the
+previous setting; `lane_check()` reads it.
 """
 lane_check!(on::Bool) = Threads.atomic_xchg!(LANE_CHECK, on)
 lane_check() = LANE_CHECK[]

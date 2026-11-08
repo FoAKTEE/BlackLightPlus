@@ -25,13 +25,13 @@ function Adapt.adapt_storage(to::DeviceAdaptor, a::Array)
 end
 
 # Evict the entries of the residency cache of `dev` whose host object has been collected:
-# wait for every lane of the device, then free their device arrays. Runs under the
-# cache's lock.
+# wait for every lane of the device, then free their device arrays. The wait is the
+# guarantee, so the lane check does not apply: a lane may queue new work as soon as it
+# returns. Runs under the cache's lock.
 function evict!(pool::DevicePool, dev::AbstractDevice, cache::ResidencyCache)
     dead = [k for (k, (w, _)) in cache.twins if w.value === nothing]
     isempty(dead) && return cache
     sync_lanes(pool, dev)
-    check_lanes(pool, dev, "eviction")
     for k in dead
         free!(dev, cache.twins[k][2])
         delete!(cache.twins, k)
