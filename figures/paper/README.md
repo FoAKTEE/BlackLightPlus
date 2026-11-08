@@ -7,8 +7,17 @@ own plotting scripts draw the PDFs from those arrays. The simulation data they r
 (AthenaK GRMHD snapshots and a Z4c slice) are not part of this repository; the paths are
 the script defaults or the `BLP_*` environment variables named in each header.
 
+Every GRMHD generator takes its scaling from `m87_scaling.jl`: black-hole mass
+6.5 × 10⁹ M☉ (each black hole of a binary), distance 16.8 Mpc, 230 GHz, and the density
+scale of its run (`M87_DENSITY_SCALE`, by snapshot number), at which the unpolarized
+230 GHz image seen from inclination 17° holds 0.5 Jy. `m87_calibrate.jl` root-finds those
+scales with `m87_calibrate` on the image of each run's field of view at C = 320 and writes
+them, with the pixel, step and field-of-view checks, to `SCALES.json`. The comparisons with
+other codes on published test setups keep the normalizations of those setups.
+
 | Paper figure | Generator | What it writes |
 |---|---|---|
+| none; the density scale of every GRMHD figure | `m87_calibrate.jl` (definitions in `m87_scaling.jl`) | `SCALES.json`: per run the mass, the distance, the density scale, the flux reached, the calibration image, the ladders and the convergence checks |
 | fig_analytic (exact-Kerr equatorial disk) and fig_summary (a) | `fig_examples.jl` | the analytic-disk image and a torus demonstration render |
 | fig_polarized (polarized GRMHD torus) and fig_summary (b) | `fig_pol_hires.jl` | Stokes I, Q, U, V of the torus snapshot and the run record |
 | fig_capture (Z4c slice of a Brill–Lindquist head-on collision) and fig_summary (c) | `fig_z4c_phasespace.jl`, `fig_z4c_amr.jl` | the puncture positions of the slice, capture map, bisected boundary, ray deck; the class map and refinement levels of the image-plane AMR |

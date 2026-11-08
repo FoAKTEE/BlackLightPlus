@@ -9,7 +9,8 @@
 # (2) Slow light on a static fluid series: the AthenaK torus snapshot 00999 repeated at
 #     three times 30 apart (`synthetic_series`, the identity series) on the moving binary of
 #     results/blp/gpu/moving_binary.jl (masses 1/2, no spin, separation 8, Keplerian),
-#     rendered in Stokes I and IQUV at 48² pixels by the snapshot (fast light), the host
+#     rendered in Stokes I and IQUV at 48² pixels, with the plasma and M87* scaling of
+#     fig_pol_hires.jl (m87_scaling.jl), by the snapshot (fast light), the host
 #     `SeriesProvider` and the two-frame `window` (slow light): the largest pixel difference
 #     over the largest value, and whether the images are bitwise equal. Snapshot path:
 #     BLP_TORUS (default the moving_binary.jl data directory).
@@ -17,8 +18,9 @@
 # Run from the repository root: julia -t 24 --project=. figures/paper/fig_dyntests_limits.jl
 include(joinpath(@__DIR__, "fig_dyntests.jl"))
 using BlackLightPlus.Spacetime: SuperposedKerrSchild
-using BlackLightPlus.Numerics: GNEWT, CL, MSUN
 using BlackLightPlus.Data: synthetic_series, window
+include(joinpath(@__DIR__, "m87_scaling.jl"))
+using .M87Scaling
 
 const NPIX_LIM = 64
 const TORUS = get(ENV, "BLP_TORUS",
@@ -66,8 +68,8 @@ end
 
 function static_series()
     t0 = time()
-    m_bh = 6.2e9 * MSUN; L = GNEWT * m_bh / CL^2
-    cfg = RunConfig(m_bh_cgs = m_bh, mass_scale_cgs = 1.0e-21 * L^3, frequency_hz = 2.3e11,
+    cfg = RunConfig(m_bh_cgs = M87_MASS_G, mass_scale_cgs = m87_density_scale("00999"),
+                    frequency_hz = M87_FREQUENCY_HZ,
                     camera = CameraConfig(inclination_deg = 60.0, distance = 100.0, fov = 30.0, resolution = 48),
                     plasma = PlasmaConfig(rat_low = 1.0, rat_high = 10.0, gamma = 13/9, use_p = true, sigma_cut = 1.0),
                     max_steps = 2500, C = 80.0, escape_factor = 1.1)

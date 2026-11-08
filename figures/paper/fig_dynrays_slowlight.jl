@@ -35,7 +35,7 @@
 # Run from the repository root:
 #   julia -t 24 --project=. figures/paper/fig_dynrays_slowlight.jl
 # Env: BLP_SL_SNAP (the 00455 dump), BLP_SL_RES (960), BLP_SL_FOV (56), BLP_SL_INC (90),
-#      BLP_SL_MS (mass scale, g; default the 17° calibration of fig_eht_bbh.jl for 00455),
+#      BLP_SL_MS (mass scale, g; default M87_DENSITY_SCALE of run 00455, m87_scaling.jl),
 #      BLP_SL_C (step divisor, 320; at most 4000 C/80 steps), BLP_SL_STRIDE (4),
 #      BLP_SL_RES_SCAN (240), BLP_SL_SCANSPAN (30), BLP_SL_SCANSTEP (2),
 #      BLP_SL_SHIFTMAX (12), BLP_SL_PARTS (images,scan,delay,shift; the last three read
@@ -49,6 +49,8 @@ using BlackLightPlus.Spacetime: BoostedSuperposedKerrSchild, SuperposedKerrSchil
 using BlackLightPlus.Matter: GridProvider, PlasmaPrimitives
 import BlackLightPlus.Matter: primitives, domain_radius
 using BlackLightPlus.Data: athenak_bin_snapshot, write_npy
+include(joinpath(@__DIR__, "m87_scaling.jl"))
+using .M87Scaling
 
 const ROOT = dirname(dirname(@__DIR__))
 const SNAP = get(ENV, "BLP_SL_SNAP",
@@ -56,7 +58,7 @@ const SNAP = get(ENV, "BLP_SL_SNAP",
 const RES = parse(Int, get(ENV, "BLP_SL_RES", "960"))
 const FOV = parse(Float64, get(ENV, "BLP_SL_FOV", "56"))
 const INC = parse(Float64, get(ENV, "BLP_SL_INC", "90"))
-const MS = parse(Float64, get(ENV, "BLP_SL_MS", "2.272822681e28"))   # eht_bbh/s455_i90_Rh40/records.json
+const MS = parse(Float64, get(ENV, "BLP_SL_MS", string(m87_density_scale("00455"))))
 const STRIDE = parse(Int, get(ENV, "BLP_SL_STRIDE", "4"))
 const RES_SCAN = parse(Int, get(ENV, "BLP_SL_RES_SCAN", "240"))
 const SCANSPAN = parse(Float64, get(ENV, "BLP_SL_SCANSPAN", "30"))
@@ -71,11 +73,10 @@ catch
     "unknown"
 end
 
-# scaling, plasma and march of fig_eht_bbh.jl
-const MSUN = 1.98847e33
-const M_BH = 2 * 6.5e9 * MSUN
-const D_CM = 16.8e6 * 3.0856775814913673e18
-const NU = 230.0e9
+# scaling (m87_scaling.jl), plasma and march of fig_eht_bbh.jl
+const M_BH = 2 * M87_MASS_G
+const D_CM = M87_DISTANCE_CM
+const NU = M87_FREQUENCY_HZ
 const DIST = 1000.0
 const CVAL = parse(Float64, get(ENV, "BLP_SL_C", "320"))
 const MAXSTEPS = round(Int, 4000 * CVAL / 80)

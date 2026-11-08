@@ -18,7 +18,7 @@
 #           over the shell's sin² depth profile, the flash's duration and each bin, and the
 #           thin-shell Ψ at r = 1.02;
 #   frozen  T1 and T5: the uniform sphere over [0, 30] cm (BLP_MCD_NSPH) and the Kerr torus
-#           (AthenaK snapshot 00999 on a = 0.9, the plasma of fig_pol_hires.jl, emission zones of
+#           (AthenaK snapshot 00999 on a = 0.9, the plasma and M87* scaling of fig_pol_hires.jl, emission zones of
 #           stride BLP_MCD_STRIDE within r < 40, thin, BLP_MCD_NTOR) over [0, 1000] M, each against
 #           the stationary run (bitwise flags of every bin and of the ledger), the torus also as a
 #           FrameSequence of one frame at five times (bitwise) and of five copies of it (five
@@ -46,6 +46,8 @@ using BlackLightPlus.Spacetime: KerrSchildCartesian, BoostedSuperposedKerrSchild
 using BlackLightPlus.Data: AthenaKSnapshot, FrameSequence, Corotating, write_npy
 using BlackLightPlus.Execution: InclinationBands, Spectrum, sector_row
 using BlackLightPlus.Products: light_curve, arrival_times, TimedSpectrumResult
+include(joinpath(@__DIR__, "m87_scaling.jl"))
+using .M87Scaling
 
 const ROOT = dirname(dirname(@__DIR__))
 const OUT = get(ENV, "BLP_MCD_OUT", joinpath(@__DIR__, "out", "mc_dyn", "tests"))
@@ -206,9 +208,8 @@ function leg_echo()
 end
 
 function torus_plan(matter)
-    MB = 6.2e9 * MSUN
-    L = GNEWT * MB / CL^2
-    cfg = RunConfig(m_bh_cgs = MB, mass_scale_cgs = 1.0e-21 * L^3, frequency_hz = 2.3e11,
+    cfg = RunConfig(m_bh_cgs = M87_MASS_G, mass_scale_cgs = m87_density_scale("00999"),
+                    frequency_hz = M87_FREQUENCY_HZ,
                     plasma = PlasmaConfig(rat_low = 1.0, rat_high = 10.0, gamma = 13.0 / 9.0, use_p = true,
                                           sigma_cut = 1.0, theta_e_min = -1.0), C = 80.0)
     return prepare(cfg; spacetime = KerrSchildCartesian(0.9), matter = matter)

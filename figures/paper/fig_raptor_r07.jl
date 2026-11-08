@@ -6,10 +6,10 @@
 # 1/(1 + q) and q/(1 + q) at +q/(1 + q) sep (cos φ0, sin φ0, 0) and -sep/(1 + q) (cos φ0,
 # sin φ0, 0), φ0 = Ω t wrapped to (-π, π], Ω = sep^-3/2; header spins a_A along +z
 # (th_a = 0) or -z (th_a = π), |a_A| > m_A imaged as χ = min(|a_A|, 1), a = χ m_A).
-# Each hole 6.5e9 M_sun (code mass 1.3e10 M_sun), D = 16.8 Mpc, 230 GHz; thermal
-# electrons, R_low = 1, R_high = 40, μ = 0.5, σ_cut = 1; density mass scale
-# 2.274019497e28 g (the 17° calibration of fig_eht_bbh.jl for 00455, R07_MASS_SCALE
-# overrides). Plane-parallel camera at d = 1000 M, φ_o = 0, FOV 56 M; fused polarized
+# The M87* scaling of m87_scaling.jl: each hole 6.5e9 M_sun (code mass 1.3e10 M_sun),
+# D = 16.8 Mpc, 230 GHz; thermal electrons, R_low = 1, R_high = 40, μ = 0.5, σ_cut = 1;
+# density mass scale M87_DENSITY_SCALE of run 00455, at which its unpolarized image seen
+# from 17° holds 0.5 Jy (R07_MASS_SCALE overrides). Plane-parallel camera at d = 1000 M, φ_o = 0, FOV 56 M; fused polarized
 # march with h = min_A(r_A - r_h,A)/C, at most 50 C steps, escape beyond 1100 M.
 #
 # Per (inclination, C, npix) it writes <out>/blp_i<inc>_C<C>_n<npix>/:
@@ -34,6 +34,8 @@ using StaticArrays, Printf, Dates, LinearAlgebra
 using HDF5
 using BlackLightPlus
 using BlackLightPlus.Numerics: Units
+include(joinpath(@__DIR__, "m87_scaling.jl"))
+using .M87Scaling
 using BlackLightPlus.Data: athenak_bin_snapshot
 using BlackLightPlus.Spacetime: ks_radius, horizon_radius, inverse_metric, march_control, rk4_step,
                      camera_ray, MarchBudget
@@ -48,10 +50,9 @@ const CS = parse.(Float64, _list(length(ARGS) >= 3 ? ARGS[3] : "320"))
 const NPIXS = parse.(Int, _list(length(ARGS) >= 4 ? ARGS[4] : "480"))
 const REPEATS = length(ARGS) >= 5 ? parse(Int, ARGS[5]) : 1
 
-const MSUN = 1.98847e33
-const M_BH = 2 * 6.5e9 * MSUN
-const D_CM = 16.8e6 * 3.0856775814913673e18
-const NU = 230.0e9
+const M_BH = 2 * M87_MASS_G
+const D_CM = M87_DISTANCE_CM
+const NU = M87_FREQUENCY_HZ
 const DIST = 1000.0
 const ESCAPE = 1.1 * DIST
 const FOV = 56.0
@@ -59,7 +60,7 @@ const R_LOW = 1.0
 const R_HIGH = 40.0
 const MU = 0.5
 const SIGMA_CUT = 1.0
-const MASS_SCALE = parse(Float64, get(ENV, "R07_MASS_SCALE", "2.274019497e28"))
+const MASS_SCALE = parse(Float64, get(ENV, "R07_MASS_SCALE", string(m87_density_scale("00455"))))
 const L_UNIT = Units(M_BH, 1.0).L_unit
 nmax_for(C) = round(Int, 50 * C)
 

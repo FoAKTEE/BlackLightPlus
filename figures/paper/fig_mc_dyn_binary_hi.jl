@@ -6,7 +6,8 @@
 #
 # Deck: AthenaK snapshot torus.mhd_w_bcc.00455.bin (equal masses, no spin, separation from
 # its header, Ω = sep^-3/2, gamma from its header), the scaling and plasma of fig_eht_bbh.jl
-# (two black holes of 6.5e9 Msun, 230 GHz calibration of 00455 at 17 degrees, R_low = 1,
+# (the M87* scaling of m87_scaling.jl: two black holes of 6.5e9 Msun, the density scale of
+# run 00455 at which its 230 GHz image seen from 17 degrees holds 0.5 Jy; R_low = 1,
 # R_high = 40, mu = 0.5, sigma cut 1). The binary phase at coordinate time 0 is the dump's
 # φ0 = rem2pi(Ω t_dump); the metric is BoostedSuperposedKerrSchild on that CircularOrbit and
 # the plasma Corotating(snapshot, Ω): the dump at time 0, carried by R_z(Ω t), so metric and
@@ -34,18 +35,20 @@
 # records.json (setup, run diagnostics, the helical-symmetry statistics).
 # Env: BLP_BBH_BIN (the 00455 dump), BLP_MCB_N (5e6), BLP_MCB_NTHIN (4e7), BLP_MCB_STRIDE (2),
 #      BLP_MCB_REMIT (100), BLP_MCB_PERIODS (2), BLP_MCB_SECTORS (16), BLP_MCB_BIASMODE (state),
-#      BLP_MCB_BIAS (1e4), BLP_MCB_BIAS_ORDER (100), BLP_MCB_MS (mass scale, g),
+#      BLP_MCB_BIAS (1e4), BLP_MCB_BIAS_ORDER (100), BLP_MCB_MS (mass scale, g; default M87_DENSITY_SCALE of run 00455),
 #      BLP_REF_GPUMONTY (hotcross.dat), BLP_MCB_LEGS, BLP_MCB_OUT.
 # Run, from the repository root:
 #   julia -t 64 --project=. figures/paper/fig_mc_dyn_binary_hi.jl
 using Dates, LinearAlgebra, Printf, Statistics, StaticArrays
 using BlackLightPlus
-using BlackLightPlus.Numerics: MSUN, ME, CL
+using BlackLightPlus.Numerics: ME, CL
 using BlackLightPlus.MonteCarlo: Bias
 using BlackLightPlus.Spacetime: BoostedSuperposedKerrSchild, CircularOrbit, helical_symmetry
 using BlackLightPlus.Data: athenak_bin_snapshot, Corotating, load_hotcross, build_hotcross_table, write_npy
 using BlackLightPlus.Execution: InclinationBands, Spectrum, sector_row, nrows
 using BlackLightPlus.Products: light_curve, arrival_times, time_spectrum
+include(joinpath(@__DIR__, "m87_scaling.jl"))
+using .M87Scaling
 
 const ROOT = dirname(dirname(@__DIR__))
 const SNAP = get(ENV, "BLP_BBH_BIN",
@@ -61,7 +64,7 @@ const NAZ = round(Int, envnum("BLP_MCB_SECTORS", 16))
 const B0 = envnum("BLP_MCB_BIAS", 1e4)
 const BIASMODE = get(ENV, "BLP_MCB_BIASMODE", "state")        # state: StateBias(b0, order); constant: Bias(b0)
 const BORDER = envnum("BLP_MCB_BIAS_ORDER", 100)
-const MS = envnum("BLP_MCB_MS", 2.272822681e28)          # eht_bbh/s455_i17_Rh40/records.json
+const MS = envnum("BLP_MCB_MS", m87_density_scale("00455"))
 const HOTCROSS = get(ENV, "BLP_REF_GPUMONTY",
                      joinpath(dirname(ROOT), "Mahakala", "ref-code", "gpumonty", "table", "hotcross.dat"))
 const OUT = get(ENV, "BLP_MCB_OUT", joinpath(@__DIR__, "out", "mc_dyn", "binary_hi"))
@@ -71,8 +74,8 @@ const GIT_SHA = try
 catch
     "unknown"
 end
-const M_BH = 2 * 6.5e9 * MSUN
-const NU = 230.0e9
+const M_BH = 2 * M87_MASS_G
+const NU = M87_FREQUENCY_HZ
 const INCL = (17.0, 50.0, 90.0)
 
 mkpath(OUT)
