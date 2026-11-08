@@ -11,21 +11,30 @@ Band sums of per-band maps: `sums` holds, per output `k`, a tuple of band maps
 `(m₁, …, m_K)`, and item `item` writes `outs[k][i] = ((0 + m₁[item]) + m₂[item]) + … +
 m_K[item]`, the bands added in order starting from zero, which gives the bits of
 `I = zeros(…)` followed by `I .+= m_b` band after band. Called as `prog(item, i, outs...)`
-with one output per entry of `sums`.
+with one output per entry of `sums`. The maps of one sum share their size (else a
+`DimensionMismatch`), and an item outside them is a `BoundsError`.
 """
 struct BandSum{S<:Tuple} <: Function
     sums::S
+    function BandSum(sums::S) where {S<:Tuple}
+        for maps in sums, m in maps
+            axes(m) == axes(first(maps)) || throw(DimensionMismatch(
+                "BandSum: band maps of sizes $(size(first(maps))) and $(size(m)) in one sum"))
+        end
+        return new{S}(sums)
+    end
 end
 Adapt.@adapt_structure BandSum
 
 @inline add_bands(::Tuple{}, item, acc) = acc
 @inline add_bands(maps::Tuple, item, acc) =
-    add_bands(Base.tail(maps), item, acc + @inbounds(first(maps)[item]))
+    add_bands(Base.tail(maps), item, acc + first(maps)[item])
 
 @inline store_sums!(::Tuple{}, item, i, ::Tuple{}) = nothing
 @inline function store_sums!(sums::Tuple, item, i, outs::Tuple)
     o = first(outs)
-    @inbounds o[i] = add_bands(first(sums), item, zero(eltype(o)))
+    s = add_bands(first(sums), item, zero(eltype(o)))
+    @inbounds o[i] = s
     return store_sums!(Base.tail(sums), item, i, Base.tail(outs))
 end
 
@@ -62,7 +71,8 @@ end
 
 The components of vector-valued items as planes: item `item` writes component `k` of
 `src[item]` (an `SVector`) to output `k`, `outs[k][i] = src[item][k]`. Called as
-`prog(item, i, outs...)` with one output per component.
+`prog(item, i, outs...)` with one output per component; an item outside `src` is a
+`BoundsError`.
 """
 struct Split{V} <: Function
     src::V
@@ -70,7 +80,7 @@ end
 Adapt.@adapt_structure Split
 
 function (p::Split)(item, i, outs::Vararg{Any,N}) where {N}
-    v = @inbounds p.src[item]
+    v = p.src[item]
     N == length(v) || throw(ArgumentError("Split: $N outputs for $(length(v)) components"))
     store_all!(outs, i, Tuple(v))
     return nothing
@@ -91,9 +101,13 @@ end
 
 Per group of band maps (`groups`, a tuple of vectors of maps) the band sum in band order
 from zero into a new `Float64` array of size `dims` ([`BandSum`](@ref), all groups in one
-run on Julia threads).
+run on Julia threads). A band map of another size is a `DimensionMismatch`.
 """
 function band_sums(groups::Tuple, dims::Dims)
+    for g in groups, m in g
+        size(m) == dims ||
+            throw(DimensionMismatch("band_sums: a band map of size $(size(m)) for size $dims"))
+    end
     outs = map(_ -> Array{Float64}(undef, dims), groups)
     host_epilogue!(BandSum(map(Tuple, groups)), outs, prod(dims))
     return outs

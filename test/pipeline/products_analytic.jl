@@ -128,5 +128,12 @@ bsum(maps) = (I = zero(maps[1]); for m in maps; I .+= m; end; I)
               isbits(Fill(NaN))
         @test_throws ArgumentError BandSum(((Ib[1],),))(1, 1, I, Q)
         @test_throws ArgumentError Split(S)(1, 1, planes[1:3]...)
+        # sizes: as the broadcast forms, a band map of another size is an error, and an item
+        # outside the maps is a BoundsError, not a read past them
+        @test_throws DimensionMismatch BandSum(((Ib[1], zeros(9, 7)),))
+        @test_throws DimensionMismatch band_sums((Ib,), (9, 7))
+        @test_throws DimensionMismatch band_sums((Ib, [Ib[1], zeros(7, 8)]), (7, 9))
+        @test_throws BoundsError BandSum(((vec(Ib[1]), vec(Ib[2])),))(64, 1, zeros(64))
+        @test_throws BoundsError Split(S)(11, 1, planes...)
     end
 end
