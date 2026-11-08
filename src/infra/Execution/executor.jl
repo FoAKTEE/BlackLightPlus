@@ -36,11 +36,13 @@ ThreadedExecutor(; chunk = :auto) = ThreadedExecutor(chunk)
 
 Runs a program on the devices of a [`DevicePool`](@ref): items are cut into chunks of
 `chunk` items (`:auto`: sized per run, [`chunk_for`](@ref)), the chunks are pulled by
-the pool's lanes (`lanes` per device), and each chunk is one launch of the program's device
-twin on the lane's device, its outputs copied back into the host arrays. `devices` are
-device handles or CUDA ordinals; executors built with the same devices and `lanes` share
-one registered pool, its residency caches and its learned child slots, whatever their
-chunk. Executors compare equal when they share the pool and the chunk setting.
+the pool's lanes (`lanes` per device), and each chunk is one launch of the lane's device
+form of the program ([`ProgramTwins`](@ref)), its outputs copied back into the host
+arrays. The launches of the lanes of a device overlap: they read the same residency
+arrays ([`share_lanes!`](@ref)) and write lane-owned outputs and accumulators. `devices`
+are device handles or CUDA ordinals; executors built with the same devices and `lanes`
+share one registered pool, its residency caches and its learned child slots, whatever
+their chunk. Executors compare equal when they share the pool and the chunk setting.
 """
 struct PoolExecutor <: Executor
     pool::DevicePool

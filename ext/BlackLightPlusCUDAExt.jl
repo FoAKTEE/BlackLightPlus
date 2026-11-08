@@ -3,8 +3,9 @@
 
 CUDA methods of the `Execution` device protocol for `CUDADevice`: activation, the
 KernelAbstractions backend, the functional probe, page-locked staging buffers, early
-release of device arrays, the free device memory, the per-thread stack limit, read-only
-loads through the constant cache, and the idle-device selection behind `select_devices`.
+release of device arrays, the free device memory, the lanes' streams and the arrays they
+share, the per-thread stack limit, read-only loads through the constant cache, and the
+idle-device selection behind `select_devices`.
 """
 module BlackLightPlusCUDAExt
 
@@ -12,7 +13,8 @@ using BlackLightPlus, CUDA
 using Adapt: Adapt
 using BlackLightPlus.Execution: CUDADevice
 import BlackLightPlus.Execution: backend, activate!, functional, stage_alloc, stage_free, free!,
-                      free_bytes, prepare_launch!, stack_bytes, readonly, select_devices
+                      free_bytes, share_lanes!, lane_queue, sync_queue, queue_idle,
+                      prepare_launch!, stack_bytes, readonly, select_devices
 
 backend(::CUDADevice) = CUDA.CUDABackend()
 
@@ -41,6 +43,22 @@ free!(::CUDADevice, x::CUDA.CuArray) = CUDA.unsafe_free!(x)
 
 # The driver's free memory of the device (`cuMemGetInfo`).
 free_bytes(d::CUDADevice) = CUDA.device!(() -> Int(CUDA.memory_info()[1]), d.ordinal)
+
+# A lane's queue is its task's stream. CUDA.jl orders a device array by the stream that
+# last converted it for a launch: a conversion on another stream waits for that one and
+# takes it over, and a free is ordered against it alone. A shared array waits once for the
+# stream that wrote it, then no conversion waits; the stream a free is ordered against is
+# then any lane's, so it is freed only after `sync_lanes`.
+lane_queue(::CUDADevice) = CUDA.stream()
+sync_queue(d::CUDADevice, s::CUDA.CuStream) =
+    (CUDA.device!(() -> CUDA.synchronize(s), d.ordinal); nothing)
+queue_idle(::CUDADevice, s::CUDA.CuStream) = CUDA.isdone(s)
+
+function share_lanes!(::CUDADevice, a::CUDA.CuArray)
+    CUDA.synchronize(a)
+    CUDA.enable_synchronization!(a, false)
+    return a
+end
 
 function prepare_launch!(::CUDADevice, prog)
     bytes = stack_bytes(prog)

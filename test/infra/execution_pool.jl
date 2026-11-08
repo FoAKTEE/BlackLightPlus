@@ -2,12 +2,40 @@
 # across persistent lanes, rethrows a worker's exception and stays usable, streams items
 # added while running, refuses nested jobs, reuses one registered pool per device list,
 # whatever the chunk, shuts its workers down, and releases replaced and dropped staging
-# buffers.
+# buffers. The lanes of a device read the same residency arrays and write their own
+# accumulator twins: two lanes give the sums of one, every twin is gathered, and the
+# residency cache returns to its size once the call's host arrays are collected.
 using Test, BlackLightPlus
 using KernelAbstractions
-using BlackLightPlus.Execution: DevicePool, PoolExecutor, HostDevice, CUDADevice, resident, describe
+using BlackLightPlus.Execution: DevicePool, PoolExecutor, HostDevice, CUDADevice, resident, describe,
+                     ExactScalars, add!, gather!, foreach_item!, sync_lanes, share_lanes!
 const Ex = BlackLightPlus.Execution
 const Decks = Main.Decks
+
+# Item `k` adds `a[k]` and its square to exact scalars: a program whose array is a
+# residency twin and whose accumulator is a twin per lane.
+struct SharedSum{A,S} <: Function
+    a::A
+    scalars::S
+end
+Ex.Adapt.@adapt_structure SharedSum
+function (p::SharedSum)(item, i)
+    v = @inbounds p.a[item]
+    add!(p.scalars, 1, v)
+    add!(p.scalars, 2, v * v)
+    return nothing
+end
+
+function shared_sums(exec, a)
+    s = ExactScalars(2)
+    foreach_item!(exec, SharedSum(a, s), 1:length(a))
+    lanes = length(s.twins.list)
+    gather!(s)
+    return (acc = s.acc, n = s.n, lanes = lanes, pending = length(s.twins.list))
+end
+
+# A call over a host array that dies with the call.
+@noinline temporary_call(exec) = (shared_sums(exec, rand(3_000)); nothing)
 
 @testset "device pool" begin
 
@@ -117,6 +145,63 @@ end
     close(q)
     r = Ex.device_pool(Decks.hosts(5))
     @test r !== q && isopen(r)                            # reopened on demand
+end
+
+@testset "lanes: shared residency arrays, lane-owned accumulators" begin
+    a = rand(20_000)
+    ref = shared_sums(Ex.ThreadedExecutor(chunk = 64), a)
+    p1 = DevicePool(Decks.hosts(1); lanes = 1)
+    p2 = DevicePool(Decks.hosts(1); lanes = 2)
+    p3 = DevicePool(Decks.hosts(2); lanes = 3)
+    one = shared_sums(PoolExecutor(p1; chunk = 97), a)
+    @test one.acc == ref.acc && one.n == ref.n && one.lanes == 1
+    for p in (p2, p3)
+        r = shared_sums(PoolExecutor(p; chunk = 97), a)
+        @test r.acc == one.acc && r.n == one.n
+        @test 1 <= r.lanes <= length(p.lanes) && r.pending == 0
+    end
+    # each lane's device form: the residency array is the device's one, the accumulator its own
+    s = ExactScalars(2)
+    tw = Ex.ProgramTwins(p2, SharedSum(a, s))
+    ts = Vector{Any}(undef, 2)
+    for (k, lane) in enumerate(p2.lanes)
+        Ex.run_job!((l, _, _) -> (ts[k] = Ex.program_twin!(tw, l)), p2, [lane], (1,))
+    end
+    @test ts[1].a.a === ts[2].a.a === resident(p2, HostDevice(1), a)
+    @test ts[1].scalars.acc !== ts[2].scalars.acc && length(s.twins.list) == 2
+    @test Ex.program_twin!(tw, p2.lanes[1]) === ts[1]
+    gather!(s)
+    @test length(s.twins.list) == 0 && s.n == [0, 0]
+    # a host device has no lane queues: synchronising and sharing are no-ops
+    @test all(l -> (@atomic l.queue) === nothing, p2.lanes)
+    @test sync_lanes(p2, HostDevice(1)) === nothing && share_lanes!(HostDevice(1), a) === a
+    # the residency cache returns to its size once a call's host arrays are collected
+    exec = PoolExecutor(p2; chunk = 211)
+    n0 = Ex.resident_count(exec, HostDevice(1))
+    temporary_call(exec)
+    @test Ex.resident_count(exec, HostDevice(1)) == n0 + 1
+    for _ in 1:3
+        GC.gc(true)
+    end
+    @test Ex.resident_count(exec, HostDevice(1)) == n0
+    # the switches: sharing on by default, the lane check off; gather! passes the check here
+    @test Ex.lane_sharing() && !Ex.lane_check()
+    old = Ex.lane_check!(true)
+    try
+        @test !old && Ex.lane_check()
+        @test shared_sums(PoolExecutor(p2; chunk = 97), a).acc == one.acc
+        @test Ex.check_lanes(p2, HostDevice(1), "test") === nothing
+    finally
+        Ex.lane_check!(old)
+    end
+    old = Ex.lane_sharing!(false)
+    try
+        @test old && !Ex.lane_sharing()
+        @test shared_sums(PoolExecutor(p2; chunk = 97), copy(a)).acc == one.acc
+    finally
+        Ex.lane_sharing!(old)
+    end
+    foreach(close, (p1, p2, p3))
 end
 
 @testset "host staging: replaced and dropped buffers are released" begin

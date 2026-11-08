@@ -21,11 +21,11 @@ Policy (the driver's): a layer whose buffer overflowed is rerun from the same in
 with a buffer of capacity at least `count[1]` (the rerun spawns the identical children,
 their streams being genealogy-keyed), so no child is ever lost. Read the children with
 [`children`](@ref) (copies, safe to hand to the next layer's program) and reset the
-buffer with `empty!`. Inside a pool program each device writes a twin buffer of the same
-capacity; [`gather!`](@ref) appends the stored children of every twin and adds the
-attempt counts. In a program run by [`foreach_cascade!`](@ref) the buffer is the slot
-that the cascade fills per chunk and generation: only its element type and its layout
-are read.
+buffer with `empty!`. Inside a pool program each lane writes a device buffer of its own
+of the same capacity; [`gather!`](@ref) appends the stored children of every lane's
+buffer and adds the attempt counts. In a program run by [`foreach_cascade!`](@ref) the
+buffer is the slot that the cascade fills per chunk and generation: only its element
+type and its layout are read.
 """
 struct ChildBuffer{P,R,C,W}
     photons::P
@@ -47,7 +47,7 @@ function Adapt.adapt_structure(to::DeviceAdaptor, b::ChildBuffer)
     t = ChildBuffer(KernelAbstractions.allocate(bk, eltype(b.photons), cap),
                     KernelAbstractions.allocate(bk, MCRng, cap), zeroed(to.dev, b.count),
                     b.layout, nothing)
-    return register!(b.twins, to.dev, t)
+    return register!(b.twins, to, t)
 end
 
 """
@@ -105,7 +105,7 @@ end
 function gather!(b::ChildBuffer)
     n_att = Int(b.count[1])
     stored = length(b)
-    for (dev, t) in take_twins!(b.twins)
+    for (to, t) in gather_twins!(b.twins)
         nd = Int(Array(t.count)[1])
         sd = min(nd, length(t.photons))
         if stored + sd > length(b.photons)
@@ -118,7 +118,7 @@ function gather!(b::ChildBuffer)
         end
         stored += sd
         n_att += nd
-        foreach(a -> free!(dev, a), (t.photons, t.rngs, t.count))
+        foreach(a -> free!(to.dev, a), (t.photons, t.rngs, t.count))
     end
     b.count[1] = n_att
     return b

@@ -1,7 +1,8 @@
 # The device pool: persistent worker tasks ("lanes"), `lanes` per device, pulling queued
-# work items from one shared queue; per-lane device buffers and host staging buffers;
-# the process-wide registry of pools. Work items are independent and write their results
-# by item index, so a result never depends on which lane, device or chunk ran it.
+# work items from one shared queue; per-lane device buffers and host staging buffers; the
+# lanes' queues, synchronised at the end of every job; the process-wide registry of
+# pools. Work items are independent and write their results by item index, so a result
+# never depends on which lane, device or chunk ran it.
 
 """
     PoolLane
@@ -9,7 +10,8 @@
 One persistent worker of a `DevicePool`: a task bound to device `dev` (KernelAbstractions
 backend `backend`) that runs the jobs posted to its `inbox`. `bufs` and `stage` cache its
 device buffers and host staging buffers by (purpose, element type); only the lane itself
-touches them while the pool is open.
+touches them while the pool is open. `queue` is the queue its launches run on
+([`lane_queue`](@ref)), recorded once its device is active (`nothing` before).
 """
 mutable struct PoolLane
     const dev::AbstractDevice
@@ -17,9 +19,10 @@ mutable struct PoolLane
     const inbox::Channel{Any}
     const bufs::Dict{Any,Any}
     const stage::Dict{Any,Any}
+    @atomic queue::Any
     task::Task
     PoolLane(dev) =
-        new(dev, backend(dev), Channel{Any}(Inf), Dict{Any,Any}(), Dict{Any,Any}())
+        new(dev, backend(dev), Channel{Any}(Inf), Dict{Any,Any}(), Dict{Any,Any}(), nothing)
 end
 
 # Device twins of host objects on one device, keyed by `objectid` and holding the host
@@ -36,6 +39,9 @@ ResidencyCache() = ResidencyCache(ReentrantLock(), Dict{UInt,Tuple{WeakRef,Any}}
 Persistent multi-device runtime over `devices` (device handles or CUDA ordinals): `lanes`
 worker tasks per device, spawned once, a shared work queue, one residency cache per device
 ([`resident`](@ref)) and the child slots each device has learned ([`learned_slots`](@ref)).
+The lanes of a device share the residency cache's arrays, which they only read, and own
+every array they write, so their launches overlap ([`share_lanes!`](@ref)); every job
+ends with [`sync_lanes`](@ref) on the devices of its lanes.
 `chunk` is the chunk setting of the executors built on the pool with `PoolExecutor(pool)`:
 a positive item count, or `:auto`, sized per run ([`chunk_for`](@ref)). Every device must
 be functional (`BackendUnavailable` otherwise). Run Julia with more threads than devices
@@ -145,12 +151,51 @@ end
 first_lane(pool::DevicePool, dev) =
     pool.lanes[(device_slot(pool, dev) - 1) * lanes_per_device(pool) + 1]
 
+# Position of `lane` in `pool.lanes`.
+lane_slot(pool::DevicePool, lane::PoolLane) = findfirst(l -> l === lane, pool.lanes)
+
+"""
+    sync_lanes(pool, dev)
+
+Wait until every lane of the device `dev` of `pool` has finished the work it queued on
+the device ([`sync_queue`](@ref)). A device array that the lanes share
+([`share_lanes!`](@ref)) is freed only after it: every pool job ends with it on the
+devices of its lanes while the job's program twins are alive, and an eviction from the
+residency cache runs it before freeing. A no-op for lanes whose launches finish when
+they return (`HostDevice`).
+"""
+function sync_lanes(pool::DevicePool, dev)
+    d = device(dev)
+    for lane in pool.lanes
+        lane.dev == d || continue
+        q = @atomic lane.queue
+        q === nothing || sync_queue(d, q)
+    end
+    return nothing
+end
+
+# With the lane check on (`lane_check!`), throw unless the queue of every lane of `dev` in
+# `pool` is idle; `what` names the operation for the message.
+function check_lanes(pool::DevicePool, dev, what)
+    lane_check() || return nothing
+    d = device(dev)
+    for (k, lane) in enumerate(pool.lanes)
+        lane.dev == d || continue
+        q = @atomic lane.queue
+        q === nothing || queue_idle(d, q) ||
+            error("lane check: $what on $d while lane $k of the pool is busy")
+    end
+    return nothing
+end
+
 # A lane whose device cannot be activated still serves its jobs: it fails each one with
 # the activation error and drains its items, so no caller waits forever.
 function lane_loop(lane::PoolLane)
     task_local_storage(LANE_KEY, lane)
     init_err = try
-        activate!(lane.dev); nothing
+        activate!(lane.dev)
+        @atomic lane.queue = lane_queue(lane.dev)
+        nothing
     catch e
         CapturedException(e, catch_backtrace())
     end
@@ -220,8 +265,9 @@ function check_caller(pool::DevicePool)
         error("DevicePool: a pool job cannot be started from inside a pool worker")
 end
 
-# Post a job over `items` (in queue order) to `lanes`, wait for all of them, rethrow the
-# first failure.
+# Post a job over `items` (in queue order) to `lanes`, wait for all of them, synchronise
+# the lanes of their devices while the job (and the program twins its function holds) is
+# alive, rethrow the first failure.
 function run_job!(g, pool::DevicePool, lanes, items)
     isempty(items) && return nothing
     check_caller(pool)
@@ -229,6 +275,11 @@ function run_job!(g, pool::DevicePool, lanes, items)
     @lock pool.post_lock foreach(lane -> put!(lane.inbox, job), lanes)
     foreach(_ -> take!(job.done), lanes)
     err = @atomic job.err
+    try
+        GC.@preserve job foreach(d -> sync_lanes(pool, d), unique(l.dev for l in lanes))
+    catch e
+        err === nothing && rethrow()
+    end
     err === nothing || throw(err)
     return nothing
 end

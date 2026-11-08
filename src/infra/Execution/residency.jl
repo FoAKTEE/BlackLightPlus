@@ -1,7 +1,9 @@
 # Residency: a host object as a device sees it, built by `Adapt` with every host array
 # replaced by its copy on the device. Array copies are cached per pool and device by the
 # identity of the host array, which the cache holds weakly: a dropped host array frees
-# its entries. A cached host array must not be mutated in place afterwards.
+# its entries once every lane of the device has synchronised. A cached host array must
+# not be mutated in place afterwards, and its copy is only read: the lanes of a device
+# share it. The program twins of a call are per lane.
 
 """
     DeviceAdaptor(pool, dev, readonly)
@@ -22,23 +24,33 @@ function Adapt.adapt_storage(to::DeviceAdaptor, a::Array)
     return to.readonly ? readonly(to.dev, t) : t
 end
 
-# Drop the entries whose host object has been collected.
-function purge!(cache::ResidencyCache)
-    for (k, (w, _)) in collect(cache.twins)
-        w.value === nothing && delete!(cache.twins, k)
+# Evict the entries of the residency cache of `dev` whose host object has been collected:
+# wait for every lane of the device, then free their device arrays. Runs under the
+# cache's lock.
+function evict!(pool::DevicePool, dev::AbstractDevice, cache::ResidencyCache)
+    dead = [k for (k, (w, _)) in cache.twins if w.value === nothing]
+    isempty(dead) && return cache
+    sync_lanes(pool, dev)
+    check_lanes(pool, dev, "eviction")
+    for k in dead
+        free!(dev, cache.twins[k][2])
+        delete!(cache.twins, k)
     end
     return cache
 end
 
-# The copy of `host` on `dev`, uploaded on first request. Runs on a task with `dev` active.
+# The copy of `host` on `dev`, uploaded on first request and shared by the lanes of `dev`
+# (`share_lanes!`, while `lane_sharing()`). Runs on a task with `dev` active.
 function cached_twin(pool::DevicePool, dev::AbstractDevice, host::Array)
     cache = pool.resident[device_slot(pool, dev)]
     return @lock cache.lock begin
         id = objectid(host)
         slot = get(cache.twins, id, nothing)
         if slot === nothing || slot[1].value !== host
-            purge!(cache)
-            slot = cache.twins[id] = (WeakRef(host), upload(dev, host))
+            evict!(pool, dev, cache)
+            t = upload(dev, host)
+            lane_sharing() && share_lanes!(dev, t)
+            slot = cache.twins[id] = (WeakRef(host), t)
         end
         slot[2]
     end
@@ -52,7 +64,10 @@ also be a `PoolExecutor`; `dev` a handle or an ordinal): an array's cached devic
 or for any other object `Adapt.adapt(DeviceAdaptor(pool, dev, false), obj)`, i.e. the
 same structure with each array replaced by its cached copy. The same host array always
 yields the same copy on a given device, each device its own. Uploads run on a lane of
-`dev`; calling from a lane of another device of the same pool is an error.
+`dev`; calling from a lane of another device of the same pool is an error. The copies
+are read-only, shared by the lanes of `dev`, and valid while their host arrays live:
+once a host array has been collected, its copy is freed at the cache's next upload or
+[`resident_count`](@ref).
 """
 resident(pool::DevicePool, dev, obj) =
     on_device(() -> Adapt.adapt(DeviceAdaptor(pool, device(dev), false), obj), pool, dev)
@@ -75,31 +90,40 @@ adapt_program(pool::DevicePool, dev::AbstractDevice, prog) =
 """
     resident_count(pool, dev) -> Int
 
-Number of live entries in the residency cache of `dev` in `pool`, after dropping those
-whose host object has been collected.
+Number of live entries in the residency cache of `dev` in `pool`, after evicting those
+whose host object has been collected (every lane of `dev` synchronised, their device
+arrays freed).
 """
 function resident_count(pool::DevicePool, dev)
-    cache = pool.resident[device_slot(pool, dev)]
-    return @lock cache.lock length(purge!(cache).twins)
+    d = device(dev)
+    cache = pool.resident[device_slot(pool, d)]
+    return @lock cache.lock length(evict!(pool, d, cache).twins)
 end
 
-# Per-call device twins of one program, built lazily by the first lane of each device
-# that needs one (devices build concurrently, lanes of one device once).
+"""
+    ProgramTwins(pool, prog)
+
+The device twins of the program `prog` for one call on `pool`, one per lane, each built by
+its lane at its first chunk ([`program_twin!`](@ref)). The twins of the lanes of a device
+read the same residency arrays and write their own accumulator and child twins, which
+[`gather!`](@ref) folds; the call's job holds them until [`sync_lanes`](@ref).
+"""
 struct ProgramTwins{P}
     pool::DevicePool
     prog::P
     twins::Vector{Any}
-    locks::Vector{ReentrantLock}
 end
-ProgramTwins(pool::DevicePool, prog) =
-    ProgramTwins(pool, prog, Any[nothing for _ in pool.devices],
-                 [ReentrantLock() for _ in pool.devices])
+ProgramTwins(pool::DevicePool, prog) = ProgramTwins(pool, prog, Any[nothing for _ in pool.lanes])
 
+"""
+    program_twin!(tw::ProgramTwins, lane) -> device program
+
+The device form of `tw.prog` for `lane` ([`device_program`](@ref)'s adaptation), built at
+the lane's first request. Call only from the lane's task.
+"""
 function program_twin!(tw::ProgramTwins, lane::PoolLane)
-    d = device_slot(tw.pool, lane.dev)
-    return @lock tw.locks[d] begin
-        t = tw.twins[d]
-        t === nothing && (t = tw.twins[d] = adapt_program(tw.pool, lane.dev, tw.prog))
-        t
-    end
+    k = lane_slot(tw.pool, lane)
+    t = tw.twins[k]
+    t === nothing && (t = tw.twins[k] = adapt_program(tw.pool, lane.dev, tw.prog))
+    return t
 end

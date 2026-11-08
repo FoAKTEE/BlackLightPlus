@@ -1,32 +1,42 @@
 # Accumulators that per-item programs write through atomics on either executor: exact
 # spectral bins and exact scalars (integer limbs, so the totals are independent of the
-# executor, thread count, device count and chunking). Under a `ThreadedExecutor` the
-# program writes the host arrays. Under a `PoolExecutor` each device that runs a chunk
-# gets a zeroed twin (its `DeviceAdaptor` method), registered with the host accumulator;
-# `gather!` adds the twins into the host arrays after `foreach_item!` and releases them.
+# executor, thread count, device count, lane count and chunking). Under a
+# `ThreadedExecutor` the program writes the host arrays. Under a `PoolExecutor` each lane
+# that runs a chunk gets a zeroed twin (its `DeviceAdaptor` method), registered with the
+# host accumulator and written by that lane alone; `gather!` adds the twins into the host
+# arrays after `foreach_item!` and releases them.
 
 using ..Numerics: CL, ME, HPL, XSUM_NSLOT, XSUM_MAX_ADDENDS, xsum_atomic_add!, xsum_round,
                   xsum_round_all, xsum_zeros
 import Atomix
 
-# The device twins of one host accumulator, awaiting `gather!`.
+# The device twins of one host accumulator, one per lane that ran a chunk, awaiting
+# `gather!`.
 struct Twins
     lock::ReentrantLock
     list::Vector{Any}
 end
 Twins() = Twins(ReentrantLock(), Any[])
 
-# Register the twin `t` of `dev`; returns `t`.
-function register!(tw::Twins, dev, t)
-    @lock tw.lock push!(tw.list, (dev, t))
+# Register the twin `t` that the adaptor `to` made on its device; returns `t`.
+function register!(tw::Twins, to::DeviceAdaptor, t)
+    @lock tw.lock push!(tw.list, (to, t))
     return t
 end
 
-# Take every registered (device, twin) pair, leaving none.
+# Take every registered (adaptor, twin) pair, leaving none.
 take_twins!(tw::Twins) = @lock tw.lock begin
     l = copy(tw.list)
     empty!(tw.list)
     l
+end
+
+# The registered twins for `gather!`, taken once the lane check (`check_lanes`) holds on
+# the device of every one of them.
+function gather_twins!(tw::Twins)
+    pairs = @lock tw.lock copy(tw.list)
+    foreach(((to, _),) -> check_lanes(to.pool, to.dev, "gather!"), pairs)
+    return take_twins!(tw)
 end
 
 # A zeroed device copy of the host array `a`.
@@ -106,8 +116,9 @@ Frequency bin `i` covers `ln ν ∈ lnu_min + [(i − 1), i) dlnu` with
 dropped. [`record!`](@ref) adds through atomics on host and device arrays alike, so the
 bins hold the exact sums whatever the order of arrival; `merge!` adds bins of the same
 grid by integer addition; [`Spectrum`](@ref) rounds them once per cell.
-Inside a pool program the device twin is a zeroed accumulator gathered back by
-[`gather!`](@ref); with any other `Adapt` adaptor the arrays are adapted.
+Inside a pool program each lane's device form is a zeroed accumulator of its own,
+gathered back by [`gather!`](@ref); with any other `Adapt` adaptor the arrays are
+adapted.
 """
 struct ExactBins{B<:Bands,C,A,W}
     bands::B
@@ -146,7 +157,7 @@ Adapt.adapt_structure(to, b::ExactBins) =
     with_arrays(b, Adapt.adapt(to, b.count), Adapt.adapt(to, b.sumw), Adapt.adapt(to, b.sumwE),
                 Adapt.adapt(to, b.sumwE2), nothing)
 Adapt.adapt_structure(to::DeviceAdaptor, b::ExactBins) =
-    register!(b.twins, to.dev,
+    register!(b.twins, to,
               with_arrays(b, zeroed(to.dev, b.count), zeroed(to.dev, b.sumw),
                           zeroed(to.dev, b.sumwE), zeroed(to.dev, b.sumwE2), nothing))
 
@@ -226,15 +237,17 @@ end
 """
     gather!(acc) -> acc
 
-Add the device twins that a `PoolExecutor` made of the host accumulator `acc`
+Add the device twins that a `PoolExecutor` made for the host accumulator `acc`
 ([`ExactBins`](@ref), [`ExactScalars`](@ref), [`ChildBuffer`](@ref)) during
-`foreach_item!` into `acc`, and release them. A no-op when there are none (a
-`ThreadedExecutor` writes `acc` itself). Call it after every `foreach_item!`.
+`foreach_item!`, one per lane that ran a chunk, into `acc`, and release them. A no-op when
+there are none (a `ThreadedExecutor` writes `acc` itself). Call it after every
+`foreach_item!`. With the lane check on ([`lane_check!`](@ref)) it first asserts that
+every lane of each twin's device is idle.
 """
 function gather!(b::ExactBins)
-    for (dev, t) in take_twins!(b.twins)
+    for (to, t) in gather_twins!(b.twins)
         merge!(b, t)
-        foreach(a -> free!(dev, a), (t.count, t.sumw, t.sumwE, t.sumwE2))
+        foreach(a -> free!(to.dev, a), (t.count, t.sumw, t.sumwE, t.sumwE2))
     end
     return b
 end
@@ -423,7 +436,7 @@ ExactScalars(n::Integer) = ExactScalars(xsum_zeros(Int(n)), zeros(Int64, n), Twi
 Adapt.adapt_structure(to, s::ExactScalars) =
     ExactScalars(Adapt.adapt(to, s.acc), Adapt.adapt(to, s.n), nothing)
 Adapt.adapt_structure(to::DeviceAdaptor, s::ExactScalars) =
-    register!(s.twins, to.dev, ExactScalars(zeroed(to.dev, s.acc), zeroed(to.dev, s.n), nothing))
+    register!(s.twins, to, ExactScalars(zeroed(to.dev, s.acc), zeroed(to.dev, s.n), nothing))
 
 """
     add!(s::ExactScalars, k, x::Float64) -> nothing
@@ -462,9 +475,9 @@ function Base.merge!(dst::ExactScalars, src::ExactScalars)
 end
 
 function gather!(s::ExactScalars)
-    for (dev, t) in take_twins!(s.twins)
+    for (to, t) in gather_twins!(s.twins)
         merge!(s, t)
-        foreach(a -> free!(dev, a), (t.acc, t.n))
+        foreach(a -> free!(to.dev, a), (t.acc, t.n))
     end
     return s
 end

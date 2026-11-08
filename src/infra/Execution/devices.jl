@@ -1,15 +1,17 @@
 # Device handles and the device protocol: KernelAbstractions backend, activation,
-# staging buffers, release, launch preparation and device selection. The methods for
-# `CUDADevice` come from the package extension; the fallbacks here serve `HostDevice`
-# and report a missing extension for everything else.
+# staging buffers, release, lane queues and shared arrays, launch preparation and device
+# selection. The methods for `CUDADevice` come from the package extension; the fallbacks
+# here serve `HostDevice` and report a missing extension for everything else.
 
 """
     AbstractDevice
 
 A place where a `PoolExecutor` launches kernels. A device answers [`backend`](@ref),
 [`activate!`](@ref), [`functional`](@ref), [`stage_alloc`](@ref)/[`stage_free`](@ref),
-[`free!`](@ref), [`free_bytes`](@ref), [`prepare_launch!`](@ref) and [`readonly`](@ref).
-Devices compare by value, so two handles of the same device are interchangeable.
+[`free!`](@ref), [`free_bytes`](@ref), [`share_lanes!`](@ref), [`lane_queue`](@ref),
+[`sync_queue`](@ref), [`queue_idle`](@ref), [`prepare_launch!`](@ref) and
+[`readonly`](@ref). Devices compare by value, so two handles of the same device are
+interchangeable.
 """
 abstract type AbstractDevice end
 
@@ -143,6 +145,71 @@ Bytes of memory free for allocation on `dev` now: the driver's free memory of a
 from an eighth of it ([`foreach_cascade!`](@ref)); `0` turns that budget off.
 """
 free_bytes(::AbstractDevice) = 0
+
+"""
+    share_lanes!(dev, a) -> a
+
+Let every lane of `dev` read the device array `a` without waiting for the lane that last
+used it: on a `CUDADevice` (CUDA extension) wait for the stream that wrote `a` and exempt
+`a` from the implicit stream synchronisation of the CUDA package
+(`CUDA.enable_synchronization!(a, false)`), so that launches of the lanes that read it
+overlap; the identity on every other device. Only for an array that is complete
+and never written afterwards: the residency cache shares each upload
+([`lane_sharing!`](@ref)), and a shared array is freed only after
+[`sync_lanes`](@ref).
+"""
+share_lanes!(::AbstractDevice, a) = a
+
+"""
+    lane_queue(dev) -> queue
+
+The queue that the launches of the calling task on `dev` run on: the task's stream on a
+`CUDADevice` (CUDA extension), `nothing` on every other device, whose launches have
+finished when they return. A pool lane records it once its device is active.
+"""
+lane_queue(::AbstractDevice) = nothing
+
+"""
+    sync_queue(dev, q)
+
+Wait until the work queued on the queue `q` of `dev` ([`lane_queue`](@ref)) has finished.
+"""
+sync_queue(::AbstractDevice, q) = nothing
+
+"""
+    queue_idle(dev, q) -> Bool
+
+Whether the queue `q` of `dev` has no unfinished work (`CUDA.isdone` on a `CUDADevice`);
+`true` on every other device.
+"""
+queue_idle(::AbstractDevice, q) = true
+
+const LANE_SHARING = Threads.Atomic{Bool}(true)
+const LANE_CHECK = Threads.Atomic{Bool}(false)
+
+"""
+    lane_sharing!(on::Bool) -> Bool
+
+Whether the residency cache shares the device arrays it uploads from now on between the
+lanes of their device ([`share_lanes!`](@ref)); on by default. Off, every device array
+keeps the implicit stream synchronisation of the CUDA package, and the lanes of a device
+do not overlap launches that read the same array (the form compared against). Arrays already uploaded
+keep their setting. Returns the previous setting; `lane_sharing()` reads it.
+"""
+lane_sharing!(on::Bool) = Threads.atomic_xchg!(LANE_SHARING, on)
+lane_sharing() = LANE_SHARING[]
+
+"""
+    lane_check!(on::Bool) -> Bool
+
+The lane check, a debug switch, off by default: while on, every eviction from a
+residency cache and every [`gather!`](@ref) of accumulator or child twins, each of which
+frees device arrays, first asserts that the queue of every lane of the device is idle
+and throws an `ErrorException` naming the busy lane otherwise. Returns the previous
+setting; `lane_check()` reads it.
+"""
+lane_check!(on::Bool) = Threads.atomic_xchg!(LANE_CHECK, on)
+lane_check() = LANE_CHECK[]
 
 """
     prepare_launch!(dev, prog)
