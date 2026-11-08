@@ -2,10 +2,13 @@
 #
 # BlackLightPlus has one kernel, `_foreach!`, specialised on the program it runs. Every program kind
 # a product launches is captured from the product itself: each case below calls a product
-# on small synthetic decks (`test/decks.jl`) with `backend = AuditExecutor()`, which
-# runs it on threads and records every program passed to `foreach_item!`,
-# `stream_blocks!` or `foreach_cascade!` with its item list and the element types of its
-# outputs. Each program is then made into its device twin by BlackLightPlus's own `device_program`
+# on small synthetic decks (the `test/decks.jl` of the audited package tree) with
+# `backend = AuditExecutor()`, which runs it on threads and records every program passed
+# to `foreach_item!`, `stream_blocks!` or `foreach_cascade!` with its item list and the
+# element types of its outputs. The table builders that dispatch on the executor
+# (`Products.grid_tables`, `Products.hotcross_build`) run on its threads: their programs
+# are not recorded, and their tables are bitwise those a pool builds. Each program is
+# then made into its device twin by BlackLightPlus's own `device_program`
 # on an `AuditDevice`, a device whose uploads and allocations are null-pointer
 # `CuDeviceArray`s and whose read-only view is CUDA's `Const` (the type `ReadOnlyArray` of
 # the CUDA extension turns into at launch), so accumulators, block swaps and locate
@@ -31,32 +34,40 @@
 # program (`render`), `amr` its block-grid form (`render_amr`), `coords` its coordinate-
 # list form (`render(plan, coords)`), `dmass`/`drathigh` the `sensitivity` derivatives,
 # `ladder4` a four-rung `variants` ladder; `analytic`, `analytic_layer`
-# (`photon_ring_layers`), `trace` (first window and `_resume`), `shadow`, and the Monte
+# (`photon_ring_layers`), `trace` (first window and `_resume`), `shadow`, `cross` the
+# crossing program of `render_crossings` (production, and `_precise`: Verner 9 with the
+# camera at infinity), each also with host-built rays (`_hostrays`, the march and landing
+# without the camera ray, launched as `render_crossings` launches it), and the Monte
 # Carlo `mc_*` cascades: the `primary`, and in the scattering runs the `layer` and the
 # `drain` of the scratch sums. `MixedLanes` runs the `f64` and `f32` imaging kernels.
 #
-# Usage, from the repository root, in the CUDA environment (no GPU needed for the default
-# mode; the runtime pin of its LocalPreferences.toml lets CUDA.jl compile without a driver):
-#   julia -t 4 --project=results/blp/gpu/env bench/kernel_audit.jl          # print the table
-#   julia -t 4 --project=results/blp/gpu/env bench/kernel_audit.jl --write  # record the baseline
-#   julia -t 4 --project=results/blp/gpu/env bench/kernel_audit.jl --check  # exit 1 on growth
-#   julia -t 4 --project=results/blp/gpu/env bench/kernel_audit.jl --device # on a GPU
+# Usage, from the repository root, in a CUDA environment <env> (BlackLightPlus, CUDA and
+# the runtime pinned in its LocalPreferences.toml, which lets CUDA.jl compile without a
+# driver; no GPU needed but for --device). The audited kernels are those of the
+# BlackLightPlus tree <env> loads; the baseline records that tree's commit.
+#   julia -t 4 --project=<env> bench/kernel_audit.jl          # print the table
+#   julia -t 4 --project=<env> bench/kernel_audit.jl --write  # record the baseline
+#   julia -t 4 --project=<env> bench/kernel_audit.jl --check  # exit 1 on growth
+#   julia -t 4 --project=<env> bench/kernel_audit.jl --device # on a GPU
 # Options: --baseline <path> (default bench/kernel_audit_baseline.json), --json <path>
 # (also write this run's table as JSON), --only <name,name,...>, --tol-regs <n> (default
 # 0), --tol-stack <bytes> (default 0).
 # --check fails when a kernel's registers exceed the baseline by more than --tol-regs, its
 # stack by more than --tol-stack bytes, when any of its spill counts grows at all, when a
-# kernel fails to compile, or when a baseline kernel is no longer audited; kernels absent
-# from the baseline are reported as NEW. --device compiles each kernel for CUDA device 0
-# through `cufunction`, the path of a launch, and prints
+# case fails to run or a kernel to compile (a `KERR` line), or when a baseline kernel is
+# no longer audited; kernels absent from the baseline are reported as NEW. --device
+# compiles each kernel for CUDA device 0 through `cufunction`, the path of a launch, and
+# prints
 #   KDEV <name> regs=<device> offline=<offline> local=<device local bytes> stack=<offline> match=<bool>
 # with `DEVICE PASS` / `DEVICE FAIL` (exit 1) on whether every register count matches.
 using BlackLightPlus, CUDA, KernelAbstractions, StaticArrays, Printf
 using Adapt: Adapt
-using BlackLightPlus.Plans: CameraConfig, PlasmaConfig, RunConfig, Lanes, prepare
+using BlackLightPlus.Plans: CameraConfig, PlasmaConfig, RunConfig, Lanes, prepare, precise
 using BlackLightPlus.Products: render, render_amr, render_analytic, photon_ring_layers, trace, shadow,
-                    sensitivity, variants, mc_spectrum
-using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, adm_grid_from_metric, metric
+                    sensitivity, variants, mc_spectrum, render_crossings, CrossingProgram,
+                    crossing_outputs
+using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, adm_grid_from_metric, metric,
+                     camera_ray, npixels
 using BlackLightPlus.Matter: PolishDoughnut, EquatorialDisk, UniformSphere
 using BlackLightPlus.Transfer: StokesI, IQUV
 using BlackLightPlus.Data: FrameWindow, scale_density
@@ -65,12 +76,12 @@ using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT
 using BlackLightPlus.Numerics: MCRng
 using BlackLightPlus.Execution: Executor, ThreadedExecutor, DevicePool, AbstractDevice, ImageBlock,
                      ChildBuffer, Generation, foreach_item!, stream_blocks!, foreach_cascade!,
-                     device_program
+                     device_program, HostRays, image_coords
 import BlackLightPlus.Execution: backend, functional, activate!, upload, readonly, describe
 
-const BLP_DIR = dirname(@__DIR__)
-const REPO = dirname(BLP_DIR)
-include(joinpath(BLP_DIR, "test", "decks.jl"))     # module Decks: the synthetic decks
+const BLP_DIR = dirname(@__DIR__)                  # this script's tree: the default baseline
+const PKG_DIR = pkgdir(BlackLightPlus)             # the audited tree
+include(joinpath(PKG_DIR, "test", "decks.jl"))     # module Decks: the synthetic decks
 
 const CC  = CUDA.CUDACore
 const GPC = CC.GPUCompiler
@@ -141,6 +152,12 @@ function BlackLightPlus.Execution.foreach_cascade!(e::AuditExecutor, primary, la
     note!(e, :cascade, (primary, layer), 1:n, ())
     return foreach_cascade!(e.inner, primary, layer, n, depth; kw...)
 end
+# The Monte Carlo table builders dispatch on the executor: built on the recording
+# executor's threads.
+BlackLightPlus.Products.grid_tables(e::AuditExecutor, sites, Ns; kw...) =
+    BlackLightPlus.Products.grid_tables(e.inner, sites, Ns; kw...)
+BlackLightPlus.Products.hotcross_build(e::AuditExecutor) =
+    BlackLightPlus.Products.hotcross_build(e.inner)
 
 # ---------------------------------------------------------------- the device programs
 # `(name, device program, item list, output element types)` of each launch of a record.
@@ -214,6 +231,21 @@ plan(m, s, mode, lane; kw...) =
 imaging(m, s, mode, lane) = "img_$(mode)_$(m)_$(s)_$(lane)" =>
     (e -> render(plan(m, s, mode, lane); backend = e), [""])
 
+# The crossing program of `render_crossings` on the plan of `rc`: its camera rays, or the
+# same rays made on the host by `camera_ray` (`HostRays`), over the plan's pixel queue.
+const DISK = EquatorialDisk(0.9)
+function crossings(rc, rays, e)
+    p = prepare(rc; spacetime = KERR, matter = nothing)
+    rays === :camera && return render_crossings(p, DISK; backend = e)
+    n = npixels(p)
+    src = HostRays([camera_ray(p.spacetime, p.frame, image_coords(p.pixels, k)...)[1] for k in 1:n])
+    prog = CrossingProgram(p.geodesic_spacetime, p.geodesic_budget, src, DISK, (0, 1, 2))
+    return foreach_item!(e, prog, p.queue; outs = crossing_outputs(3, n))
+end
+crossing(mode, rays) =
+    "cross_kerr_f64" * (mode === :precise ? "_precise" : "") * (rays === :host ? "_hostrays" : "") =>
+    (e -> crossings(mode === :precise ? precise(cfg()) : cfg(), rays, e), [""])
+
 const CASES = [
     [imaging(m, :kerr, mode, lane) for m in (:uniform, :blocks), mode in (:I, :IQUV),
                                         lane in (:f64, :f32)]...,
@@ -251,6 +283,7 @@ const CASES = [
     [("shadow_$(s)_$(lane)" => (e -> shadow(prepare(cfg(); spacetime = SPACETIME[s], matter = nothing,
                                                     lanes = LANE[lane]); backend = e), [""]))
      for (s, lane) in ((:kerr, :f64), (:kerr, :f32), (:binary, :f64), (:adm, :f64))]...,
+    [crossing(mode, rays) for rays in (:camera, :host), mode in (:production, :precise)]...,
     "mc_sphere_thin" =>
         (e -> mc_spectrum(prepare(UniformSphere()), 2_000; backend = e), ["_primary"]),
     "mc_sphere_scatter" =>
@@ -332,11 +365,19 @@ end
 # ---------------------------------------------------------------- baseline JSON (flat)
 const FIELDS = (:regs, :stack, :spill_st, :spill_ld, :callee_spill)
 
+# The commit of the audited tree, with `-dirty` when what the audit compiles (`src`, `ext`,
+# the decks) differs from it.
+function tree_commit(dir)
+    git(a...) = readchomp(pipeline(`git -C $dir $a`; stderr = devnull))
+    c = try git("rev-parse", "--short=7", "HEAD") catch; return "unknown" end
+    return isempty(git("status", "--porcelain", "--", "src", "ext", "test/decks.jl")) ? c :
+           c * "-dirty"
+end
+
 function toolchain()
     ptxas_v = match(r"V(\d+\.\d+\.\d+)", read(`$(CC.CUDA_Compiler_jll.ptxas()) --version`, String))[1]
-    commit = try readchomp(`git -C $REPO rev-parse --short HEAD`) catch; "unknown" end
     return (julia = string(VERSION), ptxas = ptxas_v, sm = "sm_$(SM.major)$(SM.minor)",
-            ptx = string(CONFIG.params.ptx), commit = commit)
+            ptx = string(CONFIG.params.ptx), commit = tree_commit(PKG_DIR))
 end
 
 function write_table(path, rows, tc)
@@ -382,7 +423,7 @@ function main(args)
 
     tc = toolchain()
     println("# kernel_audit ", join(("$k=$(getfield(tc, k))" for k in keys(tc)), " "),
-            " always_inline=false threads=", Threads.nthreads())
+            " always_inline=false threads=", Threads.nthreads(), " tree=", PKG_DIR)
     kernels = Pair{String,Any}[]
     for (prefix, (call, suffixes)) in CASES
         names = prefix .* suffixes
@@ -453,7 +494,7 @@ function main(args)
             end
         end
         for (name, r) in rows
-            r === nothing && (println("CHECK ", name, " FAIL (compile error)"); continue)
+            r === nothing && (println("CHECK ", name, " FAIL (not compiled, see KERR)"); continue)
             b = get(base, name, nothing)
             b === nothing && (println("CHECK ", name, " NEW"); continue)
             bad = String[]

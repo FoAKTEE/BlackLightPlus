@@ -179,14 +179,20 @@ uniform grid, the native blocks, both frame windows and the Polish doughnut on K
 blocks on the binary and the ADM grid, in `StokesI` and `IQUV`, on the `Float64` and
 `Float32` geodesic lanes; its block-grid (`render_amr`) and coordinate-list forms; the
 `sensitivity` derivatives and a `variants` ladder; the analytic program and its
-photon-ring layer; the trace windows; the shadows; and the Monte Carlo cascades of the
+photon-ring layer; the trace windows; the shadows; the crossing program of
+`render_crossings` on Kerr, production and precise (Verner 9, the camera at infinity),
+each with the camera rays and with the same rays built on the host (`HostRays`, the
+march and landing without the camera ray); and the Monte Carlo cascades of the
 sphere and the torus, their primary and, when they scatter, the layer and the drain of
 the lane scratch, placed in a lane's child buffers and scratch as `foreach_cascade!`
-places them. Each kernel is compiled for the item list its lane passes: a range as
-`UnitRange{Int}` (the analytic pixels, the block chunks, the trace windows, the cascade's
-chunks, generations and drain), any other list (the pixel queues, the photon-ring band
-points) as a device vector of `Int32` when every item fits, of `Int` otherwise. From the
-repository root, in the CUDA environment:
+places them. The Monte Carlo table builders (`grid_tables`, `hotcross_build`) run on the
+recording executor's threads and are not audited. Each kernel is compiled for the item
+list its lane passes: a range as `UnitRange{Int}` (the analytic pixels, the block chunks,
+the trace windows, the cascade's chunks, generations and drain), any other list (the
+pixel queues, the photon-ring band points) as a device vector of `Int32` when every item
+fits, of `Int` otherwise. The audited kernels are those of the BlackLightPlus tree the
+environment loads (its synthetic decks included); from the repository root, in a CUDA
+environment with the runtime pinned in its `LocalPreferences.toml`, no GPU needed:
 
 ```sh
 E=results/blp/gpu/env
@@ -197,11 +203,13 @@ julia -t 4 --project=$E bench/kernel_audit.jl --write    # regenerate the baseli
 
 `--check` fails (exit 1) when a kernel's registers or stack exceed
 `kernel_audit_baseline.json` by more than `--tol-regs` registers or `--tol-stack` bytes
-(both 0 by default), when any spill count grows, when a kernel no longer compiles, or
-when a baseline kernel is no longer audited; a kernel absent from the baseline is
-reported as `NEW`. `--write` records the baseline after a deliberate change of a kernel,
-with the toolchain (Julia, ptxas, PTX ISA) and the commit. `--device`, on a GPU, compiles
-each kernel for device 0 and checks that its register count equals the offline one.
+(both 0 by default), when any spill count grows, when a case no longer runs or a kernel
+no longer compiles (a `KERR` line), or when a baseline kernel is no longer audited; a
+kernel absent from the baseline is reported as `NEW`. `--write` records the baseline
+after a deliberate change of a kernel, with the toolchain (Julia, ptxas, PTX ISA) and the
+audited tree's commit (`-dirty` when its `src`, `ext` or decks differ from it).
+`--device`, on a GPU, compiles each kernel for device 0 and checks that its register
+count equals the offline one.
 
 ## Table and figure
 
