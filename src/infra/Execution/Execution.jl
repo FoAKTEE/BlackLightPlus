@@ -60,7 +60,7 @@ export ChildBuffer, Generation, child_stream, spawn!, capacity, overflow, childr
 # the wavefront
 export Wavefront, foreach_wavefront!, with_wavefront_settings, wavefront, WaveQueues, Cohort,
        StateBuffer, admit!, admit_child!, place!, fault!, WaveSwap, wave_state, wave_steps,
-       generation, wave_log, KeyCount, count_key!, KeyPlace, wave_keys
+       generation, wave_log, KeyCount, count_key!, KeyPlace, wave_keys, block_costs
 
 function __init__()
     atexit(close_pools)

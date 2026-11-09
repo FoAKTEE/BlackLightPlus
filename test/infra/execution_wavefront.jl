@@ -15,6 +15,11 @@
 # pools, executors of other types and phases without stages take the cascade. The
 # coherence sort: its order is a permutation of the cohort with non-decreasing keys on
 # every device kind, and the toy's bits and per-iteration counts do not depend on it.
+# Launches that do not wait, the refill in the start program's cost order and the
+# workgroup size of the stage launches: the cascade's bits, and on one device the
+# iterations of the waiting form; the block counter takes its order's blocks with exact
+# remaining counts; the counter block read after a launch that does not wait equals the
+# waiting form's, on every device kind, and the reads alternate between two stages.
 using Test, BlackLightPlus
 using StaticArrays
 using BlackLightPlus.Numerics: MCRng, MCStreamLayout, primary_rng
@@ -104,12 +109,15 @@ function (p::ToyLayer)(item, i)
     return nothing
 end
 
-# Stage programs of the same transport.
+# Stage programs of the same transport. The start predicts the later blocks costlier when
+# `costs`, so the refill's cost order is the reverse of the index order.
 struct ToyStart{P,Q} <: Function
     path::P
+    costs::Bool
     queues::Q
 end
 Adapt.@adapt_structure ToyStart
+Execution.block_costs(p::ToyStart, n::Int, R::Int) = p.costs ? Float64.(1:cld(n, R)) : nothing
 function (p::ToyStart)(g, i)
     place!(p.queues, i, Toy(g, Int32(1), UInt64(0), Int32(0)))
     add!(p.path, 2, 1.0)
@@ -166,6 +174,26 @@ function (p::ToyBranch)(item, i)
     return nothing
 end
 
+# Item `g` appends a state to `B` and, for even `g`, one to `D`: the live and done counts
+# of the counter block become `n` and `n ÷ 2`.
+struct ToyAppend{B,D} <: Function
+    B::B
+    D::D
+end
+Adapt.@adapt_structure ToyAppend
+function (p::ToyAppend)(g, i)
+    s = Toy(g, Int32(1), UInt64(g), Int32(0))
+    admit!(p.B, s)
+    iseven(g) && admit!(p.D, s)
+    return nothing
+end
+
+# A start program with given block costs.
+struct Costed <: Function
+    c::Vector{Float64}
+end
+Execution.block_costs(p::Costed, n::Int, R::Int) = p.c
+
 # The key stage: `nk` key values of a photon's key and loop iteration.
 struct ToyKey{Q} <: Function
     nk::Int
@@ -187,12 +215,12 @@ The toy transport over `1:n`, spawning when `spawning`, with a branch stage when
 `mode` of the advance, the life table `lives` and its step limit `M`, `nk` key values of
 the key stage.
 """
-function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIFE, nk = 13)
+function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIFE, nk = 13, costs = true)
     sc = ExactScalars(2)
     path = ExactScalars(4)
     buf = spawning ? ChildBuffer(Superphoton, 0, MCStreamLayout(max(n, 1), 64, 1)) : nothing
     lives = copy(lives)
-    wf = Wavefront(; start = ToyStart(path, WaveQueues()),
+    wf = Wavefront(; start = ToyStart(path, costs, WaveQueues()),
                    advance = ToyAdvance(lives, buf, mode, M, WaveQueues()),
                    retire = ToyRetire(sc, path, WaveQueues()),
                    branch = branch ? ToyBranch(path, WaveQueues()) : nothing,
@@ -229,8 +257,10 @@ Execution.foreach_cascade!(e::Forwarding, p, l, n::Integer, d::Integer; kw...) =
     (push!(e.seen, values(kw)); foreach_cascade!(e.inner, p, l, n, d; kw...))
 
 const N = 203
-const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wavefront = true,
-                  sort_every = 1)
+const DEFAULTS = (budget = Execution.WAVE_BUDGET, cohort = Execution.WAVE_COHORT,
+                  refill = Execution.WAVE_REFILL, doubling = true, wavefront = true,
+                  sort_every = 1, wait = Execution.WAVE_WAIT, cost_order = Execution.WAVE_COST_ORDER,
+                  workgroup = Execution.WAVE_WORKGROUP)
 
 @testset "device wavefront" begin
     refs = Dict(d => run_toy(ThreadedExecutor(chunk = 7), N; depth = d) for d in 0:3)
@@ -285,8 +315,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
                 dsc = describe(ex)
                 ok = same(r, d) && waved(r, d) && dsc.schedule == :wavefront &&
                      sum(dsc.admitted) == N && sum(dsc.spawned) == refs[d].children &&
-                     dsc.settings == (budget = K, cohort = P, refill = R, doubling = dbl, wavefront = true,
-                                      sort_every = Execution.WAVE_SORT)
+                     dsc.settings == merge(DEFAULTS, (budget = K, cohort = P, refill = R, doubling = dbl))
                 ok || @info "wavefront differs" nd d K dbl P R r.path dsc
                 @test ok
             end
@@ -332,8 +361,8 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
             on = all(Execution.wavefront, devs)
             for (K, dbl, P, R, cap) in ((1, false, 7, 5, 1), (32, true, 2^10, 1, nothing),
                                         (typemax(Int), false, 64, 3, 3)),
-                d in (0, 2)
-                r = with_wavefront_settings(budget = K, doubling = dbl, cohort = P, refill = R) do
+                d in (0, 2), wt in (true, false)
+                r = with_wavefront_settings(budget = K, doubling = dbl, cohort = P, refill = R, wait = wt) do
                     run_toy(ex, N; depth = d, capacity = cap)
                 end
                 @test same(r, d) && (on ? waved(r, d) : r.path == [tracked[d], 0, 0, 0])
@@ -461,6 +490,89 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
             @test [Cohort(states, order)[j] for j in 1:nA] == states[order]
         end
         @test Execution.key_cursors!(Int32[3, 0, 2, 1]) == Int32[0, 3, 3, 5]
+    end
+
+    @testset "launches that do not wait, the cost order, the workgroup: the cascade's bits" begin
+        cut(lg) = [(it.nA, it.K, it.live, it.done, it.children, it.dropped, it.started) for it in lg]
+        forms = ((wait = true, cost_order = false, workgroup = 0), (wait = false, cost_order = false, workgroup = 0),
+                 (wait = false, cost_order = true, workgroup = 0), (wait = true, cost_order = true, workgroup = 0),
+                 (wait = false, cost_order = true, workgroup = 64), (wait = false, cost_order = true, workgroup = 1))
+        for nd in (1, 2, 3), d in (0, 2), (K, dbl, P, R, cap) in ((1, false, 7, 5, 1), (3, true, 64, 5, nothing),
+                                                                  (32, true, 2^10, 1, 3))
+            ex = PoolExecutor(DK.wavehosts(nd))
+            logs = map(forms) do f
+                r = with_wavefront_settings(; budget = K, doubling = dbl, cohort = P, refill = R, f...) do
+                    run_toy(ex, N; depth = d, capacity = cap)
+                end
+                dsc = describe(ex)
+                ok = same(r, d) && waved(r, d) && dsc.settings == merge(DEFAULTS, (budget = K, doubling = dbl,
+                                                                                    cohort = P, refill = R), f)
+                ok || @info "launch form differs" nd d K P R f r.path
+                @test ok
+                cap == 1 && d > 0 && @test dsc.reruns > 0
+                wave_log(ex)
+            end
+            if nd == 1
+                # one device: waiting or not, and at any workgroup, the same iterations
+                @test cut(only(logs[1])) == cut(only(logs[2]))
+                @test cut(only(logs[3])) == cut(only(logs[4])) == cut(only(logs[5])) == cut(only(logs[6]))
+            end
+        end
+        # the cost order starts the costliest block first: the toy's last block, clipped to 3
+        ex = PoolExecutor(DK.wavehosts(1))
+        first_start(co) = with_wavefront_settings(cohort = 3, refill = 5, cost_order = co) do
+            run_toy(ex, 23; depth = 2)
+            first(only(wave_log(ex))).started
+        end
+        @test first_start(true) == 3 && first_start(false) == 5
+        # a start without costs takes the blocks in index order with the cost order on
+        t = toy(23; costs = false)
+        @test Execution.block_order(t.wf.start, 23, 5) === nothing
+        @test Execution.block_order(toy(23).wf.start, 23, 5) == [5, 4, 3, 2, 1]
+    end
+
+    @testset "the block counter: the order's blocks, consecutive ones merged; exact remaining counts" begin
+        b = Execution.BlockCounter(23, 5, 1, [3, 4, 1, 2, 5])
+        @test Execution.remaining(b) == 23
+        @test Execution.take_blocks!(b, 10) == [11:20] && Execution.remaining(b) == 13
+        @test Execution.take_blocks!(b, 1) == [1:5] && Execution.remaining(b) == 8
+        @test Execution.take_blocks!(b, 100) == [6:10, 21:23] && Execution.remaining(b) == 0
+        @test isempty(Execution.take_blocks!(b, 100)) && Execution.exhausted(b)
+        # the clipped block first: the remaining count stays exact
+        b = Execution.BlockCounter(23, 5, 1, [5, 1, 2, 3, 4])
+        @test Execution.take_blocks!(b, 1) == [21:23] && Execution.remaining(b) == 20
+        # index order, as before: one range of consecutive blocks per claim
+        b = Execution.BlockCounter(23, 5, 2)
+        @test Execution.take_blocks!(b, 100) == [1:15] && Execution.remaining(b) == 8
+        @test_throws ArgumentError Execution.BlockCounter(23, 5, 1, [1, 2, 3, 4])
+        @test_throws ArgumentError Execution.BlockCounter(23, 5, 1, [1, 2, 3, 4, 4])
+        # decreasing cost, ties in index order
+        @test Execution.block_order(Costed([1.0, 3.0, 1.0, 2.0]), 16, 4) == [2, 4, 1, 3]
+        @test_throws ArgumentError Execution.block_order(Costed([1.0, 3.0]), 16, 4)
+    end
+
+    @testset "the counter read after launches that do not wait on $(kind): the waiting form's; stages alternate" for
+            (kind, devs) in (("WaveHost", DK.wavehosts(1)), (DK.DEVICE_KIND, DK.devices(1)))
+        pool = PoolExecutor(devs).pool
+        reads = only(Execution.foreach_device(pool) do lane
+            counters = Execution.lane_buffer(lane, (:test, :counters), Int64, Execution.WAVE_COUNTERS)
+            cs = Execution.CounterStages(lane, counters)
+            zc = Execution.ZeroCounters(counters)
+            map(((true, 1000), (false, 1000), (false, 2^18), (true, 7), (false, 1))) do (wait, n)
+                sb = Execution.lane_buffer(lane, (:test, :live), Toy, n)
+                sd = Execution.lane_buffer(lane, (:test, :done), Toy, n)
+                q = ToyAppend(Execution.StateBuffer(sb, view(counters, Execution.WAVE_LIVE:Execution.WAVE_LIVE)),
+                              Execution.StateBuffer(sd, view(counters, Execution.WAVE_DONE:Execution.WAVE_DONE)))
+                Execution.launch!(lane, zc, zc, 1:1, 1, (); wait)
+                Execution.launch!(lane, q, q, 1:n, n, (); wait, wg = 32)
+                st = Execution.queue_read!(lane, cs)
+                (stage = st, c = Execution.counter_values(lane, st))
+            end
+        end)
+        @test [r.c.live for r in reads] == [1000, 1000, 2^18, 7, 1]
+        @test [r.c.done for r in reads] == [500, 500, 2^17, 3, 0]
+        @test all(r -> r.c.children == r.c.dropped == r.c.fault == 0, reads)
+        @test reads[1].stage !== reads[2].stage && reads[1].stage === reads[3].stage === reads[5].stage
     end
 
     @testset "contract errors: a state that cannot advance, a fault" begin

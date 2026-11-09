@@ -89,25 +89,30 @@ wave_keys(prog) = throw(ArgumentError("$(nameof(typeof(prog))) is not the key st
 sorts(key, every::Int, m::Int) = key !== nothing && every > 0 && m % every == 0
 
 # The order of the `nA` members of `states` on `lane` by the keys of the key stage `key`
-# (device form `dkey`): the counts zeroed by a copy, the key launch, one copy of the counts
-# to the host, the scan, one copy of the cursors back, the placement launch.
-function sort_cohort!(lane::PoolLane, key, dkey, states, nA::Int)
+# (device form `dkey`), in the lane buffer `(:wave, :order)`: the counts zeroed by a copy
+# from a pinned stage of zeros, the key launch, one copy of the counts to the host (the
+# host waits for it), the scan, one copy of the cursors back, the placement launch. The
+# launches wait for the device unless `wait = false`; the key stage runs in workgroups of
+# `wg`. The host writes the zero stage only when it is new and the count stage only after
+# the wait, so no queued copy reads a stage the host writes.
+function sort_cohort!(lane::PoolLane, key, dkey, states, nA::Int; wait::Bool = true,
+                      wg = workgroupsize(key))
     nk = wave_keys(key)
     keys = lane_buffer(lane, (:wave, :keys), UInt32, nA)
     counts = lane_buffer(lane, (:wave, :key_counts), Int32, nk)
     order = lane_buffer(lane, (:wave, :order), Int32, nA)
     zs = lane_stage(lane, (:wave, :key_zeros), Int32, nk)
     st = lane_stage(lane, (:wave, :key_counts), Int32, nk)
-    fill!(view(zs, 1:nk), Int32(0))
+    all(iszero, view(zs, 1:nk)) || fill!(view(zs, 1:nk), Int32(0))
     copyto!(counts, 1, zs, 1, nk)
     q = KeyCount(Cohort(states, nothing), keys, counts)
-    launch!(lane, key, Adapt.adapt(WaveSwap(q, nothing), dkey), 1:nA, nA, ())
+    launch!(lane, key, Adapt.adapt(WaveSwap(q, nothing), dkey), 1:nA, nA, (); wait, wg)
     copyto!(st, 1, counts, 1, nk)
     sum(view(st, 1:nk)) == nA ||
         error("wavefront: the key stage counted $(sum(view(st, 1:nk))) of $nA members on $(lane.dev)")
     key_cursors!(view(st, 1:nk))
     copyto!(counts, 1, st, 1, nk)
     place = KeyPlace(keys, counts, order)
-    launch!(lane, place, place, 1:nA, nA, ())
+    launch!(lane, place, place, 1:nA, nA, (); wait)
     return order
 end

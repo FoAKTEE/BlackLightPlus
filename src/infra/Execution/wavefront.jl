@@ -20,16 +20,25 @@ const WAVE_REFILL = 2^14
 const WAVE_SPAWN_CAP = 128
 "The most seconds a device of a call waits for the other devices before its first refill."
 const WAVE_ARRIVAL = 1.0
+"Whether every launch of the wavefront waits for its device, by default."
+const WAVE_WAIT = false
+"Whether the refill takes the primary blocks in the start program's cost order, by default."
+const WAVE_COST_ORDER = true
+"Workgroup size of the stage launches, by default (0: each stage program's `workgroupsize`)."
+const WAVE_WORKGROUP = 0
 
 """
-    WaveSettings(budget, cohort, refill, doubling, wavefront, sort_every)
+    WaveSettings(budget, cohort, refill, doubling, wavefront, sort_every, wait, cost_order,
+                 workgroup)
 
 The settings of the wavefront that a call reads ([`with_wavefront_settings`](@ref)):
 the budget `K` of an advance, the cohort `P`, the refill block `R`, the budget doubling
 (`true`: up to the cap of the phase, `false`: off, an integer: up to that many loop
 iterations), whether a phase that the wavefront can serve runs on it (`false` runs
-the cascade of the same programs) and the advances between two sorts of the cohort by
-the key stage (0: never).
+the cascade of the same programs), the advances between two sorts of the cohort by
+the key stage (0: never), whether every launch waits for its device, whether the refill
+takes the blocks in the start program's cost order and the workgroup size of the stage
+launches (0: each program's own).
 """
 struct WaveSettings
     budget::Int
@@ -38,15 +47,20 @@ struct WaveSettings
     doubling::Union{Bool,Int}
     wavefront::Bool
     sort_every::Int
+    wait::Bool
+    cost_order::Bool
+    workgroup::Int
 end
 
-const DEFAULT_WAVE = WaveSettings(WAVE_BUDGET, WAVE_COHORT, WAVE_REFILL, true, true, WAVE_SORT)
+const DEFAULT_WAVE = WaveSettings(WAVE_BUDGET, WAVE_COHORT, WAVE_REFILL, true, true, WAVE_SORT,
+                                  WAVE_WAIT, WAVE_COST_ORDER, WAVE_WORKGROUP)
 const WAVE_SETTINGS = Base.ScopedValues.ScopedValue(DEFAULT_WAVE)
 
 """
     with_wavefront_settings(f; budget = WAVE_BUDGET, cohort = WAVE_COHORT,
                             refill = WAVE_REFILL, doubling = true, wavefront = true,
-                            sort_every = WAVE_SORT)
+                            sort_every = WAVE_SORT, wait = WAVE_WAIT,
+                            cost_order = WAVE_COST_ORDER, workgroup = WAVE_WORKGROUP)
 
 Run `f()` with these settings of the wavefront, read on the host by every wavefront call
 inside `f` on the calling task; outside such a scope every call uses the defaults. `budget`
@@ -59,18 +73,28 @@ call with children; `false` off; an integer `k ≥ 1` up to `k`), `wavefront = f
 runs the cascade of the same programs, and `sort_every = m ≥ 1` sorts the cohort by the
 keys of the `Wavefront`'s key stage before every `m`-th advance of a device, from its first
 (`WAVE_SORT = 1` by default; 0 never; a `Wavefront` without a key stage never sorts).
-Results do not depend on any of them. Returns `f()`.
+`wait = true` makes every launch wait for its device; by default (`WAVE_WAIT = false`) the
+launches of a device are queued in order and the host waits only for the reads of the
+counter block and of the sort's counts. `cost_order = true` (`WAVE_COST_ORDER`) makes the
+refill take the primary blocks in decreasing [`block_costs`](@ref) of the start program
+(index order when it predicts none, or with `false`). `workgroup = w ≥ 1` launches the stage
+programs in workgroups of `w` items, `0` (`WAVE_WORKGROUP`) in each program's
+[`workgroupsize`](@ref). Results do not depend on any of them. Returns `f()`.
 """
 function with_wavefront_settings(f; budget::Integer = WAVE_BUDGET, cohort::Integer = WAVE_COHORT,
                                  refill::Integer = WAVE_REFILL, doubling::Union{Bool,Integer} = true,
-                                 wavefront::Bool = true, sort_every::Integer = WAVE_SORT)
+                                 wavefront::Bool = true, sort_every::Integer = WAVE_SORT,
+                                 wait::Bool = WAVE_WAIT, cost_order::Bool = WAVE_COST_ORDER,
+                                 workgroup::Integer = WAVE_WORKGROUP)
     budget >= 1 && cohort >= 1 && refill >= 1 ||
         throw(ArgumentError("with_wavefront_settings: budget, cohort and refill must be positive"))
     doubling isa Bool || doubling >= 1 ||
         throw(ArgumentError("with_wavefront_settings: doubling must be true, false or a positive cap"))
     sort_every >= 0 || throw(ArgumentError("with_wavefront_settings: sort_every must be non-negative"))
+    workgroup >= 0 || throw(ArgumentError("with_wavefront_settings: workgroup must be non-negative"))
     s = WaveSettings(Int(budget), Int(cohort), Int(refill),
-                     doubling isa Bool ? doubling : Int(doubling), wavefront, Int(sort_every))
+                     doubling isa Bool ? doubling : Int(doubling), wavefront, Int(sort_every),
+                     wait, cost_order, Int(workgroup))
     return Base.ScopedValues.with(f, WAVE_SETTINGS => s)
 end
 
@@ -79,7 +103,21 @@ wave_settings() = WAVE_SETTINGS[]
 
 settings_record(s::WaveSettings) = (budget = s.budget, cohort = s.cohort, refill = s.refill,
                                     doubling = s.doubling, wavefront = s.wavefront,
-                                    sort_every = s.sort_every)
+                                    sort_every = s.sort_every, wait = s.wait,
+                                    cost_order = s.cost_order, workgroup = s.workgroup)
+
+"""
+    block_costs(prog, n, R) -> Union{Nothing,Vector{Float64}}
+
+The predicted cost of each block of `R` consecutive primaries of `1:n` (the last one
+clipped) for the start program `prog` of a [`Wavefront`](@ref): `cld(n, R)` values, larger
+for a block whose photons and children are predicted to run longer; `nothing` (the default)
+when the program predicts none. With `cost_order` on ([`with_wavefront_settings`](@ref))
+the refill takes the blocks in decreasing cost, ties in index order, so the photons that
+set the end of a call start first. The order changes which device starts a primary and
+when, never a result.
+"""
+block_costs(prog, n::Int, R::Int) = nothing
 
 """
     Wavefront(; start, advance, retire, primary, layer, branch = nothing, key = nothing,
@@ -152,8 +190,13 @@ branch over the children, each opened into the cohort or, beyond generation `dep
 counted as dropped, then a second read of the counter block; the refill: when fewer than
 `P` states are live and blocks remain, the device takes
 `max(1, min(cld(P − nB, R), cld(r, ndev)))` of the `r` remaining blocks of `R`
-consecutive primaries in one claim and runs the start over them; then the queues swap.
-Before its first refill a device waits, at most `WAVE_ARRIVAL` seconds, until every device
+consecutive primaries in one claim, in index order or, with `cost_order`, in decreasing
+[`block_costs`](@ref) of the start program, and runs the start over them, one launch per
+run of consecutive blocks; then the queues swap. With `wait` off the launches of an
+iteration are queued in this order on the lane's queue, the counter block is zeroed by a
+launch and copied by a queued copy into one of two pinned stages that alternate, and the
+host waits only before it reads the counter block or the sort's counts; launch ranges and
+settings are kernel arguments. Before its first refill a device waits, at most `WAVE_ARRIVAL` seconds, until every device
 of the call has reached its own, so the blocks of a call spread over every device. `cap_C`
 is `capacity` at every iteration when given; otherwise it starts at the larger of `P` and
 the child slots that earlier calls left on the device's first lane, and keeps every
@@ -205,7 +248,8 @@ function run_wavefront!(exec::PoolExecutor, wf::Wavefront, n::Int, depth::Int, s
     pool = exec.pool
     exec.reruns[] = 0
     slots = map(child_slot, (wf.start, wf.advance, wf.retire, wf.branch, wf.primary, wf.layer))
-    blocks = BlockCounter(n, set.refill, length(pool.devices))
+    order = set.cost_order && n > 0 ? block_order(wf.start, n, set.refill) : nothing
+    blocks = BlockCounter(n, set.refill, length(pool.devices), order)
     progs = depth > 0 ? (wf.start, wf.advance, wf.retire, wf.branch) : (wf.start, wf.advance, wf.retire)
     twins = map(p -> ProgramTwins(pool, p), progs)
     ktwin = wf.key !== nothing && set.sort_every > 0 ? ProgramTwins(pool, wf.key) : nothing
@@ -251,9 +295,10 @@ function check_partition(n::Int, ranges::Vector{UnitRange{Int}})
 end
 
 """
-    BlockCounter(n, R, ndev)
+    BlockCounter(n, R, ndev, order = nothing)
 
-The primaries `1:n` in blocks of `R` consecutive primaries (the last one clipped), with
+The primaries `1:n` in blocks of `R` consecutive primaries (the last one clipped), taken in
+the block order `order` (a permutation of `1:cld(n, R)`; `nothing`: index order), with
 one atomic counter of the blocks taken and one of the devices ready to take them, which the
 `ndev` devices of a call share.
 """
@@ -262,11 +307,35 @@ struct BlockCounter
     R::Int
     ndev::Int
     blocks::Int
+    order::Union{Nothing,Vector{Int}}
+    taken_primaries::Vector{Int}
     taken::Threads.Atomic{Int}
     arrived::Threads.Atomic{Int}
 end
-BlockCounter(n::Int, R::Int, ndev::Int) =
-    BlockCounter(n, R, ndev, cld(n, R), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+function BlockCounter(n::Int, R::Int, ndev::Int, order = nothing)
+    nb = cld(n, R)
+    order === nothing || sort(order) == 1:nb ||
+        throw(ArgumentError("BlockCounter: the order is not a permutation of the $nb blocks"))
+    # the primaries in the first t blocks of the order, for t = 0:nb
+    cum = order === nothing ? Int[] :
+          cumsum(vcat(0, [min(k * R, n) - (k - 1) * R for k in order]))
+    return BlockCounter(n, R, ndev, nb, order, cum, Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+end
+
+"""
+    block_order(prog, n, R) -> Union{Nothing,Vector{Int}}
+
+The order in which the refill takes the blocks of `R` primaries of `1:n` for the start
+program `prog`: the blocks by decreasing [`block_costs`](@ref), ties in index order;
+`nothing` (index order) when the program predicts no cost.
+"""
+function block_order(prog, n::Int, R::Int)
+    c = block_costs(prog, n, R)
+    c === nothing && return nothing
+    length(c) == cld(n, R) ||
+        throw(ArgumentError("block_costs: $(length(c)) costs for $(cld(n, R)) blocks"))
+    return sortperm(c; rev = true)
+end
 
 """
     arrive!(b::BlockCounter, wait = WAVE_ARRIVAL)
@@ -288,23 +357,33 @@ end
 exhausted(b::BlockCounter) = b.taken[] >= b.blocks
 
 "Primaries not yet taken (an upper bound while other devices take blocks)."
-remaining(b::BlockCounter) = max(0, b.n - b.taken[] * b.R)
+function remaining(b::BlockCounter)
+    t = min(b.taken[], b.blocks)
+    return b.order === nothing ? max(0, b.n - t * b.R) : b.n - b.taken_primaries[t + 1]
+end
 
 """
-    take_blocks!(b::BlockCounter, room) -> UnitRange{Int}
+    take_blocks!(b::BlockCounter, room) -> Vector{UnitRange{Int}}
 
 The primaries of the blocks a device with room for `room` more live states takes at once:
-`max(1, min(cld(room, R), cld(r, ndev)))` of the `r` remaining blocks, consecutive; an
-empty range once no block remains.
+`max(1, min(cld(room, R), cld(r, ndev)))` of the `r` remaining blocks, the next ones of the
+counter's order, as ranges in that order (consecutive blocks in one range); none once no
+block remains.
 """
 function take_blocks!(b::BlockCounter, room::Int)
     while true
         t = b.taken[]
-        t >= b.blocks && return 1:0
+        t >= b.blocks && return UnitRange{Int}[]
         r = b.blocks - t
         k = min(r, max(1, min(cld(room, b.R), cld(r, b.ndev))))
         Threads.atomic_cas!(b.taken, t, t + k) == t || continue
-        return (t * b.R + 1):min((t + k) * b.R, b.n)
+        b.order === nothing && return [(t * b.R + 1):min((t + k) * b.R, b.n)]
+        out = UnitRange{Int}[]
+        for blk in view(b.order, (t + 1):(t + k))
+            lo, hi = (blk - 1) * b.R + 1, min(blk * b.R, b.n)
+            isempty(out) || last(out[end]) + 1 != lo ? push!(out, lo:hi) : (out[end] = first(out[end]):hi)
+        end
+        return out
     end
 end
 
@@ -332,17 +411,22 @@ child_queue(lane::PoolLane, ::Type{E}, n::Int, counters, slot) where {E} =
 # whether the cohort was sorted, host seconds of the sort, of the advances with their
 # counter reads, of the retire launch, of the branch with its counter read and of the
 # start launches). `ktwin` holds the key stage's twins when the call sorts. `call` holds
-# the depth, the explicit child slots or `nothing`, and the executor's rerun counter.
+# the depth, the explicit child slots or `nothing`, and the executor's rerun counter. With
+# `set.wait` off the launches are queued on the lane's queue in this order and the host
+# waits only at the counter reads and the sort's count read; it makes the device forms of
+# the next launches while the queued ones run.
 function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, blocks::BlockCounter,
                            set::WaveSettings, cap::Int, call)
     T = wave_state(wf.advance)
     M = wave_steps(wf.advance)
     P = set.cohort
+    w = set.wait
+    wg(prog) = set.workgroup > 0 ? set.workgroup : workgroupsize(prog)
     dstart, dadv, dret = map(t -> program_twin!(t, lane), twins[1:3])
     dbr = length(twins) == 4 ? program_twin!(twins[4], lane) : nothing
     dkey = ktwin === nothing ? nothing : program_twin!(ktwin, lane)
     counters = lane_buffer(lane, (:wave, :counters), Int64, WAVE_COUNTERS)
-    stage = lane_stage(lane, (:wave, :counters), Int64, WAVE_COUNTERS)
+    cs = CounterStages(lane, counters)
     zc = ZeroCounters(counters)
     kids = slot !== nothing && call.depth > 0
     E = slot === nothing ? Nothing : eltype(slot.photons)
@@ -363,27 +447,38 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, bl
         live = done = children = drop = reruns = 0
         ts = t0 = t1 = t2 = t3 = time_ns()
         sorted = false
-        local B, qa
+        local B
         if nA > 0
             exhausted(blocks) && 4 * nA < P && K < cap && (K = K > cap ÷ 2 ? cap : 2K)
             D = lane_buffer(lane, (:wave, :done), T, nA)
             states = lane_buffer(lane, (:wave, a), T, nA)
             sorted = dkey !== nothing && sorts(wf.key, set.sort_every, nadv)
-            A = sorted ? Cohort(states, sort_cohort!(lane, wf.key, dkey, states, nA)) : Cohort(states, nothing)
-            sorted && (t0 = time_ns())
+            A = Cohort(states, sorted ? lane_buffer(lane, (:wave, :order), Int32, nA) : nothing)
             nadv += 1
+            local ret, br
             while true
                 # B takes the survivors, the opened children and the refill, D the stopped states
                 B = lane_buffer(lane, (:wave, b), T, queue_slots(nA, capC, P, blocks))
                 C = slot === nothing ? nothing : child_queue(lane, E, capC, counters, slot)
                 qa = WaveQueues(A, StateBuffer(B, live_ctr), nothing, StateBuffer(D, done_ctr),
                                 counters, K, 0, call.depth)
-                launch!(lane, zc, zc, 1:1, 1, ())
-                launch!(lane, wf.advance, Adapt.adapt(WaveSwap(qa, C), dadv), 1:nA, nA, ())
-                copyto!(stage, 1, counters, 1, WAVE_COUNTERS)
-                live, done, children, fault = stage[WAVE_LIVE], stage[WAVE_DONE],
-                                              stage[WAVE_CHILDREN], stage[WAVE_FAULT]
-                fault == 0 || error("wavefront: $fault states broke the advance on $(lane.dev)")
+                adv = Adapt.adapt(WaveSwap(qa, C), dadv)
+                if sorted && reruns == 0
+                    sort_cohort!(lane, wf.key, dkey, states, nA; wait = w, wg = wg(wf.key))
+                    t0 = time_ns()
+                end
+                launch!(lane, zc, zc, 1:1, 1, (); wait = w)
+                launch!(lane, wf.advance, adv, 1:nA, nA, (); wait = w, wg = wg(wf.advance))
+                stg = queue_read!(lane, cs)
+                # the retire's and the branch's device forms, made while the advance runs; the
+                # branch reads children 1:children of the child queue's slots
+                ret = Adapt.adapt(WaveSwap(qa, C), dret)
+                br = kids ? Adapt.adapt(WaveSwap(WaveQueues(nothing, StateBuffer(B, live_ctr),
+                                                            Generation(C.photons, C.rngs), nothing,
+                                                            counters, K, 0, call.depth), C), dbr) : nothing
+                c = counter_values(lane, stg)
+                live, done, children = c.live, c.done, c.children
+                c.fault == 0 || error("wavefront: $(c.fault) states broke the advance on $(lane.dev)")
                 live + done == nA ||
                     error("wavefront: the advance of $nA states admitted $live live and $done stopped on $(lane.dev)")
                 live <= length(B) && done <= length(D) ||
@@ -395,19 +490,17 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, bl
                 Threads.atomic_add!(call.reruns, 1)
             end
             t1 = time_ns()
-            done > 0 && launch!(lane, wf.retire, Adapt.adapt(WaveSwap(qa, C), dret), 1:done, done, ())
+            done > 0 && launch!(lane, wf.retire, ret, 1:done, done, (); wait = w, wg = wg(wf.retire))
             t2 = time_ns()
             drop = children
             if kids && children > 0
-                kc = Generation(view(C.photons, 1:children), view(C.rngs, 1:children))
-                qb = WaveQueues(nothing, StateBuffer(B, live_ctr), kc, nothing, counters, K, 0, call.depth)
-                launch!(lane, wf.branch, Adapt.adapt(WaveSwap(qb, C), dbr), 1:children, children, ())
-                copyto!(stage, 1, counters, 1, WAVE_COUNTERS)
-                drop = stage[WAVE_DROPPED]
-                stage[WAVE_LIVE] + drop == live + children && stage[WAVE_LIVE] <= length(B) ||
-                    error("wavefront: the branch of $children children left $(stage[WAVE_LIVE]) live " *
+                launch!(lane, wf.branch, br, 1:children, children, (); wait = w, wg = wg(wf.branch))
+                c = counter_values(lane, queue_read!(lane, cs))
+                drop = c.dropped
+                c.live + drop == live + children && c.live <= length(B) ||
+                    error("wavefront: the branch of $children children left $(c.live) live " *
                           "and $drop dropped after $live survivors on $(lane.dev)")
-                live = stage[WAVE_LIVE]
+                live = c.live
             end
             t3 = time_ns()
             spawned += children
@@ -421,10 +514,10 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, bl
         end
         nB = live
         t4 = time_ns()
-        r = nB < P ? take_blocks!(blocks, P - nB) : 1:0
-        if !isempty(r)
+        for r in (nB < P ? take_blocks!(blocks, P - nB) : UnitRange{Int}[])
             q = WaveQueues(nothing, StateBuffer(B, live_ctr), nothing, nothing, counters, K, nB, call.depth)
-            launch!(lane, wf.start, Adapt.adapt(WaveSwap(q, C), dstart), r, length(r), ())
+            launch!(lane, wf.start, Adapt.adapt(WaveSwap(q, C), dstart), r, length(r), ();
+                    wait = w, wg = wg(wf.start))
             push!(ranges, r)
             admitted += length(r)
             nB += length(r)
@@ -437,6 +530,7 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, bl
         a, b = b, a
         nA = nB
     end
+    KernelAbstractions.synchronize(lane.backend)
     return (admitted = admitted, spawned = spawned, dropped = dropped, retired = retired,
             ranges = ranges, iterations = length(iters), log = iters)
 end

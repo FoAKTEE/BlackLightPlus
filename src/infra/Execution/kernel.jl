@@ -58,12 +58,14 @@ function launch_capped!(::AbstractDevice, kernel, args::Tuple, n, wg, cap)
 end
 
 # One launch of the device program `dprog`, made from `prog`, over the first `n` entries
-# of the device item buffer `items` into the device outputs `outs`, on `lane`; returns
-# after the device has finished.
-function launch!(lane::PoolLane, prog, dprog, items, n::Integer, outs::Tuple)
+# of the device item buffer `items` into the device outputs `outs`, on `lane`, in
+# workgroups of `wg` items (`nothing`: the backend's choice); returns after the device has
+# finished, or with `wait = false` once the launch is queued on the lane's queue, whose
+# later launches and copies run after it.
+function launch!(lane::PoolLane, prog, dprog, items, n::Integer, outs::Tuple;
+                 wait::Bool = true, wg = workgroupsize(prog))
     prepare_launch!(lane.dev, prog)
     kern = _foreach!(lane.backend)
-    wg = workgroupsize(prog)
     cap = register_cap(prog)
     if cap !== nothing
         launch_capped!(lane.dev, kern, (dprog, items, n, outs...), n,
@@ -73,6 +75,6 @@ function launch!(lane::PoolLane, prog, dprog, items, n::Integer, outs::Tuple)
     else
         kern(dprog, items, n, outs...; ndrange = n, workgroupsize = min(wg, n))
     end
-    KernelAbstractions.synchronize(lane.backend)
+    wait && KernelAbstractions.synchronize(lane.backend)
     return nothing
 end

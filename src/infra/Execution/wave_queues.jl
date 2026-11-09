@@ -153,6 +153,36 @@ function (z::ZeroCounters)(item, i)
     return nothing
 end
 
+# The counter block `counters` of a lane's wavefront and its two pinned host stages. A read
+# queues one copy of the block on the lane's queue into the stage of its parity
+# (`queue_read!`), and the host takes the values only after waiting for the queue
+# (`counter_values`): the reads alternate between the stages, so a copy queued for the next
+# read never targets the stage the host reads, and the host writes neither.
+mutable struct CounterStages{C}
+    const counters::C
+    const stages::NTuple{2,Vector{Int64}}
+    reads::Int
+end
+CounterStages(lane::PoolLane, counters) =
+    CounterStages(counters, (lane_stage(lane, (:wave, :counters, 1), Int64, WAVE_COUNTERS),
+                             lane_stage(lane, (:wave, :counters, 2), Int64, WAVE_COUNTERS)), 0)
+
+# Queue the copy of the counter block of the next read; returns its stage.
+function queue_read!(lane::PoolLane, cs::CounterStages)
+    cs.reads += 1
+    s = cs.stages[isodd(cs.reads) ? 1 : 2]
+    KernelAbstractions.copyto!(lane.backend, view(s, 1:WAVE_COUNTERS),
+                               view(cs.counters, 1:WAVE_COUNTERS))
+    return s
+end
+
+# Wait for the lane's queue, then the counters in the stage `s`.
+function counter_values(lane::PoolLane, s::Vector{Int64})
+    KernelAbstractions.synchronize(lane.backend)
+    return (live = s[WAVE_LIVE], done = s[WAVE_DONE], children = s[WAVE_CHILDREN],
+            dropped = s[WAVE_DROPPED], fault = s[WAVE_FAULT])
+end
+
 """
     wave_state(prog) -> Type
 
