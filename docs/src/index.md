@@ -20,7 +20,8 @@ pixel or per photon whatever the device count and chunking.
   Kerr–Schild binaries at rest (`SuperposedKerrSchild`) and in motion
   (`BoostedSuperposedKerrSchild` on a `CircularOrbit`), each hole's term in the rest
   frame of its velocity; numerical-relativity slices (`ADMGrid`) from AthenaK Z4c dumps
-  with a $C^1$ interpolant.
+  with a $C^1$ interpolant, and sequences of them in time (`ADMSeries`), $C^1$ in time and
+  space.
 - **Geodesics** — Hamiltonian null geodesics in covariant momentum, $p_t$ conserved
   exactly on stationary metrics; a fixed-control RK4 march with the step
   $(r - r_h)/C$ for imaging and an adaptive Vern7 solve with event termination; an

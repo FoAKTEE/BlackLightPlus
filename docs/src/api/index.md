@@ -24,7 +24,7 @@ interfaces: stable within a minor version, documented on the same pages under
 | Page | Module | Owns |
 |---|---|---|
 | [Numerics](@ref "Numerics module") | `Numerics` | constants and units, the ray state, stencils, exact sums, the Philox generator, special functions |
-| [Spacetime](@ref "Spacetime module") | `Spacetime` | the `Spacetime` protocol, Kerr, user metrics, the static and moving superpositions, ADM grids, geodesics, termination, the camera, exact Kerr |
+| [Spacetime](@ref "Spacetime module") | `Spacetime` | the `Spacetime` protocol, Kerr, user metrics, the static and moving superpositions, ADM grids and their series in time, geodesics, termination, the camera, exact Kerr |
 | [Matter](@ref "Matter module") | `Matter` | the `PlasmaProvider` protocol, the plasma decode and electron model, the analytic sources, emission zones |
 | [Transfer](@ref "Transfer module") | `Transfer` | synchrotron coefficients, tetrads, segment operators, the marches |
 | [MonteCarlo](@ref "MonteCarlo module") | `MonteCarlo` | superphotons, emission tables, scattering, opacities, sinks |

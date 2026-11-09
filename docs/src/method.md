@@ -95,6 +95,30 @@ metric never needs hand-coded derivatives.
   two puncture shadows. The frozen slice sets $\partial_t g=0$, valid while the
   light-crossing time of the imaged volume is short compared to the spacetime's
   evolution timescale.
+- **`ADMSeries`** — ADM slices in time: the ten fields at coordinate times
+  $t_1<\dots<t_N$ on one lattice, Catmull–Rom in space as on `ADMGrid` and, at a fixed
+  point, the cubic Hermite in time through the slices,
+  $f(t)=h_{00}(s)f_n+h_{10}(s)\Delta_n m_n+h_{01}(s)f_{n+1}+h_{11}(s)\Delta_n m_{n+1}$ on
+  $[t_n,t_{n+1}]$, $s=(t-t_n)/\Delta_n$, $\Delta_n=t_{n+1}-t_n$, whose tangent at slice $n$ is
+  the derivative of the parabola through slices $n-1,n,n+1$,
+  $m_n=-\frac{\Delta_n}{\Delta_{n-1}(\Delta_{n-1}+\Delta_n)}f_{n-1}
+  +\frac{\Delta_n-\Delta_{n-1}}{\Delta_{n-1}\Delta_n}f_n
+  +\frac{\Delta_{n-1}}{\Delta_n(\Delta_{n-1}+\Delta_n)}f_{n+1}$ (one-sided through the
+  first or last three slices at the ends; Catmull–Rom on uniform times). The tangent is
+  single-valued at each slice, so the fields are $C^1$ in $(t,\mathbf x)$ and the geodesic
+  force is continuous, its time row included; a linear blend in time would make
+  $\partial_t g$ jump at every slice. The interpolant is exact for quadratics: the metric
+  errs as $O(\Delta t^3+\Delta x^3)$ and its first derivatives as $O(\Delta t^2+\Delta x^2)$.
+  The interpolant is exact at the nodes, so the second-order force error has zero mean over
+  each cell a ray crosses and ray observables converge at third order. With
+  $q=p_t-\beta^ip_i$ the Hamiltonian is $2H=\gamma^{ij}p_ip_j-q^2/\alpha^2$, and one
+  evaluation at a position carrying four dual partials gives $\dot x^\mu=g^{\mu\nu}p_\nu$
+  and $\dot p_\mu=-\partial_\mu H$, whose time row is
+  $\dot p_t=-\tfrac12\partial_t\gamma^{ij}p_ip_j-(q/\alpha^2)\,p_i\partial_t\beta^i
+  -(q^2/\alpha^3)\,\partial_t\alpha$. Before $t_1$ and after $t_N$ the metric is the end
+  slice. `adm_series_from_metric` samples a metric closure at the slice times and
+  `z4c_series_spacetime` resamples a sequence of Z4c dumps onto one lattice; one slice is
+  the frozen `ADMGrid` itself.
 
 ## Geodesics
 
@@ -898,18 +922,43 @@ piecewise-linear profile (a segment by its area; on it the density $\propto(1-s)
 mixture of $2(1-s)$ and $2s$ with weights $v_0$, $v_1$), on its own identity's Philox stream from
 draw $2^{31}$, so the stationary draws are untouched.
 
-Each primary is the stationary photon of its node, generated at coordinate time 0, carried to its
-emission time: by the time translation on a stationary spacetime, and for a plasma co-rotating at
-$\omega$ also by the rotation $R_z(\omega t_e)$ of its position and of the spatial components of
-its covariant momentum. The second is exact when the spacetime has the helical Killing vector
+Each primary is the stationary photon of its node, generated at the node's coordinate time $t_g$
+(0, or for the frames of a `FrameStack` the frame's own time $\tau_k$, its zones decoded there),
+carried to its emission time: by the time translation on a stationary spacetime, and for a plasma
+co-rotating at $\omega$, or a stack carried at $\omega$, also by the rotation
+$R_z(\omega(t_e-t_g))$ of its position and of the spatial components of its covariant momentum.
+The second is exact when the spacetime has the helical Killing vector
 $\partial_t+\omega\partial_\phi$, $g(Rx,t+\tau)=R\,g(x,t)R^{\mathsf T}$: the photon is null at
 its event and the zone's $\sqrt{-g}$, $n_e$, $\Theta_e$ and $b^2$ are invariants of the map. Kerr
 with its spin along $z$ and flat space have it at every $\omega$, two holes with spins along $z$
-on a circular orbit at the orbital frequency; a frozen snapshot or a series emits over a window
-only on a stationary spacetime. The march reads the metric and the plasma at the photon's $x^0$:
-frames blended linearly in their primitives, the co-rotating plasma at $R_z(-\omega x^0)x$ with its
-vectors rotated back, the variable sphere at its density of the time. A scattered child starts with
-its event's time.
+on a circular orbit at the orbital frequency; a frozen snapshot or a `FrameSequence` emits over a
+window only on a stationary spacetime, a stack carried at $\omega$ only where the spacetime has
+the symmetry of $\omega$. The march reads the metric and the plasma at the photon's $x^0$:
+frames blended linearly in their primitives (a stack's two frames first carried to $x^0$ by
+$R_z(\omega(x^0-\tau_k))$), the co-rotating plasma at $R_z(-\omega x^0)x$ with its vectors
+rotated back, the variable sphere at its density of the time. A scattered child starts with its
+event's time.
+
+**On a metric without a helical symmetry.** No map then carries the photon of one time to
+another (an `ADMSeries`, a `UserMetric` of $t$: `Spacetime.helical_symmetry(st)` is false). A
+`FrameStack` held in place ($\omega=0$, two frames or more) emits there each photon at its event.
+Each frame $m$ is a node of its own, as on any spacetime: its zones are decoded at the frame's
+time $\tau_m$, so the measure $\sqrt{-g(\tau_m)}\,\Delta^3x$ and the zone's $n_e$, $\Theta_e$,
+$B$, hence the weight table and the counts, are those of the metric of $\tau_m$; a primary drawn
+at $t_e$ from $\phi_m$ is generated at its own event $(t_e,\mathbf x)$, where the frame's plasma
+in $g(t_e)$ gives the fluid velocity, the field direction, the emission tetrad and a covector
+null in $g(t_e)$. The emission is $\dot n(t)=\sum_m\phi_m(t)\,\dot n_m(\tau_m)$, the hat
+interpolation of the nodes' rates, each in the metric of its own time: it differs from the rate
+decoded in $g(t)$ at second order in the frame spacing, as the frames' emission and their blended
+absorption already do, while every photon's kinematics are exact at its event. A snapshot held
+fixed, or one frame, is one node and cannot follow the metric; its frames at the metric's times
+can. A `FrameSequence` and a stack carried at $\omega\ne0$ are refused there, and on a spacetime
+with a helical symmetry a stack is carried by it or refused. On a stationary spacetime the photon
+generated at its event is the placed photon bit for bit. Past the last slice of an `ADMSeries`
+the metric is that slice, and `beyond_series` counts the march time after the last frame or
+slice. The energy $E=-p_t$ and the arrival time recorded at the stop are those at infinity when
+the metric is stationary outside the stop sphere, as for an ADM box inside it with a flat
+exterior.
 
 **Arrival time.** A photon escaping at $(t_e,\mathbf x_e)$ along $\hat n=\mathbf k/|\mathbf k|$
 crosses the wavefront $\hat n\cdot\mathbf x=D$ of a distant observer along $\hat n$ at
@@ -956,7 +1005,12 @@ over the shell's depth profile. A co-rotating plasma on the orbiting binary obey
 $L(t+\tau,\theta,\phi+\omega\tau)=L(t,\theta,\phi)$: azimuth-integrated light curves are flat,
 and at fixed $(\theta,\phi)$ the period is $2\pi/\omega$, halved only when the plasma, like the
 equal-mass metric, is symmetric under the rotation by $\pi$
-(`test/pipeline/products_montecarlo_time.jl`).
+(`test/pipeline/products_montecarlo_time.jl`). On the orbiting binary stripped of its declared
+symmetry, a stack of an axisymmetric plasma emitting at its events agrees with the same plasma
+co-rotating under the exact helical map on the binary; through an `ADMSeries` of the binary every superphoton, paired with its twin
+through the analytic metric (same zone, same draws, the same lapse capture and step rule),
+converges at third order in the slice and node spacing in its emitted and escaping energy and
+its arrival time (`test/pipeline/products_montecarlo_adm.jl`).
 
 ## Deviations from reference codes
 

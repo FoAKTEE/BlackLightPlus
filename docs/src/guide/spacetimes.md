@@ -171,6 +171,36 @@ grid = adm_grid_from_metric(x -> metric(kerr, x), xs, xs, xs; alpha_min = 0.1,
 
 Images from `grid` converge to those from `kerr` as the node spacing shrinks.
 
+### Slices in time
+
+`z4c_series_spacetime` reads a sequence of Z4c dumps as the slices of an `ADMSeries` at the
+dumps' times, resampled onto one node box; `adm_series_from_metric` samples a metric closure
+at given times, the exact test of the series against a known answer:
+
+```julia
+using BlackLightPlus.Spacetime: BoostedSuperposedKerrSchild, CircularOrbit, metric,
+                                adm_series_from_metric
+using BlackLightPlus.Data: z4c_series_spacetime
+
+st = z4c_series_spacetime(sort(readdir("run"; join = true)), 12.0, 192; alpha_min = 0.55)
+
+orbit = CircularOrbit((0.5, 0.5), 6.0)
+binary = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.3), (0.0, 0.0, -0.2)], orbit)
+xs = -8.0:0.25:8.0
+series = adm_series_from_metric(x -> metric(binary, x), xs, xs, xs, collect(-2.0:0.5:60.0);
+                                alpha_min = 0.3)
+```
+
+Between the slices each field follows a cubic in time whose tangent at a slice is the
+derivative of the parabola through it and its neighbours (Catmull–Rom on a uniform cadence),
+so the metric and its first derivatives are continuous in time and space and the geodesic
+force keeps its time row $\dot p_t=-\tfrac12\partial_t g^{\alpha\beta}p_\alpha p_\beta$. The
+metric errs as $\Delta t^3+\Delta x^3$ and its derivatives as $\Delta t^2+\Delta x^2$; rays and
+Monte Carlo photons converge to those of the analytic metric at third order. The slices must
+cover the march: before the first slice and after the last the metric is the end slice. The
+cadence of the dumps must resolve the evolution of the metric; one dump gives its frozen
+`ADMGrid`. The series is held in memory, ten `Float64` fields per node and slice.
+
 ## Checking a metric
 
 The metric and its inverse at a point, and the null constraint of a camera ray:

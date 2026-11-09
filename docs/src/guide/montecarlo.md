@@ -132,9 +132,16 @@ order (`order`); `time_ebins` sets the frequency bins of the time-resolved spect
 
 On a plasma grid the matter may be a snapshot held fixed (on a stationary spacetime), a series
 of frames (`BlackLightPlus.Data.FrameSequence`, frames at given coordinate times, on a stationary
-spacetime) or a snapshot carried rigidly with an orbiting binary
-(`BlackLightPlus.Data.Corotating`, on a spacetime with that helical symmetry); `sectors` splits
-every inclination band into azimuth sectors, so each sector is one observer azimuth:
+spacetime), a snapshot carried rigidly with an orbiting binary
+(`BlackLightPlus.Data.Corotating`, on a spacetime with that helical symmetry) or a dump series
+held together (`BlackLightPlus.Data.FrameStack`, frames at a uniform cadence, each emitting from
+its own time and carried at the stack's `omega`: on a stationary spacetime with `omega = 0`, or
+on a spacetime with the helical symmetry of `omega`). On a spacetime with no helical symmetry
+(an `ADMSeries`, a `UserMetric` of `t`) a stack held in place (`omega = 0`, two frames or more)
+emits each superphoton at its own event in the metric of that time, its plasma that of the
+frame, so plasma and metric are both in slow light; give the frames at the cadence of the
+metric's evolution. `sectors` splits every inclination band into azimuth sectors, so each
+sector is one observer azimuth:
 
 ```julia
 using BlackLightPlus.Spacetime: BoostedSuperposedKerrSchild, CircularOrbit

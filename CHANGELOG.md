@@ -77,6 +77,43 @@ While the version is `0.x`, a bump of `x` may break that API.
   that time (`Products.place` rotates by `ω (t − t_g)`, `t_g` the photon's generation time,
   0 before), so on a spacetime with the helical symmetry of `omega`, two holes on a
   circular orbit, a series of real dumps emits null photons on the moving metric.
+- `Spacetime.ADMSeries`: ADM slices `(α, β^i, γ_ij)` at coordinate times `t_1 < … < t_N` on one
+  lattice as a spacetime that changes in time. Each field is the Catmull–Rom cubic of `ADMGrid`
+  in space and, at a fixed point, the cubic Hermite in time whose tangent at a slice is the
+  derivative of the parabola through it and its neighbours (`Numerics.hermite_weights`;
+  Catmull–Rom on a uniform cadence, one-sided at the end slices), so the metric is C¹ in
+  `(t, x)` and the geodesic force is continuous with its time row
+  `dp_t/dλ = -½ ∂_t g^{αβ} p_α p_β`, which one `raise_and_norm` at a position with four dual
+  partials returns with the spatial force. Before the first slice and after the last the metric
+  is the end slice. `adm_series_from_metric` samples a metric closure at the slice times
+  (`adm_grid_from_metric(…; t)` samples one slice at time `t`), `Data.z4c_series_spacetime`
+  resamples a sequence of AthenaK Z4c dumps onto one lattice, and `adm_slice` returns a slice
+  as its `ADMGrid`; one slice is the frozen `ADMGrid` itself. Against an orbiting binary
+  (separation 6 M) sampled into slices the metric at a lattice node errs by 8.0e-8 and
+  1.0e-8 at Δt = 0.25 and 0.125 M and its time derivative by 3.0e-6 and 8.2e-7; at a slice
+  time the metric errs by 7.2e-6 and 1.2e-6 at Δx = 0.125 and 0.0625 M and its gradient by
+  4.0e-4 and 1.0e-4 (third and second order). Rays past a hole in uniform motion at
+  Δx = Δt/2 = 0.5, 0.25, 0.125 M end within 3.2e-2, 3.8e-3 and 2.8e-4 M of the analytic rays,
+  and the hole's Killing charge `p_t + v·p`, kept to 1.3e-15 by the analytic flow, drifts by
+  1.1e-3, 4.6e-4 and 4.8e-5; the binary's helical charge `p_t + ω L_z` drifts by a median
+  4.7e-4, 5.8e-5 and 8.9e-6 over the rays (`figures/paper/fig_adm_series.jl`).
+- `mc_spectrum(…; window)` runs a `Data.FrameStack` held in place (`omega = 0`, two frames
+  or more) on a spacetime with no helical symmetry (an `ADMSeries`, a `UserMetric` of `t`;
+  `Spacetime.helical_symmetry(st)`, false there), where a photon placed from its frame's
+  time is off the shell and the stack was refused: each frame is a node of its own with its
+  zones at its time, as on any spacetime, and every primary is generated at its own event
+  `(t_e, x)` in the metric of `t_e` (`Products.EventSource`), so plasma and metric are both
+  read at each superphoton's time from emission to escape; `beyond_series` also counts the
+  march after the last slice of an `ADMSeries`. On a stationary spacetime the photon
+  generated at its event is the placed photon bit for bit. A stack of an axisymmetric plasma
+  on the orbiting binary stripped of its declared symmetry agrees with the same plasma
+  co-rotating under the helical map on the binary within errors; through the series of the
+  binary at Δx = Δt/2 = 0.5, 0.25, 0.125 M, 11 925 superphotons paired with their twins
+  through the analytic metric (same zone and draws, the same lapse capture and step rule)
+  differ by a median 2.6e-5, 1.9e-6 and 1.9e-7 in their escaping energy and 1.1e-3, 1.2e-4
+  and 1.5e-5 M in their arrival time, and 8, 4 and 1 of 18 722 change fate. A stack carried
+  at `omega ≠ 0` still needs that helical symmetry, and on a spacetime with one a stack in
+  place still needs it to be stationary; every other run is unchanged bit for bit.
 
 - A Monte Carlo run on a pool builds its tables on the devices: the zone tables (the
   weight table and every zone's count and envelope, `Products.grid_tables`) and the
