@@ -18,6 +18,8 @@ const WAVE_COHORT = 2^18
 const WAVE_REFILL = 2^14
 "The most loop iterations the budget doubles to in a call whose states spawn children."
 const WAVE_SPAWN_CAP = 128
+"The most seconds a device of a call waits for the other devices before its first refill."
+const WAVE_ARRIVAL = 1.0
 
 """
     WaveSettings(budget, cohort, refill, doubling, wavefront)
@@ -132,10 +134,12 @@ child queue `C` of `cap_C` slots; one read of the counter block, each of a fault
 `cap_C`, `C` grows to the children and an eighth more, the executor counts a rerun and the
 advance runs again on the unchanged cohort; the retire launch over the stopped states; the
 branch over the children, each opened into the cohort or, beyond generation `depth`,
-counted as dropped, then a second read of the counter block; the refill: while fewer than
+counted as dropped, then a second read of the counter block; the refill: when fewer than
 `P` states are live and blocks remain, the device takes
 `max(1, min(cld(P − nB, R), cld(r, ndev)))` of the `r` remaining blocks of `R`
-consecutive primaries at once and runs the start over them; then the queues swap. `cap_C`
+consecutive primaries in one claim and runs the start over them; then the queues swap.
+Before its first refill a device waits, at most `WAVE_ARRIVAL` seconds, until every device
+of the call has reached its own, so the blocks of a call spread over every device. `cap_C`
 is `capacity` at every iteration when given; otherwise it starts at the larger of `P` and
 the child slots that earlier calls left on the device's first lane, and keeps every
 growth. A call with `depth = 0` stores no child: the advance counts the children, all
@@ -234,7 +238,8 @@ end
     BlockCounter(n, R, ndev)
 
 The primaries `1:n` in blocks of `R` consecutive primaries (the last one clipped), with
-one atomic counter of the blocks taken that the `ndev` devices of a call share.
+one atomic counter of the blocks taken and one of the devices ready to take them, which the
+`ndev` devices of a call share.
 """
 struct BlockCounter
     n::Int
@@ -242,8 +247,26 @@ struct BlockCounter
     ndev::Int
     blocks::Int
     taken::Threads.Atomic{Int}
+    arrived::Threads.Atomic{Int}
 end
-BlockCounter(n::Int, R::Int, ndev::Int) = BlockCounter(n, R, ndev, cld(n, R), Threads.Atomic{Int}(0))
+BlockCounter(n::Int, R::Int, ndev::Int) =
+    BlockCounter(n, R, ndev, cld(n, R), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+
+"""
+    arrive!(b::BlockCounter, wait = WAVE_ARRIVAL)
+
+Count the calling device as ready to take blocks, then yield until every device of the call
+is, or `wait` seconds have passed: a device whose set-up ends first does not claim the
+blocks of a small call before the others can. The blocks a device takes change no result.
+"""
+function arrive!(b::BlockCounter, wait::Real = WAVE_ARRIVAL)
+    Threads.atomic_add!(b.arrived, 1)
+    t0 = time()
+    while b.arrived[] < b.ndev && time() - t0 < wait
+        yield()
+    end
+    return nothing
+end
 
 "Whether every block has been taken."
 exhausted(b::BlockCounter) = b.taken[] >= b.blocks
@@ -315,6 +338,7 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, slot, blocks::B
     admitted = 0; spawned = 0; dropped = 0; retired = 0; idle = 0
     ranges = UnitRange{Int}[]
     iters = NamedTuple[]
+    arrive!(blocks)
     while true
         kids && call.capacity !== nothing && (capC = call.capacity)
         live = done = children = drop = reruns = 0
@@ -373,9 +397,8 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, slot, blocks::B
         end
         nB = live
         t4 = time_ns()
-        while nB < P
-            r = take_blocks!(blocks, P - nB)
-            isempty(r) && break
+        r = nB < P ? take_blocks!(blocks, P - nB) : 1:0
+        if !isempty(r)
             q = WaveQueues(nothing, StateBuffer(B, live_ctr), nothing, nothing, counters, K, nB, call.depth)
             launch!(lane, wf.start, Adapt.adapt(WaveSwap(q, C), dstart), r, length(r), ())
             push!(ranges, r)

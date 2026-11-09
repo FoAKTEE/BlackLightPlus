@@ -6,7 +6,8 @@
 # budget with the doubling on, capped and off, at every cohort and refill block, with `n`
 # not a multiple of the block, at every child capacity (the advance runs again for its
 # children); the children of the last generation are counted and dropped; the started
-# primaries, the retirements and the per-device counts of `describe` close; a call with
+# primaries, the retirements and the per-device counts of `describe` close; every device
+# takes blocks, also of a call smaller than one cohort; a call with
 # children doubles its budget to at most `WAVE_SPAWN_CAP`; the child slots carry over
 # calls; a state that cannot advance and a state that reports a fault are errors;
 # accumulator twins and child slots are released and the residency cache does not grow
@@ -345,17 +346,24 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
         @test maximum(wide) > Execution.WAVE_SPAWN_CAP
     end
 
-    @testset "every device takes blocks at small settings" begin
-        for nd in (2, 3), d in (0, 2)
+    @testset "every device takes blocks at small settings, and of a call smaller than a cohort" begin
+        for nd in (2, 3), d in (0, 2), (P, R) in ((7, 1), (2^10, 5))
             ex = PoolExecutor(DK.wavehosts(nd))
-            r = with_wavefront_settings(cohort = 7, refill = 1) do
+            r = with_wavefront_settings(cohort = P, refill = R) do
                 run_toy(ex, N; depth = d)
             end
             dsc = describe(ex)
             @test same(r, d) && all(>(0), dsc.admitted) && sum(dsc.admitted) == N
             @test all(>(0), dsc.iterations) && length(wave_log(ex)) == nd
-            d > 0 && @test all(>(0), dsc.spawned)
+            # one claim per iteration: at most a share of the blocks remaining
+            @test all(lg -> all(it -> it.started <= R * cld(cld(N, R), nd), lg), wave_log(ex))
         end
+        # a device waits for the others of its call at its first refill, at most WAVE_ARRIVAL seconds
+        b = Execution.BlockCounter(10, 2, 2)
+        t = @elapsed Execution.arrive!(b, 0.2)
+        @test b.arrived[] == 1 && 0.2 <= t < 2.0
+        t = @elapsed Execution.arrive!(b, 5.0)
+        @test b.arrived[] == 2 && t < 1.0
     end
 
     @testset "children of the last generation: counted and dropped; none without a slot" begin
