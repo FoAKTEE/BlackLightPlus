@@ -86,7 +86,9 @@ plan, run)`: `frames[:, :, k]` (rows β) the image at `times[k]`, the light curv
 `into`, a result of this function with as many bands, pixels and times, is overwritten
 (its frames, light curve, times and landing maps) and shared by the returned result,
 bitwise the result without it; its arrays are dropped from the device pools' residency
-caches first ([`Execution.invalidate!`](@ref)).
+caches first ([`Execution.invalidate!`](@ref)). On a pool the frame programs read the
+landing maps from a copy on each device, uploaded every call (`32K` bytes per pixel and
+device, in host memory on a host device), with `into` as without it.
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """

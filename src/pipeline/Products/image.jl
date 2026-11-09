@@ -40,18 +40,12 @@ function Image(plan::Plan, out::AbstractVector{<:SVector{4}}, run)
 end
 
 # The image of a run whose output `out` came from `image_output` with `into`, an earlier
-# `Image`: a Stokes I march wrote `into.I`, and the zero planes are filled again; an IQUV
-# march on a pool wrote the four planes through a `StokesPlanes`, on threads a vector of
-# Stokes vectors that is split into them.
+# `Image`: an IQUV march wrote the four planes through a `StokesPlanes`; a Stokes I march
+# wrote `into.I`, and the zero planes are filled again.
 image_result(plan::Plan, out, run, ::Nothing) = Image(plan, out, run)
 function image_result(plan::Plan, out, run, into)
-    planes = (into.I, into.Q, into.U, into.V)
-    if out isa AbstractVector{<:SVector{4}}
-        out isa StokesPlanes || host_epilogue!(Split(out), planes, length(out))
-    else
-        fill_maps!(0.0, [into.Q, into.U, into.V])
-    end
-    return Image(planes..., plan, run)
+    out isa StokesPlanes || fill_maps!(0.0, [into.Q, into.U, into.V])
+    return Image(into.I, into.Q, into.U, into.V, plan, run)
 end
 
 """
@@ -59,8 +53,9 @@ end
 
 The planes of a Stokes-vector image as one vector of `SVector{4,Float64}` over their
 items: element `i` reads `(I[i], Q[i], U[i], V[i])`, and storing a Stokes vector there
-writes its components to the four planes. The lanes of a pool store the Stokes vectors of
-an `IQUV` run through it into caller-supplied planes.
+writes its components to the four planes. An `IQUV` run stores its Stokes vectors through
+it into caller-supplied planes: the lanes of a pool as they copy a chunk back, Julia threads
+block by block ([`staged_planes!`](@ref)).
 """
 struct StokesPlanes <: AbstractVector{SVector{4,Float64}}
     I::Vector{Float64}
@@ -84,11 +79,7 @@ Base.@propagate_inbounds function Base.setindex!(p::StokesPlanes, v, i::Int)
 end
 
 # The per-pixel output of an image run: a new vector, or with `into` (an `Image` of as many
-# pixels) its I plane for Stokes I, and for IQUV its four planes on a pool, whose lanes
-# copy the device's Stokes vectors into them. On threads the program writes the output
-# itself, and a program writing a `StokesPlanes` is compiled apart from the one writing a
-# vector of Stokes vectors, with other floating-point contractions; so an IQUV image on
-# threads keeps that vector (32 bytes per pixel) and splits it into the planes.
+# pixels) its I plane for Stokes I and its four planes as a `StokesPlanes` for IQUV.
 image_output(exec, plan::Plan, ::Nothing) = Vector{output_type(plan)}(undef, npixels(plan))
 function image_output(exec, plan::Plan, into)
     n = plan.camera.npix
@@ -98,8 +89,66 @@ function image_output(exec, plan::Plan, into)
                             "not the plan's $T"))
     m = claim_into(into, :render, (:I, :Q, :U, :V), (), 0, (n, n))
     T === Float64 && return vec(m.I)
-    exec isa ThreadedExecutor && return Vector{T}(undef, n * n)
     return StokesPlanes(vec(m.I), vec(m.Q), vec(m.U), vec(m.V))
+end
+
+# The parts `(prog => items, …)` of an image run into `out`, as `foreach_item!` runs them;
+# Stokes vectors into a `StokesPlanes` on Julia threads through [`staged_planes!`](@ref).
+run_image!(exec, parts::Tuple, out) = foreach_item!(exec, parts; outs = (out,))
+run_image!(exec::ThreadedExecutor, parts::Tuple, out::StokesPlanes) =
+    staged_planes!(exec, parts, out)
+
+# Items of a block that a worker marches into its own Stokes vectors before storing them
+# in the planes: 8 KiB per worker.
+const STAGE_ITEMS = 256
+
+"""
+    staged_planes!(exec::ThreadedExecutor, parts, P::StokesPlanes) -> P
+
+The parts `(prog => items, …)` of an `IQUV` image on Julia threads into the planes `P`:
+the chunks that `foreach_item!` cuts, each marched in blocks of at most `STAGE_ITEMS`
+items into the worker's own vector of Stokes vectors, whose components are then stored in
+the planes. On threads a program writes its output itself and is compiled for the
+output's type, and a program compiled for `StokesPlanes` contracts its arithmetic
+otherwise; the worker's vector has the type of the output of the call without `into`, so
+the same compiled program runs and the planes hold that call's bits.
+"""
+function staged_planes!(exec::ThreadedExecutor, parts::Tuple, P::StokesPlanes)
+    ps = map(p -> (p.first, p.second::AbstractVector{<:Integer}), parts)
+    n = sum(p -> length(p[2]), ps; init = 0)
+    c = Execution.resolve_chunk!(exec, n; hint = Execution.parts_hint(ps),
+                                 bytes = Execution.item_bytes((P,)))
+    chunks = Execution.part_chunks(ps, c)
+    nw = min(Threads.nthreads(), length(chunks))
+    bufs = Channel{Vector{SVector{4,Float64}}}(nw)
+    foreach(_ -> put!(bufs, Vector{SVector{4,Float64}}(undef, min(c, STAGE_ITEMS))), 1:nw)
+    Execution.run_workers!(nw, chunks) do _, (p, r), _
+        prog, q = ps[p]
+        buf = take!(bufs)
+        try
+            stage_range!(prog, q, r, buf, P)
+        finally
+            put!(bufs, buf)
+        end
+    end
+    return P
+end
+
+# The items `q[r]` of `prog` in blocks of `length(buf)`: a block marched into `buf` (the
+# block's `s`-th item at slot `s`, an integer of the item's type), then stored in `P`.
+function stage_range!(prog, q, r::UnitRange{Int}, buf::Vector{SVector{4,Float64}},
+                      P::StokesPlanes)
+    for b0 in first(r):length(buf):last(r)
+        b = b0:min(b0 + length(buf) - 1, last(r))
+        for j in b
+            item = @inbounds q[j]
+            prog(item, oftype(item, j - b0 + 1), buf)
+        end
+        for j in b
+            @inbounds P[q[j]] = buf[j - b0 + 1]
+        end
+    end
+    return nothing
 end
 
 Base.show(io::IO, img::Image) =
@@ -129,9 +178,9 @@ and the rest on the `Float32` lane, in one queue. With `path`, a trace of the sa
 two-phase path; host only: `backend` must resolve to a `ThreadedExecutor`). `into`, an
 `Image` of as many pixels (`Float64` or `IQUV` pixels), is overwritten: the march writes its
 planes (the zero planes of a Stokes I image filled again; an `IQUV` march on Julia threads
-writes one vector of Stokes vectors, 32 bytes per pixel, split into the planes) and the
-returned image shares them, bitwise the image without `into`; its arrays are dropped from
-the device pools' residency caches first ([`Execution.invalidate!`](@ref)).
+through blocks of Stokes vectors per worker, [`staged_planes!`](@ref)) and the returned
+image shares them, bitwise the image without `into`; its arrays are dropped from the
+device pools' residency caches first ([`Execution.invalidate!`](@ref)).
 
 Determinism: bitwise per item, whatever the executor, device count, chunking or queue
 order.
@@ -172,13 +221,13 @@ end
 march_frame!(exec, plan::Plan, out; kw...) = march_frame!(exec, plan, plan.lanes, out; kw...)
 
 march_frame!(exec, plan::Plan, ::Lanes, out; kw...) =
-    foreach_item!(exec, imaging_program(plan; kw...), plan.queue; outs = (out,))
+    run_image!(exec, (imaging_program(plan; kw...) => plan.queue,), out)
 
 function march_frame!(exec, plan::Plan, ::MixedLanes, out; kw...)
     q = mixed_partition(plan.queue, plan.rescue)
     rescue = imaging_program(plan, plan.spacetime, plan.budget; kw...)
     bulk = imaging_program(plan; kw...)
-    return foreach_item!(exec, (rescue => q.rescue, bulk => q.bulk); outs = (out,))
+    return run_image!(exec, (rescue => q.rescue, bulk => q.bulk), out)
 end
 
 # Per-item Stokes values as a 4 × n matrix (rows Q, U, V zero for a scalar intensity).

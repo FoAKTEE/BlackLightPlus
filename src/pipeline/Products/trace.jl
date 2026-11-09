@@ -117,7 +117,7 @@ function render_stored(plan::Plan, path::Trajectories, backend, into = nothing)
     prog = StoredPathProgram(plan.mode, plan.spacetime, plan.provider, plan.params, plan.frame,
                              path.states, path.dls)
     out = image_output(exec, plan, into)
-    foreach_item!(exec, prog, plan.queue; outs = (out,))
+    run_image!(exec, (prog => plan.queue,), out)
     return image_result(plan, out, run_record(exec, plan, t0), into)
 end
 

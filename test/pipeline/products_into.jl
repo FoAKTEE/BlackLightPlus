@@ -1,9 +1,9 @@
 # Caller storage: every image product given `into`, an earlier result of the same shape,
 # writes its maps into that result's arrays and returns them, bitwise the result without
-# `into`, on threads, host pools and the test's device backend; a series of calls
-# allocates no maps; a host array that a pool uploaded and a call then overwrote is
-# uploaded again with its new values; `into` of another shape, type or with shared memory
-# is an error.
+# `into`, on threads, host pools and the test's device backend; a call with `into`
+# allocates no maps on any of them; a host array that a pool uploaded and a call then
+# overwrote is uploaded again with its new values; `into` of another shape, type or with
+# shared memory is an error.
 using Test, BlackLightPlus, StaticArrays
 using BlackLightPlus.Plans: CameraConfig, RunConfig, prepare, precise
 using BlackLightPlus.Products: Image, render, render_analytic, render_crossings, analytic_movie,
@@ -90,6 +90,23 @@ end
             r = render(q; path = t, backend = :cpu, into = buf)
             @test bits(r) == bits(ref) && shares(r, buf)
         end
+        # an IQUV march into StokesPlanes on threads is compiled with other contractions (Q
+        # differs in about a third of these pixels); with `into` the threads march into the
+        # output type of the default call
+        tor = prepare(cfg(60.0); spacetime = KerrSchildCartesian(0.9), matter = Decks.TorusDeck(),
+                      mode = IQUV())
+        tor2 = prepare(cfg(30.0); spacetime = KerrSchildCartesian(0.9), matter = Decks.TorusDeck(),
+                       mode = IQUV())
+        for e in (:cpu, :host_pool)
+            ref = render(tor; backend = e)
+            buf = render(tor2; backend = :cpu)
+            r = render(tor; backend = e, into = buf)
+            @test bits(r) == bits(ref) && shares(r, buf)
+        end
+        t = trace(tor; backend = :cpu)
+        ref = render(tor; path = t, backend = :cpu)
+        buf = render(tor2; backend = :cpu)
+        @test bits(render(tor; path = t, backend = :cpu, into = buf)) == bits(ref)
         # the planes of an IQUV image as one vector of Stokes vectors
         P = StokesPlanes(zeros(3), zeros(3), zeros(3), zeros(3))
         P[2] = SVector(1.0, -2.0, 3.0, -0.0)
@@ -109,45 +126,63 @@ end
 
     @testset "no maps allocated" begin
         big = kerr(res = 256)
-        radius(e, i) = render_analytic(big, disk; observables = false, backend = e, into = i)
-        for e in (:cpu, :host_pool, resolve(Decks.POOL_BACKEND))
-            r = radius(e, nothing)
-            radius(e, r)
-            fresh = @allocated radius(e, nothing)
-            into = @allocated radius(e, r)
-            @test fresh > 16 * 256^2 * 8 && into < 2^20
-        end
-        # an IQUV image on threads keeps its vector of Stokes vectors (32 bytes per pixel)
-        for (mode, e, bound) in ((StokesI(), :cpu, 0), (StokesI(), :host_pool, 0),
-                                 (IQUV(), :host_pool, 0), (IQUV(), :cpu, 32 * 96^2))
-            q = prepare(RunConfig(camera = CameraConfig(fov = 24.0, resolution = 96));
-                        spacetime = KerrSchildCartesian(0.9), matter = Decks.uniform_deck(), mode)
-            img = render(q; backend = e)
-            render(q; backend = e, into = img)
-            fresh = @allocated render(q; backend = e)
-            into = @allocated render(q; backend = e, into = img)
-            @test fresh > 4 * 96^2 * 8 && into < bound + 2^20
-        end
         spot = EquatorialSpot(EquatorialDisk(0.94); r_c = 7.0, omega = 0.06, width = 0.8)
-        mv = analytic_movie(big, spot; times = (0.0, 10.0), bands = (0, 1), backend = :cpu)
-        analytic_movie(big, spot; times = (0.0, 10.0), bands = (0, 1), backend = :cpu, into = mv)
-        @test (@allocated analytic_movie(big, spot; times = (0.0, 10.0), bands = (0, 1), backend = :cpu,
-                                         into = mv)) < 2^20
+        mats = (cone(0.94), EquatorialDisk(0.94))
+        pc = prepare(RunConfig(camera = CameraConfig(inclination_deg = 60.0, fov = 16.0, resolution = 96));
+                     spacetime = KerrSchildCartesian(0.9), matter = nothing)
+        grid(mode) = prepare(RunConfig(camera = CameraConfig(fov = 24.0, resolution = 96));
+                             spacetime = KerrSchildCartesian(0.9), matter = Decks.uniform_deck(), mode)
+        qi, qp = grid(StokesI()), grid(IQUV())
+        ti, tp = trace(qi; backend = :cpu), trace(qp; backend = :cpu)
+        calls = (radius = (e, i) -> render_analytic(big, disk; observables = false, backend = e, into = i),
+                 full = (e, i) -> render_analytic(big, disk; backend = e, into = i),
+                 surfaces = (e, i) -> render_analytic(big, mats; bands = (0, 1), ro = Inf, backend = e,
+                                                      into = i),
+                 crossings = (e, i) -> render_crossings(pc, EquatorialDisk(0.9); backend = e, into = i),
+                 stokes_i = (e, i) -> render(qi; backend = e, into = i),
+                 iquv = (e, i) -> render(qp; backend = e, into = i),
+                 movie = (e, i) -> analytic_movie(big, spot; times = (0.0, 10.0, 20.0), bands = (0, 1),
+                                                  backend = e, into = i))
+        # A host device's memory is host memory: a pool of host devices allocates on the host
+        # what a GPU allocates on the device, the movie's per-call inputs of its frames (the
+        # landing maps, 4 × 2 bands × 256² × 8 bytes on each device).
+        hostdevs(e) = (x = resolve(e); x isa PoolExecutor && all(d -> d isa HostDevice, x.pool.devices) ?
+                       length(x.pool.devices) : 0)
+        # A pool lane allocates its buffers at its first chunk of a kind and size, and a
+        # call's chunk may go to either lane; `@allocated` counts every thread: the least of
+        # three calls
+        for e in (:cpu, :host_pool, resolve(Decks.POOL_BACKEND)), (name, f) in pairs(calls)
+            r = f(e, nothing)
+            f(e, r)
+            fresh = @allocated f(e, nothing)
+            into = [@allocated(f(e, r)) for _ in 1:3]
+            uploads = name === :movie ? hostdevs(e) * 4 * 2 * 256^2 * 8 : 0
+            @test fresh >= sum(sizeof, arrays(r))
+            @test minimum(into) < uploads + 2^20
+        end
+        for (q, t) in ((qi, ti), (qp, tp))
+            img = render(q; path = t, backend = :cpu)
+            render(q; path = t, backend = :cpu, into = img)
+            @test (@allocated render(q; path = t, backend = :cpu, into = img)) < 2^20
+        end
     end
 
     @testset "an uploaded host array overwritten through into is uploaded again" begin
-        for exec in (resolve(:host_pool), PoolExecutor(DevicePool(Decks.hosts(2); lanes = 2)))
+        built = PoolExecutor(DevicePool(Decks.hosts(2); lanes = 2))
+        execs = Decks.CROSS_HARDWARE ? (resolve(:host_pool), built, resolve(Decks.POOL_BACKEND)) :
+                (resolve(:host_pool), built)
+        for exec in execs
             dev = exec.pool.devices[end]
             for run_on in (exec, :cpu)
                 r = render_analytic(p, disk; backend = exec)
                 stale = copy(r.Ib[1])
-                @test resident(exec, dev, r.Ib[1]) == stale                  # a run's upload
+                @test isequal(Array(resident(exec, dev, r.Ib[1])), stale)    # uploaded by `resident`
                 render_analytic(p2, disk; backend = run_on, into = r)
-                @test r.Ib[1] != stale
-                @test resident(exec, dev, r.Ib[1]) == r.Ib[1]                # uploaded again
+                @test !isequal(r.Ib[1], stale)
+                @test isequal(Array(resident(exec, dev, r.Ib[1])), r.Ib[1])  # uploaded again
             end
-            exec.pool === resolve(:host_pool).pool || close(exec.pool)
         end
+        close(built.pool)
     end
 
     @testset "into of another shape, type or with shared memory" begin
