@@ -11,9 +11,9 @@
 # or the order of the states, which a key stage may sort (wave_sort.jl).
 
 "Loop iterations per state of an advance launch, by default."
-const WAVE_BUDGET = 32
+const WAVE_BUDGET = 16
 "Live states per device, by default."
-const WAVE_COHORT = 2^18
+const WAVE_COHORT = 2^19
 "Consecutive primaries per block of the refill, by default."
 const WAVE_REFILL = 2^14
 "The most loop iterations the budget doubles to in a call whose states spawn children."
