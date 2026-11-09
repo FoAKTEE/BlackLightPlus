@@ -137,9 +137,10 @@ function foreach_wavefront!(exec::Executor, wf::Wavefront, n::Integer, depth::In
     return foreach_cascade!(exec, wf.primary, wf.layer, n, depth; capacity, chunk)
 end
 
-# Whether the wavefront serves a call: devices that answer `wavefront`, the setting, and
-# a phase with stages (the primaries alone; their children counted).
-serves(::ThreadedExecutor, wf, depth, set) = false
+# Whether the wavefront serves a call: a pool whose devices answer `wavefront`, the
+# setting, and a phase with stages (the primaries alone; their children counted). Threads
+# and every other executor run the cascade.
+serves(::Executor, wf, depth, set) = false
 serves(e::PoolExecutor, wf::Wavefront, depth, set::WaveSettings) =
     set.wavefront && depth == 0 && all(wavefront, e.pool.devices)
 
