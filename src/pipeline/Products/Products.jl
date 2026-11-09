@@ -75,7 +75,7 @@ export BandSum, Fill, Split
 export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER_STRIPES,
        mc_ledger, ledger_sum, ledger_count, TimeProfile, profile_area, clip_profile, sample_time,
        time_stream, place, TimedSource, arrival_time, record_arrival!, TimedRecord, TimedPrimary,
-       TimedLayer, photon_key, MCStart, MCAdvance, MCRetire, MCBranch, mc_wavefront
+       TimedLayer, photon_key, MCStart, MCAdvance, MCRetire, MCBranch, MCKey, mc_wavefront
 # products and results
 export Image, Trajectories, render, render_amr, render_analytic, render_crossings,
        photon_ring_layers, trace, shadow, sensitivity, variants, analytic_movie

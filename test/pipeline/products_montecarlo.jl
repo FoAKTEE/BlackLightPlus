@@ -5,8 +5,8 @@
 # and power budget, bitwise agreement across executors, device counts, chunks and
 # child-buffer capacities (the overflow rerun), thin and scattering runs on the device
 # wavefront of `WaveHost` pools (bitwise among device counts, budgets and child slots, within
-# 1e-11 of threads; the straight-line march of the sphere bitwise the threads), the
-# emission zones, the programs' device contract, the process's hot-cross table, the backend
+# 1e-11 of threads; the straight-line march of the sphere bitwise the threads; the same bits
+# with the cohort sorted by the key stage), the emission zones, the programs' device contract, the process's hot-cross table, the backend
 # keyword, the run record and the photon order key.
 using Test, BlackLightPlus, StaticArrays
 using Adapt: Adapt
@@ -15,7 +15,7 @@ using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
                     MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render, grid_tables,
                     grid_zones, ZoneSums, ZoneCounts, hotcross_build, photon_key, PHOTON_KEYS,
-                    MCStart, MCAdvance, MCRetire, MCBranch
+                    MCStart, MCAdvance, MCRetire, MCBranch, MCKey
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
                      inverse_metric, proxy_distance, SuperposedKerrSchild, horizon_floor
 using BlackLightPlus.Matter: UniformSphere
@@ -27,7 +27,8 @@ using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactB
                      PolarBands, InclinationBands, band, nuLnu_total, nuLnu_solid, total_power,
                      total_weight, mean_energy, scalar, add!, describe, backend!, reset_backend!,
                      nuLnu_sigma, foreach_item!, with_wavefront_settings, WaveQueues, Cohort,
-                     StateBuffer, WaveSwap, wave_state, wave_steps, generation, Generation
+                     StateBuffer, WaveSwap, wave_state, wave_steps, generation, Generation, wave_log,
+                     KeyCount, wave_keys
 using BlackLightPlus.Data: zone_tables, emission_sites
 const DK = Main.Decks
 
@@ -352,6 +353,12 @@ end
             end
             @test same(r, hw[1]) && all(>(0), describe(ex).admitted)
         end
+        for every in (1, 4)
+            r = with_wavefront_settings(sort_every = every, cohort = 64, refill = 37) do
+                mc_spectrum(pt, 800; tw..., backend = ex)
+            end
+            @test same(r, hw[1]) && count(it -> it.sorted, reduce(vcat, wave_log(ex))) > 2
+        end
         # threads run track! in another inlining context: equal counts, sums within 1e-11
         @test close_to(hw[1], thr, 1.0e-11) && hw[1].n_recorded == thr.n_recorded
         # the straight-line march of the sphere: bitwise the threads
@@ -400,6 +407,16 @@ end
                 torus_reruns += rb
             end
             cap === nothing || @test torus_reruns > 0
+        end
+        # the cohort sorted by the key stage before every advance and every fourth: the same bits
+        for every in (1, 4), cap in (nothing, 1)
+            a, b, ns = with_wavefront_settings(sort_every = every, cohort = 64, refill = 37) do
+                a = mc_spectrum(prepare(ss), 1_500; kw..., capacity = cap, backend = ex)
+                ns = count(it -> it.sorted, reduce(vcat, wave_log(ex)))
+                (a, mc_spectrum(pt, 800; tk..., capacity = cap, backend = ex), ns)
+            end
+            @test same(a, hw[1][1]) && same(b, hw[1][2]) && ns > 2
+            @test describe(ex).settings.sort_every == every
         end
         # the straight-line march of the sphere: bitwise the threads; the curved march of the
         # torus runs track! in another inlining context on threads: equal counts, sums within 1e-11
@@ -469,6 +486,13 @@ end
         done[1] = states[1]
         @test allocs(ret, 1, 1) == 0
         @test wave_state(adv) === wave_state(br) === MarchState && wave_steps(adv) == ctr.nmax
+        # the key stage stores and counts the photon_key of a member
+        kc = KeyCount(Cohort(states, nothing), zeros(UInt32, 8), zeros(Int32, PHOTON_KEYS))
+        key = Adapt.adapt(WaveSwap(kc, nothing), MCKey(ztr))
+        @test DK.device_isbits(MCKey(ztr)) && DK.device_isbits(key)
+        @test allocs(key, 2, 1) == 0 && sum(kc.counts) == 2
+        @test kc.keys[2] == photon_key(pt.spacetime, ctr, states[2].y) && kc.counts[kc.keys[2] + 1] == 2
+        @test wave_state(MCKey(ztr)) === MarchState && wave_keys(MCKey(ztr)) == PHOTON_KEYS
         # the branch opens a child into the live queue; beyond the depth it counts it dropped
         cnt .= 0
         @test allocs(br, 2, 1) == 0 && cnt[1] == 2 && cnt[4] == 0

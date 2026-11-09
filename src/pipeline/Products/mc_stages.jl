@@ -3,7 +3,7 @@
 # primary and opens its march, `MCBranch` opens the march of a child, `MCAdvance` runs a
 # live march for at most the launch's budget of loop iterations (its children kicked
 # inline, as `track!` kicks them), `MCRetire` closes a stopped march: its record and its
-# tally. Every value the march carries from one iteration to the next lives in the
+# tally; `MCKey` keys a live march for the sort of the cohort (gated). Every value the march carries from one iteration to the next lives in the
 # `MarchState`, so a march cut into any number of advances is the uncut march.
 
 # The march of one photon of a run: the transport's fixed inputs and the sink of a stripe.
@@ -124,8 +124,33 @@ function (p::MCBranch)(item, i)
     return nothing
 end
 
+"""
+    MCKey(transport)
+
+The key stage of a Monte Carlo wavefront (*gated*), called as `prog(item, i)`: member
+`j = item` of the launch's cohort is keyed by [`photon_key`](@ref) of its state on the
+spacetime of the [`MCTransport`](@ref) `transport` under its march control, the key stored
+and counted by [`Execution.count_key!`](@ref). The key orders the advance's reads of the
+cohort and enters no result.
+"""
+struct MCKey{S,C,Q} <: Function
+    st::S
+    ctl::C
+    queues::Q
+end
+MCKey(transport::MCTransport) = MCKey(transport.st, transport.ctl, Execution.KeyCount())
+Adapt.@adapt_structure MCKey
+
+function (p::MCKey)(item, i)
+    q = p.queues
+    Execution.count_key!(q, item, photon_key(p.st, p.ctl, q.A[item].y))
+    return nothing
+end
+
+Execution.wave_keys(::MCKey) = PHOTON_KEYS
+
 const MCStage = Union{MCStart,MCAdvance,MCRetire,MCBranch}
-Execution.wave_state(::MCStage) = MarchState
+Execution.wave_state(::Union{MCStage,MCKey}) = MarchState
 Execution.wave_steps(p::MCAdvance) = max_steps(p.transport.ctl)
 Execution.generation(s::MarchState) = Int(s.entry.nscatt)
 workgroupsize(::MCStage) = 32
@@ -134,9 +159,9 @@ workgroupsize(::MCStage) = 32
     mc_wavefront(source, transport, sink, seed, primary, layer, depth) -> Wavefront
 
 The [`Execution.Wavefront`](@ref) of a stationary Monte Carlo run: the stage programs
-[`MCStart`](@ref), [`MCAdvance`](@ref), [`MCRetire`](@ref) and, for a scattering run
-(`depth > 0`), [`MCBranch`](@ref), and the history programs `primary` and `layer` of the
-same `source`, `transport`, `sink` and `seed`. The run's scattering depth `depth` must be
+[`MCStart`](@ref), [`MCAdvance`](@ref), [`MCRetire`](@ref), [`MCKey`](@ref) and, for a
+scattering run (`depth > 0`), [`MCBranch`](@ref), and the history programs `primary` and
+`layer` of the same `source`, `transport`, `sink` and `seed`. The run's scattering depth `depth` must be
 the transport's `max_scatt`, so that a photon of the last generation never spawns.
 """
 function mc_wavefront(source, transport::MCTransport, sink::MCSink, seed::UInt32, primary,
@@ -148,5 +173,5 @@ function mc_wavefront(source, transport::MCTransport, sink::MCSink, seed::UInt32
                                advance = MCAdvance(transport, sink),
                                retire = MCRetire(transport, sink),
                                branch = depth > 0 ? MCBranch(transport, sink) : nothing,
-                               primary, layer)
+                               key = MCKey(transport), primary, layer)
 end
