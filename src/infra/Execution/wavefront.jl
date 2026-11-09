@@ -100,7 +100,7 @@ end
 
 """
     foreach_wavefront!(exec, wf::Wavefront, n, depth; capacity = nothing,
-                       chunk = cascade_chunk(exec, n)) -> Int
+                       chunk = nothing) -> Int
 
 Run the transport of `wf` over the primaries `1:n` with at most `depth` scattering
 generations, as [`foreach_cascade!`](@ref)`(exec, wf.primary, wf.layer, n, depth)` would,
@@ -108,7 +108,8 @@ and return the children spawned. The device wavefront serves the call when `exec
 `PoolExecutor` whose every device answers [`wavefront`](@ref)`(dev) = true`, the settings
 allow it ([`with_wavefront_settings`](@ref)) and the call is a phase the wavefront has
 stages for: `depth = 0`, the children of the primaries counted and not tracked. Any
-other call runs the cascade with `capacity` and `chunk`.
+other call runs the cascade with `capacity` and, when given, `chunk` (the cascade's
+default otherwise).
 
 On the wavefront each device runs its own cohort on its first lane until no primary
 block remains and its cohort is empty. Per iteration: the counter block zeroed; the
@@ -129,12 +130,13 @@ bitwise when the stage programs give the history programs' bits, whatever the se
 the device count and the arrival order.
 """
 function foreach_wavefront!(exec::Executor, wf::Wavefront, n::Integer, depth::Integer;
-                            capacity = nothing, chunk::Integer = cascade_chunk(exec, n))
+                            capacity = nothing, chunk = nothing)
     n >= 0 || throw(ArgumentError("foreach_wavefront!: n must be non-negative"))
     depth >= 0 || throw(ArgumentError("foreach_wavefront!: depth must be non-negative"))
     set = wave_settings()
     serves(exec, wf, depth, set) && return run_wavefront!(exec, wf, Int(n), set)
-    return foreach_cascade!(exec, wf.primary, wf.layer, n, depth; capacity, chunk)
+    kw = chunk === nothing ? (; capacity) : (; capacity, chunk)
+    return foreach_cascade!(exec, wf.primary, wf.layer, n, depth; kw...)
 end
 
 # Whether the wavefront serves a call: a pool whose devices answer `wavefront`, the

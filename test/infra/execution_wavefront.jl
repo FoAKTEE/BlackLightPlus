@@ -8,8 +8,8 @@
 # primaries, the retirements and the per-device counts of `describe` close; a state that
 # cannot advance and a state that reports a fault are errors; accumulator twins and child
 # slots are released and the residency cache does not grow over calls; calls outside
-# `with_wavefront_settings` use the defaults; threads, host pools and phases without
-# stages take the cascade.
+# `with_wavefront_settings` use the defaults; threads, host pools, executors of other
+# types and phases without stages take the cascade.
 using Test, BlackLightPlus
 using StaticArrays
 using BlackLightPlus.Numerics: MCRng, MCStreamLayout, primary_rng
@@ -160,6 +160,14 @@ catch e
     sprint(showerror, e)
 end
 
+"An executor of another type that forwards the cascade to threads and records its keywords."
+struct Forwarding <: Execution.Executor
+    inner::ThreadedExecutor
+    seen::Vector{Any}
+end
+Execution.foreach_cascade!(e::Forwarding, p, l, n::Integer, d::Integer; kw...) =
+    (push!(e.seen, values(kw)); foreach_cascade!(e.inner, p, l, n, d; kw...))
+
 const N = 203
 const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wavefront = true)
 
@@ -169,7 +177,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
     expect = (totals = ref.totals, children = ref.children)
     same(r) = (totals = r.totals, children = r.children) == expect
 
-    @testset "threads, host pools and phases without stages take the cascade" begin
+    @testset "threads, host pools, other executors and phases without stages: the cascade" begin
         for exec in (ThreadedExecutor(), PoolExecutor(DK.hosts(1)), PoolExecutor(DK.hosts(2); chunk = 11))
             r = run_toy(exec, N)
             @test same(r) && r.path == [N, 0, 0]
@@ -181,6 +189,13 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
         @test same(r) && r.path == [N, 0, 0] && describe(ex).schedule == :cascade
         @test describe(ex).settings === nothing && sum(describe(ex).admitted) == N
         @test sum(describe(ex).spawned) == ref.children
+        # any other executor: the cascade it forwards, with the caller's keywords only
+        fx = Forwarding(ThreadedExecutor(), Any[])
+        r = run_toy(fx, N)
+        @test same(r) && r.path == [N, 0, 0] && fx.seen == [(capacity = nothing,)]
+        t = toy(N)
+        foreach_wavefront!(fx, t.wf, N, 0; capacity = 5, chunk = 9)
+        @test fx.seen[end] == (capacity = 5, chunk = 9)
         # a scattering phase has no stages here: the cascade, which counts generation 1's children
         r1 = run_toy(ex, N; depth = 1)
         r1t = run_toy(ThreadedExecutor(), N; depth = 1)
