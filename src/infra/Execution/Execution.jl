@@ -3,10 +3,11 @@
 
 Where programs run: devices, the `Executor` protocol with its threaded and pooled
 implementations, the CPU/GPU switch, the one kernel, residency of host objects on devices,
-ray sources, scheduling, the image-block worklist, the exact accumulators and the
-cascade of the Monte Carlo layers. A program is an `isbits`-after-`Adapt` functor called
-per item as `prog(item, i, outs...)`; every executor gives every item the same result.
-CUDA methods of the device protocol live in the CUDA extension.
+ray sources, scheduling, the image-block worklist, the exact accumulators, the cascade of
+the Monte Carlo layers and the device wavefront of a Monte Carlo phase. A program is an
+`isbits`-after-`Adapt` functor called per item as `prog(item, i, outs...)`; every executor
+gives every item the same result. CUDA methods of the device protocol live in the CUDA
+extension.
 """
 module Execution
 
@@ -28,6 +29,8 @@ include("accumulators.jl")
 include("timebins.jl")
 include("children.jl")
 include("cascade.jl")
+include("wave_queues.jl")
+include("wavefront.jl")
 
 # executors and the CPU/GPU switch
 export Executor, ThreadedExecutor, PoolExecutor, foreach_item!, describe,
@@ -52,6 +55,9 @@ export Bands, PolarBands, InclinationBands, SectorBands, sector_row, TimedBands,
 # the cascade and its children
 export ChildBuffer, Generation, child_stream, spawn!, capacity, overflow, children,
        foreach_cascade!, cascade_chunk
+# the wavefront
+export Wavefront, foreach_wavefront!, with_wavefront_settings, wavefront, WaveQueues, Cohort,
+       StateBuffer, admit!, place!, fault!, WaveSwap, wave_state, wave_steps, wave_log
 
 function __init__()
     atexit(close_pools)

@@ -9,8 +9,8 @@
 A place where a `PoolExecutor` launches kernels. A device answers [`backend`](@ref),
 [`activate!`](@ref), [`functional`](@ref), [`stage_alloc`](@ref)/[`stage_free`](@ref),
 [`free!`](@ref), [`free_bytes`](@ref), [`share_lanes!`](@ref), [`lane_queue`](@ref),
-[`sync_queue`](@ref), [`queue_idle`](@ref), [`prepare_launch!`](@ref) and
-[`readonly`](@ref). Devices compare by value, so two handles of the same device are
+[`sync_queue`](@ref), [`queue_idle`](@ref), [`prepare_launch!`](@ref),
+[`readonly`](@ref) and [`wavefront`](@ref). Devices compare by value, so two handles of the same device are
 interchangeable.
 """
 abstract type AbstractDevice end
@@ -212,6 +212,18 @@ previous setting; `lane_check()` reads it.
 """
 lane_check!(on::Bool) = Threads.atomic_xchg!(LANE_CHECK, on)
 lane_check() = LANE_CHECK[]
+
+"""
+    wavefront(dev) -> Bool
+
+Whether the Monte Carlo phases that the device wavefront serves run on it on `dev`
+([`foreach_wavefront!`](@ref)): `true` for a `CUDADevice`, whose warps lose their lanes
+to the spread of the photons' step counts; `false` for a `HostDevice`, whose pool runs
+the cascade with the compiled programs of the threads. A pool runs the wavefront only
+when every one of its devices answers `true`.
+"""
+wavefront(::AbstractDevice) = false
+wavefront(::CUDADevice) = true
 
 """
     prepare_launch!(dev, prog)

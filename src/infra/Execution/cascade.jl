@@ -276,14 +276,19 @@ function run_cascade!(exec::PoolExecutor, c::Cascade, chunks)
     twins = (ProgramTwins(pool, c.primary), ProgramTwins(pool, c.layer))
     spawned = Threads.Atomic{Int}(0)
     fresh = fill(true, length(pool.lanes))
+    per_dev = [(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0)) for _ in pool.devices]
     try
         foreach_chunk(pool, chunks) do lane, r
-            Threads.atomic_add!(spawned,
-                                chunk_generations!(lane, c, twins, r, fresh, exec.reruns))
+            s = chunk_generations!(lane, c, twins, r, fresh, exec.reruns)
+            Threads.atomic_add!(spawned, s)
+            d = per_dev[device_slot(pool, lane.dev)]
+            Threads.atomic_add!(d[1], length(r))
+            Threads.atomic_add!(d[2], s)
         end
     finally
         foreach(s -> s === nothing || empty!(s), (c.slot, child_slot(c.layer)))
     end
+    record_run!(exec, :cascade, nothing, [d[1][] for d in per_dev], [d[2][] for d in per_dev])
     return spawned[]
 end
 

@@ -6,14 +6,14 @@ uniform grid (`uniform_deck`) and on a one-level block mesh (`amr_deck`), the re
 `bits`, the bit view of a result used for bitwise comparisons, the camera rays of
 every pixel, the fixed-control sampled trajectories of a ray set, the torus as a grid
 provider and the program record the transfer marches read, the host-device lists of
-the multi-device tests, `device_isbits`, the check that a value is a valid kernel
+the multi-device tests, the logical device `WaveHost` of the wavefront tests, `device_isbits`, the check that a value is a valid kernel
 argument once adapted to a device, and the Monte Carlo pieces a driver assembles: a sink
 over the exact accumulators, the primary and layer programs, and the sphere runs.
 """
 module Decks
 
 using StaticArrays
-using BlackLightPlus.Execution: HostDevice, CUDADevice, select_devices, cuda_loaded
+using BlackLightPlus.Execution: Execution, HostDevice, CUDADevice, select_devices, cuda_loaded
 using BlackLightPlus.Data: UniformGrid, AthenaKSnapshot
 using BlackLightPlus.Spacetime: CameraFrame, pixel_centres, npixels, pixel_coords, camera_ray,
                      MarchBudget, march_control, rk4_step
@@ -159,6 +159,30 @@ const NDEV = (1, 2, 3, 5)
 
 "The logical devices `HostDevice(1)`, …, `HostDevice(nd)`."
 hosts(nd) = [HostDevice(k) for k in 1:nd]
+
+const KA = Base.require(Base.PkgId(Base.UUID("63c18a36-062a-441e-b654-da1e3ab1ce7c"),
+                                   "KernelAbstractions"))
+
+"""
+    WaveHost(id)
+
+A logical device on the host that answers `wavefront(dev) = true`: a pool of `WaveHost`s
+runs the device wavefront of a Monte Carlo phase with the stage programs on the
+KernelAbstractions `CPU()` backend, as a pool of `HostDevice`s runs the device cascade, so
+the wavefront's driver and stage programs are tested without a GPU.
+"""
+struct WaveHost <: Execution.AbstractDevice
+    id::Int
+end
+Execution.backend(::WaveHost) = KA.CPU()
+Execution.activate!(::WaveHost) = nothing
+Execution.functional(::WaveHost) = true
+Execution.functional(::Type{WaveHost}) = true
+Execution.readonly(::WaveHost, a::Array) = KA.constify(a)
+Execution.wavefront(::WaveHost) = true
+
+"The logical devices `WaveHost(1)`, …, `WaveHost(nd)`."
+wavehosts(nd) = [WaveHost(k) for k in 1:nd]
 
 """
 The device kind of the multi-device comparisons, from `BLP_TEST_DEVICES`: `host` (the

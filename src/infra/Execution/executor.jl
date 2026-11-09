@@ -49,8 +49,10 @@ struct PoolExecutor <: Executor
     chunk::Union{Int,Symbol}
     used::Threads.Atomic{Int}
     reruns::Threads.Atomic{Int}
+    last::Base.RefValue{Any}
     PoolExecutor(pool::DevicePool, chunk) =
-        new(pool, chunk_setting(chunk), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        new(pool, chunk_setting(chunk), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+            Ref{Any}(nothing))
 end
 PoolExecutor(pool::DevicePool; chunk = pool.chunk) = PoolExecutor(pool, chunk)
 PoolExecutor(devices; lanes::Integer = 2, chunk = :auto) =
@@ -267,16 +269,50 @@ Where and how `exec` runs, as plain data for a result's `run` record:
 `(kind, devices, lanes, chunk, threads)` with `kind` `:threads` or `:pool`, `devices` the
 device names, `lanes` the workers per device (0 for threads), `chunk` the items per chunk
 of the executor's last run (its setting, an integer or `:auto`, before the first run) and
-`threads` the Julia thread count. A pool adds `reruns`: the generations of its last
-cascade ([`foreach_cascade!`](@ref)) that ran again because their children overflowed
-their slots (0 before the first).
+`threads` the Julia thread count. A pool adds, for its last Monte Carlo call
+([`foreach_cascade!`](@ref), [`foreach_wavefront!`](@ref)): `reruns`, the cascade
+generations that ran again because their children overflowed their slots; `schedule`,
+`:cascade` or `:wavefront` (`:none` before the first call); `settings`, the wavefront
+settings of a wavefront call (`nothing` for the cascade); and per device, in `devices`
+order, the primaries `admitted` and the children `spawned` and the wavefront's
+`iterations` (zeros for the cascade).
 """
 describe(e::ThreadedExecutor) =
     (kind = :threads, devices = String[], lanes = 0, chunk = last_chunk(e),
      threads = Threads.nthreads())
-describe(e::PoolExecutor) =
-    (kind = :pool, devices = string.(e.pool.devices), lanes = lanes_per_device(e.pool),
-     chunk = last_chunk(e), threads = Threads.nthreads(), reruns = e.reruns[])
+function describe(e::PoolExecutor)
+    r = e.last[]
+    nd = length(e.pool.devices)
+    return (kind = :pool, devices = string.(e.pool.devices), lanes = lanes_per_device(e.pool),
+            chunk = last_chunk(e), threads = Threads.nthreads(), reruns = e.reruns[],
+            schedule = r === nothing ? :none : r.schedule,
+            settings = r === nothing ? nothing : r.settings,
+            admitted = r === nothing ? zeros(Int, nd) : copy(r.admitted),
+            spawned = r === nothing ? zeros(Int, nd) : copy(r.spawned),
+            iterations = r === nothing ? zeros(Int, nd) : copy(r.iterations))
+end
+
+# Record the last Monte Carlo call of `e`: its schedule, the wavefront settings, the
+# primaries admitted and children spawned per device and, for a wavefront, the iterations
+# and the per-iteration records of every device.
+function record_run!(e::PoolExecutor, schedule::Symbol, settings, admitted::Vector{Int},
+                     spawned::Vector{Int}; iterations = zeros(Int, length(admitted)),
+                     log = [NamedTuple[] for _ in admitted])
+    e.last[] = (schedule = schedule, settings = settings, admitted = admitted,
+                spawned = spawned, iterations = iterations, log = log)
+    return nothing
+end
+
+"""
+    wave_log(exec::PoolExecutor) -> Vector{Vector{NamedTuple}}
+
+The per-iteration records of the last wavefront call of `exec`, one vector per device in
+`devices` order: the live states `nA` of the iteration, the budget `K`, the states the
+advance kept `live`, the states it stopped (`done`), the children it spawned, the
+primaries `started` by the refill, and the host seconds of the advance with its counter
+read, of the retire launch and of the start launches. Empty vectors after a cascade.
+"""
+wave_log(e::PoolExecutor) = (r = e.last[]; r === nothing ? [NamedTuple[] for _ in e.pool.devices] : r.log)
 
 Base.show(io::IO, e::ThreadedExecutor) =
     print(io, "ThreadedExecutor(chunk = ", repr(e.chunk), ") on ", Threads.nthreads(),
