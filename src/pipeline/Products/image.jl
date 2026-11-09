@@ -39,6 +39,69 @@ function Image(plan::Plan, out::AbstractVector{<:SVector{4}}, run)
     return Image(planes..., plan, run)
 end
 
+# The image of a run whose output `out` came from `image_output` with `into`, an earlier
+# `Image`: a Stokes I march wrote `into.I`, and the zero planes are filled again; an IQUV
+# march on a pool wrote the four planes through a `StokesPlanes`, on threads a vector of
+# Stokes vectors that is split into them.
+image_result(plan::Plan, out, run, ::Nothing) = Image(plan, out, run)
+function image_result(plan::Plan, out, run, into)
+    planes = (into.I, into.Q, into.U, into.V)
+    if out isa AbstractVector{<:SVector{4}}
+        out isa StokesPlanes || host_epilogue!(Split(out), planes, length(out))
+    else
+        fill_maps!(0.0, [into.Q, into.U, into.V])
+    end
+    return Image(planes..., plan, run)
+end
+
+"""
+    StokesPlanes(I, Q, U, V)
+
+The planes of a Stokes-vector image as one vector of `SVector{4,Float64}` over their
+items: element `i` reads `(I[i], Q[i], U[i], V[i])`, and storing a Stokes vector there
+writes its components to the four planes. The lanes of a pool store the Stokes vectors of
+an `IQUV` run through it into caller-supplied planes.
+"""
+struct StokesPlanes <: AbstractVector{SVector{4,Float64}}
+    I::Vector{Float64}
+    Q::Vector{Float64}
+    U::Vector{Float64}
+    V::Vector{Float64}
+    function StokesPlanes(I, Q, U, V)
+        length(I) == length(Q) == length(U) == length(V) ||
+            throw(DimensionMismatch("StokesPlanes: planes of lengths $(map(length, (I, Q, U, V)))"))
+        return new(I, Q, U, V)
+    end
+end
+Base.size(p::StokesPlanes) = size(p.I)
+Base.IndexStyle(::Type{StokesPlanes}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(p::StokesPlanes, i::Int) =
+    SVector(p.I[i], p.Q[i], p.U[i], p.V[i])
+Base.@propagate_inbounds function Base.setindex!(p::StokesPlanes, v, i::Int)
+    s = convert(SVector{4,Float64}, v)
+    p.I[i] = s[1]; p.Q[i] = s[2]; p.U[i] = s[3]; p.V[i] = s[4]
+    return p
+end
+
+# The per-pixel output of an image run: a new vector, or with `into` (an `Image` of as many
+# pixels) its I plane for Stokes I, and for IQUV its four planes on a pool, whose lanes
+# copy the device's Stokes vectors into them. On threads the program writes the output
+# itself, and a program writing a `StokesPlanes` is compiled apart from the one writing a
+# vector of Stokes vectors, with other floating-point contractions; so an IQUV image on
+# threads keeps that vector (32 bytes per pixel) and splits it into the planes.
+image_output(exec, plan::Plan, ::Nothing) = Vector{output_type(plan)}(undef, npixels(plan))
+function image_output(exec, plan::Plan, into)
+    n = plan.camera.npix
+    T = output_type(plan)
+    (T === Float64 || T === SVector{4,Float64}) ||
+        throw(ArgumentError("render: `into` takes Float64 or SVector{4,Float64} pixels, " *
+                            "not the plan's $T"))
+    m = claim_into(into, :render, (:I, :Q, :U, :V), (), 0, (n, n))
+    T === Float64 && return vec(m.I)
+    exec isa ThreadedExecutor && return Vector{T}(undef, n * n)
+    return StokesPlanes(vec(m.I), vec(m.Q), vec(m.U), vec(m.V))
+end
+
 Base.show(io::IO, img::Image) =
     print(io, "Image(", size(img.I, 1), "×", size(img.I, 2), ", ", nameof(typeof(img.plan.mode)),
           ", ", img.run.executor.kind, ", ", round(img.run.seconds; digits = 3), " s)")
@@ -54,8 +117,8 @@ run_record(exec, plan::Plan, t0::Integer) =
      seconds = (time_ns() - t0) / 1e9)
 
 """
-    render(plan; backend = nothing) -> Image
-    render(plan; path::Trajectories, backend = nothing) -> Image
+    render(plan; backend = nothing, into = nothing) -> Image
+    render(plan; path::Trajectories, backend = nothing, into = nothing) -> Image
 
 The image of `plan`: every pixel's camera ray marched with the fused fixed-control
 march of `plan.mode` (geodesic, plasma sample and transfer in one pass), queued in
@@ -63,18 +126,23 @@ march of `plan.mode` (geodesic, plasma sample and transfer in one pass), queued 
 Under `MixedLanes` the rescue pixels are marched on the `Float64` lane, queued first,
 and the rest on the `Float32` lane, in one queue. With `path`, a trace of the same plan
 ([`trace`](@ref)), each pixel is marched along its stored trajectory instead (the
-two-phase path; host only: `backend` must resolve to a `ThreadedExecutor`).
+two-phase path; host only: `backend` must resolve to a `ThreadedExecutor`). `into`, an
+`Image` of as many pixels (`Float64` or `IQUV` pixels), is overwritten: the march writes its
+planes (the zero planes of a Stokes I image filled again; an `IQUV` march on Julia threads
+writes one vector of Stokes vectors, 32 bytes per pixel, split into the planes) and the
+returned image shares them, bitwise the image without `into`; its arrays are dropped from
+the device pools' residency caches first ([`Execution.invalidate!`](@ref)).
 
 Determinism: bitwise per item, whatever the executor, device count, chunking or queue
 order.
 """
-function render(plan::Plan; backend = nothing, path = nothing)
-    path === nothing || return render_stored(plan, path, backend)
+function render(plan::Plan; backend = nothing, path = nothing, into = nothing)
+    path === nothing || return render_stored(plan, path, backend, into)
     t0 = time_ns()
     exec = resolve(backend)
-    out = Vector{output_type(plan)}(undef, npixels(plan))
+    out = image_output(exec, plan, into)
     march_frame!(exec, plan, out)
-    return Image(plan, out, run_record(exec, plan, t0))
+    return image_result(plan, out, run_record(exec, plan, t0), into)
 end
 
 """

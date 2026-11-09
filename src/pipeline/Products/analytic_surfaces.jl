@@ -105,8 +105,8 @@ end
 const SurfaceMaterial = Union{SynchrotronSurface,PolarizedDisk}
 
 """
-    render_analytic(plan, materials; bands = (0, 1, 2), ro = plan.camera.d, backend = nothing)
-        -> NamedTuple
+    render_analytic(plan, materials; bands = (0, 1, 2), ro = plan.camera.d, backend = nothing,
+                    into = nothing) -> NamedTuple
 
 The exact-Kerr polarized image of `materials`, a `SynchrotronSurface`, a `PolarizedDisk`
 or a tuple of materials (an `EquatorialDisk` among them contributes Stokes I), on the
@@ -116,12 +116,15 @@ regularized emission time). Returns `(I, Q, U, Ib, Qb, Ub, rs, ts, phis, redshif
 bands, plan, run)`: per band `b` the Stokes maps `Ib[b]`, `Qb[b]`, `Ub[b]` (Q > 0 north,
 U > 0 north-east, north the projected spin axis, east `−α`) and the landing radius, time,
 azimuth and radial sign of the first valid crossing (NaN without one), each
-`npix × npix`, and the band sums `I`, `Q`, `U` in band order from zero.
+`npix × npix`, and the band sums `I`, `Q`, `U` in band order from zero. `into`, a result
+of this method with as many bands and pixels, is overwritten and shared by the returned
+result, bitwise the result without it (as for the disk form).
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
 function render_analytic(plan::Plan, materials::Union{SurfaceMaterial,Tuple};
-                         bands = (0, 1, 2), ro::Real = plan.camera.d, backend = nothing)
+                         bands = (0, 1, 2), ro::Real = plan.camera.d, backend = nothing,
+                         into = nothing)
     t0 = time_ns()
     exec = resolve(backend)
     mats = materials isa Tuple ? materials : (materials,)
@@ -130,11 +133,16 @@ function render_analytic(plan::Plan, materials::Union{SurfaceMaterial,Tuple};
                           mats, bt)
     N = npixels(plan)
     K = length(bt)
-    outs = surface_outputs(K, N)
-    foreach_item!(exec, prog, 1:N; outs)
     n = plan.camera.npix
-    Ib, Qb, Ub, rs, ts, phis, rsgn = ntuple(q -> band_maps(outs, q, K, n), SURFACE_QUANTITIES)
-    I, Q, U = band_sums((Ib, Qb, Ub), (n, n))
+    banded = (:Ib, :Qb, :Ub, :rs, :ts, :phis, :redshift_sign)
+    m = into === nothing ? nothing :
+        claim_into(into, :render_analytic, (:I, :Q, :U), banded, K, (n, n))
+    outs = m === nothing ? surface_outputs(K, N) : flat_outputs(m, banded)
+    foreach_item!(exec, prog, 1:N; outs)
+    Ib, Qb, Ub, rs, ts, phis, rsgn = m === nothing ?
+        ntuple(q -> band_maps(outs, q, K, n), SURFACE_QUANTITIES) : map(f -> m[f], banded)
+    I, Q, U = m === nothing ? band_sums((Ib, Qb, Ub), (n, n)) :
+              band_sums!((m.I, m.Q, m.U), (Ib, Qb, Ub))
     return (I = I, Q = Q, U = U, Ib = Ib, Qb = Qb, Ub = Ub, rs = rs, ts = ts, phis = phis,
             redshift_sign = rsgn, bands = collect(bt), plan = plan,
             run = run_record(exec, plan, t0))

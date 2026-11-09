@@ -122,7 +122,7 @@ band_maps(outs, q, K, n) = [reshape(outs[(q - 1) * K + b], n, n) for b in 1:K]
 
 """
     render_analytic(plan, disk::EquatorialDisk; bands = (0, 1, 2), ro = plan.camera.d,
-                    backend = nothing) -> NamedTuple
+                    observables = true, backend = nothing, into = nothing) -> NamedTuple
 
 The exact-Kerr image of the equatorial disk `disk` on the plan's pixels: for every pixel
 (its image coordinates are Bardeen's `(α, β)`) and every photon-ring order `n ∈ bands`,
@@ -138,10 +138,17 @@ integrals ([`RadiusProgram`](@ref), about four times faster): `ts` and `phis` ar
 other maps are bit for bit those of the full program. The pixels are visited in their index order, so
 every chunk of the executor writes a contiguous run of each map.
 
+`into`, a result of this method with as many bands and pixels, is overwritten: every map is
+written into its array (the NaN maps of `observables = false` filled again) and the
+returned result shares them, so a series of calls allocates no maps and the old result
+shows the new values. Its arrays are dropped from the device pools' residency caches first
+([`Execution.invalidate!`](@ref)). The result is bitwise the one without `into`.
+
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
 function render_analytic(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
-                         ro::Real = plan.camera.d, observables::Bool = true, backend = nothing)
+                         ro::Real = plan.camera.d, observables::Bool = true, backend = nothing,
+                         into = nothing)
     t0 = time_ns()
     exec = resolve(backend)
     bt = map(Int, Tuple(bands))
@@ -149,20 +156,32 @@ function render_analytic(plan::Plan, disk::EquatorialDisk; bands = (0, 1, 2),
     N = npixels(plan)
     K = length(bt)
     n = plan.camera.npix
+    m = into === nothing ? nothing :
+        claim_into(into, :render_analytic, (:I,), (:Ib, :rs, :ts, :phis, :redshift_sign),
+                   K, (n, n))
     if observables
-        outs = analytic_outputs(K, N)
+        outs = m === nothing ? analytic_outputs(K, N) :
+               flat_outputs(m, (:Ib, :rs, :ts, :phis, :redshift_sign))
         foreach_item!(exec, AnalyticProgram(plan.pixels, plan.theta_o, a, Float64(ro), disk, bt),
                       1:N; outs)
-        Ib, rs, ts, phis, rsgn = ntuple(q -> band_maps(outs, q, K, n), ANALYTIC_QUANTITIES)
+        Ib, rs, ts, phis, rsgn = m === nothing ?
+            ntuple(q -> band_maps(outs, q, K, n), ANALYTIC_QUANTITIES) :
+            (m.Ib, m.rs, m.ts, m.phis, m.redshift_sign)
     else
-        outs = ntuple(_ -> Vector{Float64}(undef, N), 3K)
+        outs = m === nothing ? ntuple(_ -> Vector{Float64}(undef, N), 3K) :
+               flat_outputs(m, (:Ib, :rs, :redshift_sign))
         foreach_item!(exec, RadiusProgram(plan.pixels, plan.theta_o, a, Float64(ro), disk, bt),
                       1:N; outs)
-        Ib, rs, rsgn = ntuple(q -> band_maps(outs, q, K, n), 3)
-        nan = filled_maps(NaN, 2K, (n, n))
-        ts, phis = nan[1:K], nan[K+1:2K]
+        if m === nothing
+            Ib, rs, rsgn = ntuple(q -> band_maps(outs, q, K, n), 3)
+            nan = filled_maps(NaN, 2K, (n, n))
+            ts, phis = nan[1:K], nan[K+1:2K]
+        else
+            Ib, rs, ts, phis, rsgn = m.Ib, m.rs, m.ts, m.phis, m.redshift_sign
+            fill_maps!(NaN, vcat(ts, phis))
+        end
     end
-    I, = band_sums((Ib,), (n, n))
+    I, = m === nothing ? band_sums((Ib,), (n, n)) : band_sums!((m.I,), (Ib,))
     return (I = I, Ib = Ib, rs = rs, ts = ts, phis = phis, redshift_sign = rsgn,
             bands = collect(bt), plan = plan, run = run_record(exec, plan, t0))
 end

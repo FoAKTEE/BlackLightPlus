@@ -109,7 +109,7 @@ end
 
 """
     render_crossings(plan, disk::EquatorialDisk; orders = (0, 1, 2), coords = nothing,
-                     backend = nothing) -> NamedTuple
+                     backend = nothing, into = nothing) -> NamedTuple
 
 The image of the equatorial disk `disk` by the numerical march of `plan` on Kerr
 ([`CrossingProgram`](@ref)): the plan's camera rays (or the image coordinates `coords`,
@@ -124,11 +124,15 @@ Kerr–Schild time, `phis` the Kerr–Schild azimuth), each `npix × npix` (vect
 in [`render`](@ref) (the costly marches near the critical curve first), the coordinates
 in their order.
 
+`into`, a result of this method with as many orders and pixels (or coordinates), is
+overwritten and shared by the returned result, bitwise the result without it (as for
+[`render_analytic`](@ref)).
+
 Determinism: bitwise per item, whatever the executor, device count, chunking or queue
 order.
 """
 function render_crossings(plan::Plan, disk::EquatorialDisk; orders = (0, 1, 2), coords = nothing,
-                          backend = nothing)
+                          backend = nothing, into = nothing)
     t0 = time_ns()
     exec = resolve(backend)
     analytic_spin(plan, disk)
@@ -140,13 +144,22 @@ function render_crossings(plan::Plan, disk::EquatorialDisk; orders = (0, 1, 2), 
     prog = CrossingProgram(plan.geodesic_spacetime, plan.geodesic_budget, rays, disk, ot)
     N = coords === nothing ? npixels(plan) : length(gen.α)
     K = length(ot)
-    outs = crossing_outputs(K, N)
+    dims = coords === nothing ? (plan.camera.npix, plan.camera.npix) : (N,)
+    banded = (:Ib, :rs, :ts, :phis, :redshift_sign)
+    m = into === nothing ? nothing :
+        claim_into(into, :render_crossings, (:I, :steps), banded, K, dims)
+    outs = m === nothing ? crossing_outputs(K, N) : (flat_outputs(m, banded)..., vec(m.steps))
     foreach_item!(exec, prog, coords === nothing ? plan.queue : (1:N); outs)
-    shape(v) = coords === nothing ? reshape(v, plan.camera.npix, plan.camera.npix) : v
-    q(qq) = [shape(outs[(qq - 1) * K + b]) for b in 1:K]
-    Ib, rs, ts, phis, rsgn = q(1), q(2), q(3), q(4), q(5)
-    I, = band_sums((Ib,), size(Ib[1]))
+    if m === nothing
+        shape = v -> coords === nothing ? reshape(v, dims) : v
+        q = qq -> [shape(outs[(qq - 1) * K + b]) for b in 1:K]
+        Ib, rs, ts, phis, rsgn = q(1), q(2), q(3), q(4), q(5)
+        steps = shape(outs[end])
+        I, = band_sums((Ib,), dims)
+    else
+        Ib, rs, ts, phis, rsgn, steps = m.Ib, m.rs, m.ts, m.phis, m.redshift_sign, m.steps
+        I, = band_sums!((m.I,), (Ib,))
+    end
     return (I = I, Ib = Ib, rs = rs, ts = ts, phis = phis, redshift_sign = rsgn,
-            steps = shape(outs[end]), orders = collect(ot), plan = plan,
-            run = run_record(exec, plan, t0))
+            steps = steps, orders = collect(ot), plan = plan, run = run_record(exec, plan, t0))
 end

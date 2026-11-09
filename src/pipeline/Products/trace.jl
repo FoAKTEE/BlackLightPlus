@@ -106,7 +106,7 @@ function absorb_window!(logs, hlogs, live, ws::NTuple, state::Vector{TraceState{
 end
 
 # The two-phase render: every pixel marched along its stored trajectory, on the host.
-function render_stored(plan::Plan, path::Trajectories, backend)
+function render_stored(plan::Plan, path::Trajectories, backend, into = nothing)
     t0 = time_ns()
     exec = host_only(resolve(backend), "render(plan; path)")
     length(path.states) == npixels(plan) ||
@@ -116,9 +116,9 @@ function render_stored(plan::Plan, path::Trajectories, backend)
         throw(ArgumentError("imaging needs matter: prepare the plan with `matter = …`"))
     prog = StoredPathProgram(plan.mode, plan.spacetime, plan.provider, plan.params, plan.frame,
                              path.states, path.dls)
-    out = Vector{output_type(plan)}(undef, npixels(plan))
+    out = image_output(exec, plan, into)
     foreach_item!(exec, prog, plan.queue; outs = (out,))
-    return Image(plan, out, run_record(exec, plan, t0))
+    return image_result(plan, out, run_record(exec, plan, t0), into)
 end
 
 """

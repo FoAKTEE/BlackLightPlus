@@ -2,7 +2,8 @@
 # planes of a Stokes-vector image, as programs over the items of host arrays. They run on
 # Julia threads whatever executor ran the product, since their inputs and outputs are on
 # the host; every item reads and writes its own elements only, so the result is the same
-# on any executor and in any order.
+# on any executor and in any order. A product given `into`, an earlier result, writes its
+# maps and these epilogues into that result's arrays instead of new ones.
 
 """
     BandSum(sums)
@@ -104,13 +105,33 @@ from zero into a new `Float64` array of size `dims` ([`BandSum`](@ref), all grou
 run on Julia threads). A band map of another size is a `DimensionMismatch`.
 """
 function band_sums(groups::Tuple, dims::Dims)
+    check_band_sizes(groups, dims)
+    return band_sums!(map(_ -> Array{Float64}(undef, dims), groups), groups)
+end
+
+"""
+    band_sums!(outs, groups) -> outs
+
+[`band_sums`](@ref) into the existing arrays `outs`, one per group, all of one size.
+"""
+function band_sums!(outs::Tuple, groups::Tuple)
+    length(outs) == length(groups) ||
+        throw(ArgumentError("band_sums!: $(length(outs)) outputs for $(length(groups)) groups"))
+    isempty(outs) && return outs
+    dims = size(first(outs))
+    all(o -> size(o) == dims, outs) ||
+        throw(DimensionMismatch("band_sums!: outputs of sizes $(map(size, outs))"))
+    check_band_sizes(groups, dims)
+    host_epilogue!(BandSum(map(Tuple, groups)), outs, prod(dims))
+    return outs
+end
+
+# Every band map of `groups` has the size `dims`, else a `DimensionMismatch`.
+function check_band_sizes(groups::Tuple, dims::Dims)
     for g in groups, m in g
         size(m) == dims ||
             throw(DimensionMismatch("band_sums: a band map of size $(size(m)) for size $dims"))
     end
-    outs = map(_ -> Array{Float64}(undef, dims), groups)
-    host_epilogue!(BandSum(map(Tuple, groups)), outs, prod(dims))
-    return outs
 end
 
 """
@@ -119,8 +140,64 @@ end
 `k` new `Float64` arrays of size `dims` holding `value` everywhere ([`Fill`](@ref), one
 run on Julia threads).
 """
-function filled_maps(value::Float64, k::Integer, dims::Dims)
-    maps = [Array{Float64}(undef, dims) for _ in 1:k]
-    host_epilogue!(Fill(value), Tuple(maps), prod(dims))
+filled_maps(value::Float64, k::Integer, dims::Dims) =
+    fill_maps!(value, [Array{Float64}(undef, dims) for _ in 1:k])
+
+"""
+    fill_maps!(value, maps) -> maps
+
+`value` into every element of the existing arrays `maps`, all of one size ([`Fill`](@ref),
+one run on Julia threads).
+"""
+function fill_maps!(value::Float64, maps)
+    isempty(maps) && return maps
+    n = length(first(maps))
+    all(m -> length(m) == n, maps) ||
+        throw(DimensionMismatch("fill_maps!: maps of sizes $(map(size, maps))"))
+    host_epilogue!(Fill(value), Tuple(maps), n)
     return maps
 end
+
+"""
+    claim_into(into, product, single, banded, K, dims; extra = ()) -> NamedTuple
+
+The arrays of `into`, a result of `product` that a call overwrites (its keyword `into`):
+the fields `single` (one array each) and `banded` (a vector of `K` arrays each) of `into`,
+each an `Array{Float64}` of size `dims`, and the fields of `extra` (`field => size` pairs),
+no two sharing memory, else an `ArgumentError` naming the field. Their device copies are
+dropped from the pools' residency caches ([`Execution.invalidate!`](@ref)), so an array that
+an earlier run uploaded is uploaded again with its new values.
+"""
+function claim_into(into, product::Symbol, single::Tuple, banded::Tuple, K::Integer, dims::Dims;
+                    extra::Tuple = ())
+    field(f) = hasproperty(into, f) ? getproperty(into, f) :
+        throw(ArgumentError("$product: `into` has no field `$f`; pass a result of $product"))
+    function check(m, what, d)
+        m isa Array{Float64} && size(m) == d ||
+            throw(ArgumentError("$product: into.$what is $(summary(m)), not a " *
+                                "$(join(d, " × ")) Array{Float64}"))
+        return m
+    end
+    function check_bands(f)
+        ms = field(f)
+        ms isa AbstractVector && length(ms) == K ||
+            throw(ArgumentError("$product: into.$f is $(summary(ms)); the call writes $K maps"))
+        foreach(b -> check(ms[b], "$f[$b]", dims), eachindex(ms))
+        return ms
+    end
+    got = merge(NamedTuple{single}(map(f -> check(field(f), f, dims), single)),
+                NamedTuple{banded}(map(check_bands, banded)),
+                NamedTuple{map(first, extra)}(map(e -> check(field(e[1]), e[1], e[2]), extra)))
+    arrays = Any[(got[f] for f in single)..., (m for f in banded for m in got[f])...,
+                 (got[first(e)] for e in extra)...]
+    for i in eachindex(arrays), j in 1:i-1
+        Base.mightalias(arrays[i], arrays[j]) &&
+            throw(ArgumentError("$product: two arrays of `into` share memory"))
+    end
+    Execution.invalidate!(arrays)
+    return got
+end
+
+# The maps of `fields` of `m` (a `claim_into` result), band after band, as vectors sharing
+# their memory: the output tuple of a program writing those quantities quantity-major.
+flat_outputs(m, fields::Tuple) = Tuple(vec(x) for f in fields for x in getproperty(m, f))

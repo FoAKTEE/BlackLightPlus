@@ -73,7 +73,8 @@ end
 
 """
     analytic_movie(plan, spot::EquatorialSpot; times, bands = (0, 1, 2),
-                   ro = plan.camera.d, slow = true, backend = nothing) -> NamedTuple
+                   ro = plan.camera.d, slow = true, backend = nothing, into = nothing)
+        -> NamedTuple
 
 Frames of the time-dependent equatorial source `spot` on the plan's pixels at the
 observation times `times`: the closed-form landings of every pixel and order once
@@ -82,31 +83,45 @@ then one [`FrameProgram`](@ref) per time. `slow = false` paints every landing at
 observation time (fast light). Returns `(frames, lightcurve, times, A, x, y, ts, bands,
 plan, run)`: `frames[:, :, k]` (rows β) the image at `times[k]`, the light curve
 `lightcurve[k] = Σ frames[:, :, k] × pixel area` (M²), and the per-band landing maps.
+`into`, a result of this function with as many bands, pixels and times, is overwritten
+(its frames, light curve, times and landing maps) and shared by the returned result,
+bitwise the result without it; its arrays are dropped from the device pools' residency
+caches first ([`Execution.invalidate!`](@ref)).
 
 Determinism: bitwise per item, whatever the executor, device count or chunking.
 """
 function analytic_movie(plan::Plan, spot::EquatorialSpot; times, bands = (0, 1, 2),
-                        ro::Real = plan.camera.d, slow::Bool = true, backend = nothing)
+                        ro::Real = plan.camera.d, slow::Bool = true, backend = nothing,
+                        into = nothing)
     t0 = time_ns()
     exec = resolve(backend)
     bt = map(Int, Tuple(bands))
     a = analytic_spin(plan, (spot,))
     N = npixels(plan)
     K = length(bt)
-    outs = ntuple(_ -> Vector{Float64}(undef, N), 4K)
+    n = plan.camera.npix
+    m = into === nothing ? nothing :
+        claim_into(into, :analytic_movie, (), (:A, :x, :y, :ts), K, (n, n);
+                   extra = (:frames => (n, n, length(times)), :lightcurve => (length(times),),
+                            :times => (length(times),)))
+    outs = m === nothing ? ntuple(_ -> Vector{Float64}(undef, N), 4K) :
+           flat_outputs(m, (:A, :x, :y, :ts))
     foreach_item!(exec, SpotProgram(plan.pixels, plan.theta_o, a, Float64(ro), spot, bt, slow),
                   1:N; outs)
     A = outs[1:K]; X = outs[K+1:2K]; Y = outs[2K+1:3K]; TS = outs[3K+1:4K]
-    n = plan.camera.npix
-    ts = collect(Float64, times)
-    frames = Array{Float64}(undef, n, n, length(ts))
+    ts = m === nothing ? collect(Float64, times) : copyto!(m.times, times)
+    frames = m === nothing ? Array{Float64}(undef, n, n, length(ts)) : m.frames
     for (k, t) in enumerate(ts)
         foreach_item!(exec, FrameProgram(A, X, Y, TS, spot.profile, t), 1:N;
                       outs = (view(frames, :, :, k),))
     end
     dpix = plan.camera.fov / n
-    lc = [sum(view(frames, :, :, k)) * dpix^2 for k in eachindex(ts)]
+    lc = m === nothing ? Vector{Float64}(undef, length(ts)) : m.lightcurve
+    for k in eachindex(ts)
+        lc[k] = sum(view(frames, :, :, k)) * dpix^2
+    end
     maps(v) = [reshape(v[b], n, n) for b in 1:K]
-    return (frames = frames, lightcurve = lc, times = ts, A = maps(A), x = maps(X), y = maps(Y),
-            ts = maps(TS), bands = collect(bt), plan = plan, run = run_record(exec, plan, t0))
+    A, X, Y, TS = m === nothing ? (maps(A), maps(X), maps(Y), maps(TS)) : (m.A, m.x, m.y, m.ts)
+    return (frames = frames, lightcurve = lc, times = ts, A = A, x = X, y = Y, ts = TS,
+            bands = collect(bt), plan = plan, run = run_record(exec, plan, t0))
 end
