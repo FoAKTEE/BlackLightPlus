@@ -587,9 +587,13 @@ const DEFAULTS = (budget = Execution.WAVE_BUDGET, cohort = Execution.WAVE_COHORT
     end
 
     @testset "twins and residency after a call" begin
-        ex = PoolExecutor(DK.wavehosts(2))
+        # a pool of its own: its residency cache holds only this call's arrays, whatever the
+        # collector has freed of earlier tests' hosts
+        pool = Execution.DevicePool(DK.wavehosts(2))
+        ex = PoolExecutor(pool)
         t = toy(N)
         n0 = [resident_count(ex, d) for d in DK.wavehosts(2)]
+        @test n0 == [0, 0]
         for _ in 1:3
             with_wavefront_settings(cohort = 7, refill = 3) do
                 foreach_wavefront!(ex, t.wf, N, 2)
@@ -601,6 +605,7 @@ const DEFAULTS = (budget = Execution.WAVE_BUDGET, cohort = Execution.WAVE_COHORT
             @test [resident_count(ex, d) for d in DK.wavehosts(2)] == n0 .+ 1    # the life table
         end
         @test t.path.n == [0, 3N, 3tracked[2], 3refs[2].children]
+        close(pool)
     end
 
     @testset "settings: defaults outside a scope, checked arguments" begin
