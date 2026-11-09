@@ -83,8 +83,10 @@ The number of key values of the key stage `prog` of a [`Wavefront`](@ref): its k
 """
 wave_keys(prog) = throw(ArgumentError("$(nameof(typeof(prog))) is not the key stage of a wavefront"))
 
-# Whether the iteration that advances a cohort for the `m`-th time (from 0) sorts it.
-sorts(key, every::Int, m::Int, nA::Int) = key !== nothing && every > 0 && m % every == 0 && nA > 1
+# Whether the iteration that advances a cohort for the `m`-th time (from 0) sorts it. A
+# cohort of one state is sorted too: at `sort_every = 1` every advance of a call reads its
+# cohort through an order, so the call compiles one advance kernel.
+sorts(key, every::Int, m::Int) = key !== nothing && every > 0 && m % every == 0
 
 # The order of the `nA` members of `states` on `lane` by the keys of the key stage `key`
 # (device form `dkey`): the counts zeroed by a copy, the key launch, one copy of the counts

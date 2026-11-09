@@ -368,7 +368,7 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, bl
             exhausted(blocks) && 4 * nA < P && K < cap && (K = K > cap ÷ 2 ? cap : 2K)
             D = lane_buffer(lane, (:wave, :done), T, nA)
             states = lane_buffer(lane, (:wave, a), T, nA)
-            sorted = dkey !== nothing && sorts(wf.key, set.sort_every, nadv, nA)
+            sorted = dkey !== nothing && sorts(wf.key, set.sort_every, nadv)
             A = sorted ? Cohort(states, sort_cohort!(lane, wf.key, dkey, states, nA)) : Cohort(states, nothing)
             sorted && (t0 = time_ns())
             nadv += 1

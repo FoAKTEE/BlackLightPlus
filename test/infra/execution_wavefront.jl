@@ -416,7 +416,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
             # every `every`-th advance of a device sorts, from its first
             for lg in wave_log(ex)
                 adv = [it for it in lg if it.nA > 0]
-                @test [it.sorted for it in adv] == [(m - 1) % every == 0 && adv[m].nA > 1 for m in eachindex(adv)]
+                @test [it.sorted for it in adv] == [(m - 1) % every == 0 for m in eachindex(adv)]
                 @test all(it -> it.sorted || it.sort == 0, lg)
             end
             if nd == 1
@@ -443,7 +443,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
     @testset "the sort's order on $(kind): a permutation of the cohort with non-decreasing keys" for
             (kind, devs) in (("WaveHost", DK.wavehosts(1)), (DK.DEVICE_KIND, DK.devices(1)))
         pool = PoolExecutor(devs).pool
-        for nk in (1, 7, 8192), nA in (2, 37, 1000)
+        for nk in (1, 7, 8192), nA in (1, 2, 37, 1000)
             states = [Toy(g, Int32(1 + g % 11), UInt64(g), Int32(0)) for g in 1:nA]
             key = ToyKey(nk, KeyCount())
             keys = [toy_key(s, nk) for s in states]
