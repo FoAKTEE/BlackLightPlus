@@ -9,7 +9,8 @@
 # every iteration, waiting or not, on WaveHosts and the comparisons' devices); the children of the last generation are counted and dropped; the started
 # primaries, the retirements and the per-device counts of `describe` close; every device
 # takes blocks, also of a call smaller than one cohort; a call starts from `WAVE_BUDGET`
-# without children and `WAVE_SPAWN_BUDGET` with them, and doubles its budget to at most
+# and `WAVE_COHORT` without children and from `WAVE_SPAWN_BUDGET` and `WAVE_SPAWN_COHORT`
+# with them, and doubles its budget to at most
 # `WAVE_SPAWN_CAP` with them; the child slots carry over
 # calls; a state that cannot advance and a state that reports a fault are errors;
 # accumulator twins and child slots are released and the residency cache does not grow
@@ -661,14 +662,19 @@ const DEFAULTS = (budget = Execution.WAVE_BUDGET, cohort = Execution.WAVE_COHORT
         run_toy(ex, N)
         @test describe(ex).settings == DEFAULTS
         @test with_wavefront_settings(() -> 42; budget = typemax(Int)) == 42
-        # the budget a call starts from: WAVE_BUDGET without children, WAVE_SPAWN_BUDGET with them
-        for (d, K) in ((0, Execution.WAVE_BUDGET), (2, Execution.WAVE_SPAWN_BUDGET))
+        # the budget and the cohort a call starts from: WAVE_BUDGET and WAVE_COHORT without
+        # children, WAVE_SPAWN_BUDGET and WAVE_SPAWN_COHORT with them
+        for (d, K, P) in ((0, Execution.WAVE_BUDGET, Execution.WAVE_COHORT),
+                          (2, Execution.WAVE_SPAWN_BUDGET, Execution.WAVE_SPAWN_COHORT))
             r = with_wavefront_settings(doubling = false) do
                 run_toy(ex, N; depth = d)
             end
-            @test same(r, d) && describe(ex).settings.budget == K && all(it -> it.K == K, only(wave_log(ex)))
+            dsc = describe(ex)
+            @test same(r, d) && dsc.settings.budget == K && all(it -> it.K == K, only(wave_log(ex)))
+            @test dsc.settings.cohort == P
         end
-        for kw in ((budget = -1,), (cohort = 0,), (refill = -1,), (doubling = 0,), (sort_every = -1,))
+        @test Execution.WAVE_COHORT < Execution.WAVE_SPAWN_COHORT
+        for kw in ((budget = -1,), (cohort = -1,), (refill = 0,), (doubling = 0,), (sort_every = -1,))
             @test_throws ArgumentError with_wavefront_settings(() -> nothing; kw...)
         end
         t = toy(10)

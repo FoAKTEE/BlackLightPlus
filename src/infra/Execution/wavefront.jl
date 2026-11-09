@@ -14,8 +14,10 @@
 const WAVE_BUDGET = 32
 "Loop iterations per state of an advance launch in a call with children, by default."
 const WAVE_SPAWN_BUDGET = 16
-"Live states per device, by default."
-const WAVE_COHORT = 2^19
+"Live states per device in a call without children, by default."
+const WAVE_COHORT = 2^18
+"Live states per device in a call with children, by default."
+const WAVE_SPAWN_COHORT = 2^19
 "Consecutive primaries per block of the refill, by default."
 const WAVE_REFILL = 2^14
 "The most loop iterations the budget doubles to in a call whose states spawn children."
@@ -34,7 +36,7 @@ const WAVE_WORKGROUP = 0
                  workgroup)
 
 The settings of the wavefront that a call reads ([`with_wavefront_settings`](@ref)):
-the budget `K` of an advance (0: the call's default), the cohort `P`, the refill block
+the budget `K` of an advance and the cohort `P` (0: the call's default), the refill block
 `R`, the budget doubling (`true`: up to the cap of the phase, `false`: off, an integer: up
 to that many loop iterations), whether a phase that the wavefront can serve runs on it (`false` runs
 the cascade of the same programs), the advances between two sorts of the cohort by
@@ -54,12 +56,12 @@ struct WaveSettings
     workgroup::Int
 end
 
-const DEFAULT_WAVE = WaveSettings(0, WAVE_COHORT, WAVE_REFILL, true, true, WAVE_SORT,
+const DEFAULT_WAVE = WaveSettings(0, 0, WAVE_REFILL, true, true, WAVE_SORT,
                                   WAVE_WAIT, WAVE_COST_ORDER, WAVE_WORKGROUP)
 const WAVE_SETTINGS = Base.ScopedValues.ScopedValue(DEFAULT_WAVE)
 
 """
-    with_wavefront_settings(f; budget = 0, cohort = WAVE_COHORT,
+    with_wavefront_settings(f; budget = 0, cohort = 0,
                             refill = WAVE_REFILL, doubling = true, wavefront = true,
                             sort_every = WAVE_SORT, wait = WAVE_WAIT,
                             cost_order = WAVE_COST_ORDER, workgroup = WAVE_WORKGROUP)
@@ -68,7 +70,9 @@ Run `f()` with these settings of the wavefront, read on the host by every wavefr
 inside `f` on the calling task; outside such a scope every call uses the defaults. `budget`
 is the loop iterations per state of an advance (`typemax(Int)` runs every state to its
 end in one advance; 0, the default, `WAVE_BUDGET` in a call without children and
-`WAVE_SPAWN_BUDGET` in a call with children), `cohort` the live states per device the refill fills up to, `refill`
+`WAVE_SPAWN_BUDGET` in a call with children), `cohort` the live states per device the
+refill fills up to (0, the default, `WAVE_COHORT` in a call without children and
+`WAVE_SPAWN_COHORT` in a call with children), `refill`
 the primaries per block a device takes from the shared block counter, `doubling` the
 budget doubling once no block remains and the cohort is below a quarter of `cohort`
 (`true` up to the cap of the phase: the `Wavefront`'s, and at most `WAVE_SPAWN_CAP` in a
@@ -84,14 +88,14 @@ refill take the primary blocks in decreasing [`block_costs`](@ref) of the start 
 programs in workgroups of `w` items, `0` (`WAVE_WORKGROUP`) in each program's
 [`workgroupsize`](@ref). Results do not depend on any of them. Returns `f()`.
 """
-function with_wavefront_settings(f; budget::Integer = 0, cohort::Integer = WAVE_COHORT,
+function with_wavefront_settings(f; budget::Integer = 0, cohort::Integer = 0,
                                  refill::Integer = WAVE_REFILL, doubling::Union{Bool,Integer} = true,
                                  wavefront::Bool = true, sort_every::Integer = WAVE_SORT,
                                  wait::Bool = WAVE_WAIT, cost_order::Bool = WAVE_COST_ORDER,
                                  workgroup::Integer = WAVE_WORKGROUP)
     budget >= 0 || throw(ArgumentError("with_wavefront_settings: budget must be non-negative"))
-    cohort >= 1 && refill >= 1 ||
-        throw(ArgumentError("with_wavefront_settings: cohort and refill must be positive"))
+    cohort >= 0 || throw(ArgumentError("with_wavefront_settings: cohort must be non-negative"))
+    refill >= 1 || throw(ArgumentError("with_wavefront_settings: refill must be positive"))
     doubling isa Bool || doubling >= 1 ||
         throw(ArgumentError("with_wavefront_settings: doubling must be true, false or a positive cap"))
     sort_every >= 0 || throw(ArgumentError("with_wavefront_settings: sort_every must be non-negative"))
@@ -105,9 +109,9 @@ end
 "The wavefront settings of the calling task ([`with_wavefront_settings`](@ref))."
 wave_settings() = WAVE_SETTINGS[]
 
-# The settings of a call for `describe`, with the budget the call starts from.
-settings_record(s::WaveSettings, budget::Int) =
-    (budget = budget, cohort = s.cohort, refill = s.refill, doubling = s.doubling,
+# The settings of a call for `describe`, with the budget the call starts from and its cohort.
+settings_record(s::WaveSettings, budget::Int, cohort::Int) =
+    (budget = budget, cohort = cohort, refill = s.refill, doubling = s.doubling,
      wavefront = s.wavefront, sort_every = s.sort_every, wait = s.wait,
      cost_order = s.cost_order, workgroup = s.workgroup)
 
@@ -259,9 +263,10 @@ function run_wavefront!(exec::PoolExecutor, wf::Wavefront, n::Int, depth::Int, s
     ktwin = wf.key !== nothing && set.sort_every > 0 ? ProgramTwins(pool, wf.key) : nothing
     phase = depth > 0 ? min(wf.doubling_cap, WAVE_SPAWN_CAP) : wf.doubling_cap
     K = set.budget > 0 ? set.budget : depth > 0 ? WAVE_SPAWN_BUDGET : WAVE_BUDGET
+    P = set.cohort > 0 ? set.cohort : depth > 0 ? WAVE_SPAWN_COHORT : WAVE_COHORT
     cap = set.doubling === true ? phase : set.doubling === false ? K : set.doubling
     call = (depth = depth, capacity = capacity === nothing ? nothing : Int(capacity),
-            reruns = exec.reruns, budget = K)
+            reruns = exec.reruns, budget = K, cohort = P)
     res = try
         n == 0 ? [empty_device() for _ in pool.devices] :
         foreach_device(pool) do lane
@@ -272,7 +277,7 @@ function run_wavefront!(exec::PoolExecutor, wf::Wavefront, n::Int, depth::Int, s
     end
     admitted = [r.admitted for r in res]
     spawned = [r.spawned for r in res]
-    record_run!(exec, :wavefront, settings_record(set, K), admitted, spawned;
+    record_run!(exec, :wavefront, settings_record(set, K, P), admitted, spawned;
                 iterations = [r.iterations for r in res], log = [r.log for r in res])
     check_partition(n, reduce(vcat, (r.ranges for r in res); init = UnitRange{Int}[]))
     retired = sum(r -> r.retired, res)
@@ -417,7 +422,7 @@ child_queue(lane::PoolLane, ::Type{E}, n::Int, counters, slot) where {E} =
 # counter reads, of the retire launch, of the branch with its counter read and of the
 # start launches). `ktwin` holds the key stage's twins when the call sorts. `call` holds
 # the depth, the explicit child slots or `nothing`, the executor's rerun counter and the
-# budget the call starts from. With
+# budget and the cohort the call starts from. With
 # `set.wait` off the launches are queued on the lane's queue in this order and the host
 # waits only at the counter reads and the sort's count read; it makes the device forms of
 # the next launches while the queued ones run.
@@ -425,7 +430,7 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, bl
                            set::WaveSettings, cap::Int, call)
     T = wave_state(wf.advance)
     M = wave_steps(wf.advance)
-    P = set.cohort
+    P = call.cohort
     w = set.wait
     wg(prog) = set.workgroup > 0 ? set.workgroup : workgroupsize(prog)
     dstart, dadv, dret = map(t -> program_twin!(t, lane), twins[1:3])
