@@ -197,7 +197,10 @@ so the metric and its first derivatives are continuous in time and space and the
 force keeps its time row $\dot p_t=-\tfrac12\partial_t g^{\alpha\beta}p_\alpha p_\beta$. The
 metric errs as $\Delta t^3+\Delta x^3$ and its derivatives as $\Delta t^2+\Delta x^2$; rays and
 Monte Carlo photons converge to those of the analytic metric at third order. The slices must
-cover the march: before the first slice and after the last the metric is the end slice. The
+cover the march: before the first slice and after the last the metric is the end slice.
+Off the lattice the metric is Minkowski, so a Monte Carlo run keeps its stop sphere inside
+the lattice: `mc_spectrum` refuses a stop radius (`R_em`, `escape` and 1.2 times the
+radius of the emitting zones) that, with one step `1/C`, reaches the nearest face. The
 cadence of the dumps must resolve the evolution of the metric; one dump gives its frozen
 `ADMGrid`. The series is held in memory, ten `Float64` fields per node and slice.
 

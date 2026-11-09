@@ -13,6 +13,8 @@
 # executor. The zones and tables of the last grid run are kept for the next run on the
 # same blocks and configuration.
 
+using ..Spacetime: stop_bound
+
 """
     ZoneSums(sites, nus, emissivity, chunk, sums)
 
@@ -121,6 +123,29 @@ const ZONE_MEMO = ZoneMemo(WeakRef(nothing), nothing, nothing, nothing, nothing,
 const ZONE_MEMO_LOCK = ReentrantLock()
 
 """
+    check_stop_sphere(st, o, r_em)
+
+Refuse a Monte Carlo run on `st` whose stop sphere leaves the sphere of
+`Spacetime.stop_bound`, inside which `st` is its own metric. The march of the run
+`o` stops a photon outbound past `max(o.march.R_em, r_em)` or past `o.march.escape`, one
+step beyond at most, and a step advances the position by about `d/C` with `d` below one,
+so the stop radius plus `1/o.march.C` must stay within the bound: on numerical-relativity
+data the photons are then recorded in the metric of the slices.
+"""
+function check_stop_sphere(st, o, r_em)
+    rho = stop_bound(st)
+    rho == Inf && return nothing
+    R = min(max(o.march.R_em, Float64(r_em)), o.march.escape)
+    R + 1 / o.march.C <= rho ||
+        throw(ArgumentError("mc_spectrum: the stop sphere of radius $R, with one step " *
+                            "1/C = $(1 / o.march.C), leaves the lattice of " *
+                            "$(nameof(typeof(st))), whose nearest face lies $rho from the " *
+                            "origin; set R_em or escape, and r_emit_max (the zones reach " *
+                            "1.2 times their radius), below $(rho - 1 / o.march.C)"))
+    return nothing
+end
+
+"""
     grid_zones(blocks, st, params, exec, o) -> (sites, r_em, wgt, Nz, dnmax)
 
 The emission zones of a grid run (`Data.emission_sites` of `blocks` on `st` with
@@ -129,7 +154,8 @@ proxy over them, and their generation tables for `o.gen` on `exec` ([`grid_table
 The last run's zones are reused by a run on the same `blocks` (the same object, not
 changed in place since), spacetime, parameters and zone options (and seed, at a stride
 above 1), and its tables by a run that also has the same generation settings; both are
-what the run would build, bitwise.
+what the run would build, bitwise. A run whose stop sphere leaves the lattice of an ADM
+spacetime is refused ([`check_stop_sphere`](@ref)).
 """
 function grid_zones(blocks::FluidBlocks, st, params, exec, o)
     zkey = (st, params, o.zones, o.zones.stride > 1 ? o.seed : nothing)
@@ -150,6 +176,7 @@ function grid_zones(blocks::FluidBlocks, st, params, exec, o)
             m.tkey = nothing; m.tables = nothing
         end
     end
+    check_stop_sphere(st, o, zones[2])
     tables = @lock ZONE_MEMO_LOCK (m.zones === zones && isequal(m.tkey, tkey)) ? m.tables : nothing
     if tables === nothing
         tables = grid_tables(exec, zones[1], g.Ns / (log(g.nu_max) - log(g.nu_min));

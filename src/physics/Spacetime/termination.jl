@@ -302,3 +302,22 @@ for `Minkowski` or any spacetime without a horizon.
 @inline horizon_floor(st::Union{SuperposedKerrSchild,BoostedSuperposedKerrSchild}) = minimum(st.r_h)
 @inline horizon_floor(st::Union{ADMGrid,ADMSeries}) = st.alpha_min
 @inline horizon_floor(::Spacetime) = 0.0
+
+"""
+    stop_bound(st) -> Float64
+
+The radius of the largest sphere about the origin inside which `st` is its own metric, the
+bound on the stop sphere of a Monte Carlo march: on an `ADMGrid` or `ADMSeries` that is
+Minkowski off its lattice (`offgrid_eta`), the distance from the origin to the nearest face
+of the node range (negative when the origin lies outside it). Across that face the metric
+jumps to `η`, on which a covector null in the slices is off the shell, so a photon recorded
+beyond it carries an energy, a direction and an arrival time of neither metric. `Inf` on
+every other spacetime.
+"""
+@inline stop_bound(::Spacetime) = Inf
+@inline stop_bound(st::Union{ADMGrid,ADMSeries}) =
+    st.offgrid_eta ? Float64(min(_face_distance(st.x0, st.dx, st.nx),
+                                 _face_distance(st.y0, st.dy, st.ny),
+                                 _face_distance(st.z0, st.dz, st.nz))) : Inf
+# The distance from 0 to the nearer end of the node range [c0, c0 + (n - 1) dc].
+@inline _face_distance(c0, dc, n::Int) = min(-c0, c0 + (n - 1) * dc)

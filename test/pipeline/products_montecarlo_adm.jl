@@ -9,7 +9,8 @@
 # of the binary every paired photon (same zone, same draws) converges to its twin through the
 # analytic binary at third order in the slice and grid spacing (the same lapse capture and
 # step rule on both); and the product runs end to end through the series, without and over a
-# window, in agreement with the analytic binary within errors.
+# window, in agreement with the analytic binary within errors, and refuses a stop sphere that
+# leaves the lattice.
 using Test, BlackLightPlus, StaticArrays, LinearAlgebra, Statistics
 using BlackLightPlus.Plans: RunConfig, prepare
 using BlackLightPlus.Products: mc_spectrum, TimedSpectrumResult, ZoneSource, TimedSource, EventSource, emit,
@@ -228,5 +229,14 @@ lane(w::Undeclared, ::Type) = w
         rshort = mc_spectrum(prepare(CFG; spacetime = short, matter = frames), 3000; kw..., window = (2.0, 12.0),
                              time_bins = 6)
         @test rshort.beyond_series > rs.beyond_series > 0.0
+        # a stop sphere that, with one step, leaves the lattice (the face at 7) is refused
+        for k in ((R_em = 7.0, escape = 7.5), (R_em = 100.0, escape = 1.0e3), (r_emit_max = 6.5, escape = 1.0e3))
+            @test_throws ArgumentError mc_spectrum(prepare(CFG; spacetime = fine, matter = snap), 100;
+                                                   merge(kw, k)...)
+            @test_throws ArgumentError mc_spectrum(prepare(CFG; spacetime = fine, matter = frames), 100;
+                                                   merge(kw, k)..., window = (2.0, 12.0), time_bins = 6)
+        end
+        @test mc_spectrum(prepare(CFG; spacetime = fine, matter = snap), 100;
+                          merge(kw, (R_em = 100.0, escape = 6.9))...) isa GRMHDSpectrumResult
     end
 end

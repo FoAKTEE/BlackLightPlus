@@ -870,7 +870,7 @@ comment or module docstring.
 | `physics/Spacetime/adm_grid.jl` | A frozen-slice numerical spacetime on a Cartesian grid | `ADMGrid`, `sample_adm`, `adm_grid_from_metric` |
 | `physics/Spacetime/metric_ops.jl` | Metric derivatives by forward-mode AD | `inverse_metric_gradient`, `christoffel` |
 | `physics/Spacetime/geodesic.jl` | Hamiltonian null geodesics in covariant-momentum form | `geodesic_rhs`, `rk4_step`, `null_covariant` |
-| `physics/Spacetime/termination.jl` | The fixed-control march: step size and the one termination rule | `MarchBudget`, `MarchStep`, `march_control` |
+| `physics/Spacetime/termination.jl` | The fixed-control march: step size and the one termination rule; the bound on a Monte Carlo stop sphere | `MarchBudget`, `MarchStep`, `march_control`, `stop_bound` |
 | `physics/Spacetime/adaptive.jl` | Adaptive geodesic solves with event termination (host) | `trace_geodesic` |
 | `physics/Spacetime/camera.jl` | Plane-parallel camera | `PlaneParallelCamera`, `CameraFrame`, `camera_ray` |
 | `physics/Spacetime/kerr_orbits.jl` | Exact-Kerr orbital primitives | `kerr_horizon`, `isco_radius`, `keplerian_omega` |
@@ -949,7 +949,7 @@ comment or module docstring.
 | `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `AnalyticProgram`, `render_analytic`, `photon_ring_layers` |
 | `pipeline/Products/amr.jl` | Adaptive image-plane refinement | `render_amr` |
 | `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, the layered run (wavefront or cascade), exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
-| `pipeline/Products/montecarlo_tables.jl` | The zone, generation and hot-cross tables on the run's executor; the zones kept across runs | `ZoneSums`, `ZoneCounts`, `HotcrossSigma`, `grid_tables`, `grid_zones`, `hotcross_build` |
+| `pipeline/Products/montecarlo_tables.jl` | The zone, generation and hot-cross tables on the run's executor; the zones kept across runs; the stop sphere held inside an ADM lattice | `ZoneSums`, `ZoneCounts`, `HotcrossSigma`, `grid_tables`, `grid_zones`, `check_stop_sphere`, `hotcross_build` |
 | `pipeline/Products/mc_order.jl` | The order key of a Monte Carlo photon and the refill's block costs | `photon_key`, `source_costs` |
 | `pipeline/Products/mc_stages.jl` | The stage programs of the device wavefront of a Monte Carlo run | `MCStart`, `MCAdvance`, `MCRetire`, `MCBranch`, `MCKey`, `mc_wavefront` |
 | `BlackLightPlusCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice`, the capped launch and the precompile workload | extension module |

@@ -559,6 +559,7 @@ function mc_run_timed(matter, plan, exec, bands, o, t0)
     src = helical_symmetry(st, omega) ? TimedSource(sources, offset[zfirst .+ 1], profiles, omega) :
           EventSource(sources, offset[zfirst .+ 1], profiles)      # no map carries a photon
     R_em = max(o.march.R_em, maximum(z -> 1.2 * proxy_distance(st, z.x)[2], sites))
+    check_stop_sphere(st, o, R_em)
     ctl = CurvedMarch(st; C = o.march.C, escape = o.march.escape, R_em = R_em)
     transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, o, mean_weight(wgt)),
                             Val(o.absorption), Val(o.scattering))

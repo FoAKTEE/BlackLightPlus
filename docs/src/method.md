@@ -957,8 +957,12 @@ with a helical symmetry a stack is carried by it or refused. On a stationary spa
 generated at its event is the placed photon bit for bit. Past the last slice of an `ADMSeries`
 the metric is that slice, and `beyond_series` counts the march time after the last frame or
 slice. The energy $E=-p_t$ and the arrival time recorded at the stop are those at infinity when
-the metric is stationary outside the stop sphere, as for an ADM box inside it with a flat
-exterior.
+the metric is stationary outside the stop sphere. On an `ADMGrid` or `ADMSeries` the metric is
+Minkowski off the lattice, where a covector null in the slices is off the shell, so the stop
+sphere must lie inside the lattice: a run whose stop radius, `min(max(R_em, 1.2 r_zones), escape)`,
+plus one step `1/C` passes the nearest face (`Spacetime.stop_bound`) is refused, and the energy,
+direction and arrival time are then those of the simulation's metric and coordinate time on the
+stop sphere.
 
 **Arrival time.** A photon escaping at $(t_e,\mathbf x_e)$ along $\hat n=\mathbf k/|\mathbf k|$
 crosses the wavefront $\hat n\cdot\mathbf x=D$ of a distant observer along $\hat n$ at

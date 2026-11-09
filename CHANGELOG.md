@@ -114,6 +114,12 @@ While the version is `0.x`, a bump of `x` may break that API.
   and 1.5e-5 M in their arrival time, and 8, 4 and 1 of 18 722 change fate. A stack carried
   at `omega ≠ 0` still needs that helical symmetry, and on a spacetime with one a stack in
   place still needs it to be stationary; every other run is unchanged bit for bit.
+- `mc_spectrum` on an `ADMGrid` or `ADMSeries` refuses a stop sphere that leaves the lattice:
+  the stop radius `min(max(R_em, 1.2 r_zones), escape)` plus one step `1/C` must stay within
+  `Spacetime.stop_bound`, the distance from the origin to the nearest face of the node range,
+  outside which the metric is Minkowski and a covector null in the slices is off the shell. On
+  a Kerr slice over [-15, 15]³ a stop sphere at 16 M is refused and one at 14 M runs bit for
+  bit as before; every other spacetime and every existing deck is unchanged bit for bit.
 
 - A Monte Carlo run on a pool builds its tables on the devices: the zone tables (the
   weight table and every zone's count and envelope, `Products.grid_tables`) and the

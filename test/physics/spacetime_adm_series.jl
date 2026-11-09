@@ -14,7 +14,7 @@ using BlackLightPlus.Spacetime: KerrSchildCartesian, BoostedSuperposedKerrSchild
                      inverse_metric_gradient, geodesic_rhs, geodesic_transport_rhs, rk4_step,
                      sample_adm, on_grid, proxy_distance, march_control, MarchBudget, horizon_floor,
                      horizon_radius, helical_symmetry, trace_geodesic, ks_radius, nullify_covariant,
-                     null_covariant, lane
+                     null_covariant, lane, stop_bound
 using BlackLightPlus.Numerics: hermite_weights, cr_weights
 const DK = Main.Decks
 
@@ -131,6 +131,13 @@ end
         @test_throws ArgumentError ADMSeries([sl[1], g2], [0.0, 1.0])
         @test_throws ArgumentError ADMSeries(sl[1:2], [1.0, 1.0])
         @test_throws ArgumentError ADMSeries(ys, ys, ys, [0.0], zeros(10, 17, 17, 17, 2))
+        # the stop sphere of a Monte Carlo march stays inside the nearest face of the lattice
+        @test stop_bound(ser) == stop_bound(sl[1]) == 4.0
+        zs = -3.0:0.5:5.0
+        @test stop_bound(adm_grid_from_metric(x -> metric(bin, x), ys, ys, zs; t = 0.0)) == 3.0
+        @test stop_bound(adm_grid_from_metric(x -> metric(bin, x), ys, ys, 1.0:0.5:5.0; t = 0.0)) == -1.0
+        @test stop_bound(adm_grid_from_metric(x -> metric(bin, x), ys, ys, ys; offgrid_eta = false)) == Inf
+        @test stop_bound(bin) == stop_bound(KerrSchildCartesian(0.5)) == Inf
     end
 
     @testset "pointwise orders against an orbiting binary" begin
