@@ -5,7 +5,8 @@
 # cascade's on threads and host pools, at depths 0 to 3, on 1, 2, 3 and 5 devices, at every
 # budget with the doubling on, capped and off, at every cohort and refill block, with `n`
 # not a multiple of the block, at every child capacity (the advance runs again for its
-# children); the children of the last generation are counted and dropped; the started
+# children; with two children in every loop iteration at P = 64, K = 1 and capacity 1, in
+# every iteration, waiting or not, on WaveHosts and the comparisons' devices); the children of the last generation are counted and dropped; the started
 # primaries, the retirements and the per-device counts of `describe` close; every device
 # takes blocks, also of a call smaller than one cohort; a call starts from `WAVE_BUDGET`
 # without children and `WAVE_SPAWN_BUDGET` with them, and doubles its budget to at most
@@ -48,12 +49,22 @@ const LONG = Int32[1 + (g * 7919) % 400 for g in 1:97]
 # Whether iteration `it` of the photon of key `g` spawns a child, and the child's key.
 @inline spawns(g::Int, it::Int) = (g + it) % 5 == 0
 @inline child_key(g::Int, it::Int) = 32g + it
-# The child of iteration `it` of the photon of key `g` and generation `gen - 1`.
-@inline function spawn_child!(buf, g, it, gen)
+# The child of key `k` and generation `gen`.
+@inline function spawn_child!(buf, k::Int, gen)
     buf === nothing && return nothing
-    k = child_key(g, it)
     spawn!(buf, Superphoton(SVector(0.0, Float64(k), 0.0, 0.0), SVector(-1.0, 0.0, 0.0, 1.0), 1.0;
                             nscatt = gen), primary_rng(SEED, k))
+    return nothing
+end
+# The children of iteration `it` of the photon of key `g` and generation `gen - 1`: one at
+# the iterations `spawns` names, or with `burst` two at every iteration (lives below 16).
+@inline function spawn_children!(buf, g::Int, it::Int, gen, burst::Bool)
+    if burst
+        spawn_child!(buf, child_key(g, it), gen)
+        spawn_child!(buf, child_key(g, it) + 16, gen)
+    elseif spawns(g, it)
+        spawn_child!(buf, child_key(g, it), gen)
+    end
     return nothing
 end
 # The totals of a photon: its key, its checksum (exact in Float64) and one count per path.
@@ -63,11 +74,11 @@ end
     return nothing
 end
 # The whole life of the photon of key `g` and generation `gen`.
-@inline function whole_life!(lives, buf, sc, g::Int, gen::Integer)
+@inline function whole_life!(lives, buf, sc, g::Int, gen::Integer, burst::Bool)
     acc = UInt64(0)
     for it in 1:life(lives, g)
         acc = fold(acc, g, it)
-        spawns(g, it) && spawn_child!(buf, g, it, gen + 1)
+        spawn_children!(buf, g, it, gen + 1, burst)
     end
     tally!(sc, g, acc)
     return nothing
@@ -88,10 +99,11 @@ struct ToyPrimary{L,S,P,C} <: Function
     sc::S
     path::P
     buf::C
+    burst::Bool
 end
 Adapt.@adapt_structure ToyPrimary
 function (p::ToyPrimary)(g, i)
-    whole_life!(p.lives, p.buf, p.sc, g, 0)
+    whole_life!(p.lives, p.buf, p.sc, g, 0, p.burst)
     add!(p.path, 1, 1.0)
     return nothing
 end
@@ -101,11 +113,12 @@ struct ToyLayer{G,L,S,P,C} <: Function
     sc::S
     path::P
     buf::C
+    burst::Bool
 end
 Adapt.@adapt_structure ToyLayer
 function (p::ToyLayer)(item, i)
     sph = @inbounds p.generation.photons[item]
-    whole_life!(p.lives, p.buf, p.sc, Int(sph.x[2]), sph.nscatt)
+    whole_life!(p.lives, p.buf, p.sc, Int(sph.x[2]), sph.nscatt, p.burst)
     add!(p.path, 1, 1.0)
     return nothing
 end
@@ -131,6 +144,7 @@ struct ToyAdvance{L,C,Q} <: Function
     buf::C
     mode::Int
     M::Int
+    burst::Bool
     queues::Q
 end
 Adapt.@adapt_structure ToyAdvance
@@ -142,7 +156,7 @@ function (p::ToyAdvance)(item, i)
     last = p.mode == 1 ? Int(s.it) - 1 : min(Int(s.it) - 1 + min(q.K, L), L)
     for it in Int(s.it):last
         acc = fold(acc, s.g, it)
-        spawns(s.g, it) && spawn_child!(p.buf, s.g, it, s.gen + 1)
+        spawn_children!(p.buf, s.g, it, s.gen + 1, p.burst)
     end
     s2 = Toy(s.g, Int32(last + 1), acc, s.gen)
     p.mode == 2 && s.g == 17 && fault!(q)
@@ -212,22 +226,23 @@ Execution.wave_state(::Union{ToyStart,ToyAdvance,ToyRetire,ToyBranch,ToyKey}) = 
 Execution.wave_steps(p::ToyAdvance) = p.M
 
 """
-The toy transport over `1:n`, spawning when `spawning`, with a branch stage when `branch`;
-`mode` of the advance, the life table `lives` and its step limit `M`, `nk` key values of
-the key stage.
+The toy transport over `1:n`, spawning when `spawning` (two children in every loop
+iteration with `burst`), with a branch stage when `branch`; `mode` of the advance, the life
+table `lives` and its step limit `M`, `nk` key values of the key stage.
 """
-function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIFE, nk = 13, costs = true)
+function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIFE, nk = 13, costs = true,
+             burst = false)
     sc = ExactScalars(2)
     path = ExactScalars(4)
     buf = spawning ? ChildBuffer(Superphoton, 0, MCStreamLayout(max(n, 1), 64, 1)) : nothing
     lives = copy(lives)
     wf = Wavefront(; start = ToyStart(path, costs, WaveQueues()),
-                   advance = ToyAdvance(lives, buf, mode, M, WaveQueues()),
+                   advance = ToyAdvance(lives, buf, mode, M, burst, WaveQueues()),
                    retire = ToyRetire(sc, path, WaveQueues()),
                    branch = branch ? ToyBranch(path, WaveQueues()) : nothing,
                    key = ToyKey(nk, KeyCount()),
-                   primary = ToyPrimary(lives, sc, path, buf),
-                   layer = ToyLayer(Generation(Superphoton[], MCRng[]), lives, sc, path, buf))
+                   primary = ToyPrimary(lives, sc, path, buf, burst),
+                   layer = ToyLayer(Generation(Superphoton[], MCRng[]), lives, sc, path, buf, burst))
     return (wf = wf, sc = sc, path = path, buf = buf, lives = lives)
 end
 
@@ -353,6 +368,28 @@ const DEFAULTS = (budget = Execution.WAVE_BUDGET, cohort = Execution.WAVE_COHORT
         @test same(runs[1][1], 3) && same(runs[2][1], 3)
         @test runs[1][2] > 0 && runs[2][2] == 0
         @test sum(it -> it.reruns, runs[1][3]) == runs[1][2]
+    end
+
+    @testset "an overflow in every iteration: two children per loop iteration, P = 64, K = 1, capacity 1" begin
+        bt = (burst = true, lives = Int32[2], M = 2)
+        bref = run_toy(ThreadedExecutor(chunk = 7), N; depth = 2, bt...)
+        # generations 0, 1, 2 tracked; the children of generation 2 counted and dropped
+        @test bref.children == 84N && bref.path == [21N, 0, 0, 0]
+        for devs in (DK.wavehosts(1), DK.wavehosts(2), DK.devices(1)), wt in (true, false)
+            ex = PoolExecutor(devs)
+            r = with_wavefront_settings(budget = 1, doubling = false, cohort = 64, refill = 8, wait = wt) do
+                run_toy(ex, N; depth = 2, capacity = 1, bt...)
+            end
+            @test (r.totals, r.children) == (bref.totals, bref.children)
+            if all(Execution.wavefront, devs)
+                log = reduce(vcat, wave_log(ex))
+                adv = count(it -> it.nA > 0, log)
+                @test r.path == [0, N, 21N, 84N] && adv > 0
+                @test all(it -> it.reruns == (it.nA > 0 ? 1 : 0), log) && describe(ex).reruns == adv
+            else
+                @test r.path == bref.path
+            end
+        end
     end
 
     @testset "the devices of the comparisons ($(DK.DEVICE_KIND)): the cascade's bits" begin
