@@ -5,13 +5,17 @@ CUDA methods of the `Execution` device protocol for `CUDADevice`: activation, th
 KernelAbstractions backend, the functional probe, page-locked staging buffers, early
 release of device arrays, the free device memory, the lanes' streams and the arrays they
 share, the per-thread stack limit, the launch under a register cap, read-only loads
-through the constant cache, and the idle-device selection behind `select_devices`.
+through the constant cache, and the idle-device selection behind `select_devices`. Its
+precompile workload compiles one program through the package's kernel for sm_80, so that
+the first device compilation of a session that loads the package before CUDA does not
+compile the GPU compiler itself.
 """
 module BlackLightPlusCUDAExt
 
 using BlackLightPlus, CUDA
 using Adapt: Adapt
 using KernelAbstractions: KernelAbstractions
+using PrecompileTools: @setup_workload, @compile_workload
 using BlackLightPlus.Execution: CUDADevice
 import BlackLightPlus.Execution: backend, activate!, functional, stage_alloc, stage_free, free!,
                       free_bytes, share_lanes!, lane_queue, sync_queue, queue_idle,
@@ -174,6 +178,30 @@ function select_devices(::Type{CUDADevice}; candidates = nothing, util_threshold
     picked = filter(d -> idle(d, util_threshold, min_free_gb), vis)
     isempty(picked) && fallback && (picked = vis[1:1])
     return CUDADevice.(picked)
+end
+
+# The precompile workload. ForwardDiff's `promote_rule(::Type{<:Real}, ::Type{<:Dual})`,
+# loaded with the package, invalidates the GPU compiler's native code that CUDA's own
+# workload caches (the abstract interpreter's calls, `cufunction`, `emit_llvm`), so without
+# this workload the first device compilation of a session compiles that code again, 6–7 s
+# whatever the program. `Iota` compiled to a cubin here, with the package, ForwardDiff and
+# CUDA loaded, keeps the recompiled native code in this extension's image for every
+# session that loads ForwardDiff before CUDA, as `using BlackLightPlus, CUDA` does. The
+# device code of a program is compiled in each session.
+struct Iota <: Function end
+(::Iota)(item, i, out) = (@inbounds out[i] = Float64(item); nothing)
+
+@setup_workload begin
+    if :NVPTX in CUDACore.LLVM.backends() && CUDACore.CUDA_Compiler.is_available()
+        gpc = CUDACore.GPUCompiler
+        config = CUDACore._compiler_config(nothing; arch = v"8.0", always_inline = false)
+        kernel = BlackLightPlus.Execution._foreach!(CUDA.CUDABackend())
+        _, _, iterspace, _ = KA.launch_config(kernel, 1024, nothing)
+        ctx = KA.mkcontext(kernel, (1024,), iterspace)
+        tt = Tuple{typeof(ctx),Iota,UnitRange{Int},Int,CUDA.CuDeviceVector{Float64,CUDA.AS.Global}}
+        job = gpc.CompilerJob(gpc.methodinstance(typeof(kernel.f), tt), config)
+        @compile_workload CUDACore.compile(job)
+    end
 end
 
 end # module
