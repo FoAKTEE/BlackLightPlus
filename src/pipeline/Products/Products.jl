@@ -21,9 +21,11 @@ using ..Matter: GridProvider, EquatorialDisk, UniformSphere, EmissionZone, ZoneS
                 sample, emission_zone, SynchrotronSurface, PolarizedDisk, surface_angle, material_spin,
                 polarized_emission, EquatorialSpot, spot_amplitude, equatorial_disk_intensity,
                 VariableSphere, node_sphere, domain_radius
-using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type
+using ..Transfer: IQUV, StokesI, SpacetimeMarch, StoredPath, march, output_type, max_steps
 using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateBias, FlatMarch,
-                    CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, escape_direction,
+                    CurvedMarch, MarchLedger, CAPTURED_MARCH, DROPPED_MARCH, ESCAPED_MARCH,
+                    LIVE_MARCH, March, MarchState, march_open, march_steps, march_close,
+                    escape_direction,
                     generate, track!, table_zone, zone_nsuperphotons, mean_weight, int_jnu_zone,
                     EMISSIVITY_TABLE, MC_NU_MIN, MC_NU_MAX, MC_N_ESAMP, WeightTable, ZoneNodes,
                     zone_count, int_jnu, WEIGHT_FLOOR, HotcrossTable, hotcross_nodes, juttner_norm,
@@ -58,6 +60,7 @@ include("montecarlo.jl")
 include("montecarlo_tables.jl")
 include("montecarlo_time.jl")
 include("mc_order.jl")
+include("mc_stages.jl")
 
 # programs
 export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, AnalyticProgram,
@@ -69,7 +72,7 @@ export ImagingProgram, TraceProgram, TraceStep, TraceState, ShadowProgram, Analy
 export MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary, MCLayer, LEDGER_STRIPES,
        mc_ledger, ledger_sum, ledger_count, TimeProfile, profile_area, clip_profile, sample_time,
        time_stream, place, TimedSource, arrival_time, record_arrival!, TimedRecord, TimedPrimary,
-       TimedLayer, photon_key
+       TimedLayer, photon_key, MCStart, MCAdvance, MCRetire, mc_wavefront
 # products and results
 export Image, Trajectories, render, render_amr, render_analytic, render_crossings,
        photon_ring_layers, trace, shadow, sensitivity, variants, analytic_movie

@@ -3,26 +3,30 @@
 # budget, the scattered power independent of the bias with absorption on, the torus
 # spectrum on the block deck against the transport-tier template with its per-order split
 # and power budget, bitwise agreement across executors, device counts, chunks and
-# child-buffer capacities (the overflow rerun), the emission zones, the programs' device
-# contract, the process's hot-cross table, the backend keyword, the run record and the
-# photon order key.
+# child-buffer capacities (the overflow rerun), thin runs on the device wavefront of
+# `WaveHost` pools (bitwise among device counts and budgets, within 1e-11 of threads), the
+# emission zones, the programs' device contract, the process's hot-cross table, the backend
+# keyword, the run record and the photon order key.
 using Test, BlackLightPlus, StaticArrays
 using Adapt: Adapt
 using BlackLightPlus.Plans: RunConfig, Plan, prepare, hotcross_table
 using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl_nuLnu, ScatterResult,
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
                     MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render, grid_tables,
-                    grid_zones, ZoneSums, ZoneCounts, hotcross_build, photon_key, PHOTON_KEYS
+                    grid_zones, ZoneSums, ZoneCounts, hotcross_build, photon_key, PHOTON_KEYS,
+                    MCStart, MCAdvance, MCRetire
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
                      inverse_metric, proxy_distance, SuperposedKerrSchild, horizon_floor
 using BlackLightPlus.Matter: UniformSphere
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Superphoton, GenerationTables, Opacities, Bias,
-                      StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE, ZoneNodes
+                      StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE, ZoneNodes,
+                      MarchState
 using BlackLightPlus.Numerics: SIGMA_THOMSON, GNEWT, CL, ME, MCStreamLayout, primary_rng, mc_uniform
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactBins, ExactScalars, ChildBuffer,
                      PolarBands, InclinationBands, band, nuLnu_total, nuLnu_solid, total_power,
                      total_weight, mean_energy, scalar, add!, describe, backend!, reset_backend!,
-                     nuLnu_sigma, foreach_item!
+                     nuLnu_sigma, foreach_item!, with_wavefront_settings, WaveQueues, Cohort,
+                     StateBuffer, WaveSwap, wave_state, wave_steps
 using BlackLightPlus.Data: zone_tables, emission_sites
 const DK = Main.Decks
 
@@ -51,6 +55,16 @@ same(a::GRMHDSpectrumResult, b::GRMHDSpectrumResult) =
     DK.bits(ledger(a)) == DK.bits(ledger(b))
 
 const POOLS = [PoolExecutor(DK.hosts(nd); chunk = c) for (nd, c) in zip(DK.NDEV, (64, 997, 300, 4096))]
+
+"Equal counts, and every sum of every cell and the ledger within `tol` of `b`'s, relatively."
+function close_to(a::GRMHDSpectrumResult, b::GRMHDSpectrumResult, tol)
+    rel(x, y) = all(i -> x[i] == y[i] || abs(x[i] - y[i]) <= tol * abs(y[i]), eachindex(x, y))
+    cells(s, t) = s.count == t.count && rel(s.sumw, t.sumw) && rel(s.sumwE, t.sumwE) &&
+                  rel(s.sumwE2, t.sumwE2)
+    return cells(a.total, b.total) && all(cells.(a.spectra, b.spectra)) &&
+           all(cells.(a.orders, b.orders)) && rel(collect(ledger(a)), collect(ledger(b))) &&
+           (a.n_gen, a.n_recorded, a.n_children) == (b.n_gen, b.n_recorded, b.n_children)
+end
 
 "Writes the order key of the state `ys[g]` on `st` under `ctl` to `out[i]`."
 struct KeyProgram{S,C,V}
@@ -320,6 +334,41 @@ end
         end
     end
 
+    @testset "the device wavefront: thin runs on WaveHost pools" begin
+        tw = (seed = 0xC0FFEE, C = 32.0, n_ebins = 80, stride = 2)
+        thr = mc_spectrum(pt, 800; tw..., backend = :cpu)
+        hw = map(1:3) do nd
+            ex = PoolExecutor(DK.wavehosts(nd))
+            r = mc_spectrum(pt, 800; tw..., backend = ex)
+            @test describe(ex).schedule == :wavefront && sum(describe(ex).admitted) == r.n_gen
+            r
+        end
+        @test hw[1].n_gen > 500 && all(r -> same(r, hw[1]), hw)
+        ex = PoolExecutor(DK.wavehosts(2))
+        for K in (1, 7, 32, typemax(Int))
+            r = with_wavefront_settings(budget = K, doubling = false, cohort = 64, refill = 37) do
+                mc_spectrum(pt, 800; tw..., backend = ex)
+            end
+            @test same(r, hw[1]) && all(>(0), describe(ex).admitted)
+        end
+        # threads run track! in another inlining context: equal counts, sums within 1e-11
+        @test close_to(hw[1], thr, 1.0e-11) && hw[1].n_recorded == thr.n_recorded
+        # the straight-line march of the sphere: bitwise the threads
+        @test same(mc_spectrum(p, 6_000; seed = 7, n_ebins = 60, backend = ex),
+                   mc_spectrum(p, 6_000; seed = 7, n_ebins = 60, backend = :cpu))
+        # scattering keeps the cascade
+        ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        kw = (scattering = true, table = THOMSON, seed = 0xBEEF, nu_max = 1.0e13, n_ebins = 60,
+              bias = Bias(ss))
+        @test same(mc_spectrum(prepare(ss), 1_500; kw..., backend = ex),
+                   mc_spectrum(prepare(ss), 1_500; kw..., backend = :cpu))
+        @test describe(ex).schedule == :cascade
+        # the cascade of the same pool compiles the programs of threads: their bits
+        @test same(with_wavefront_settings(() -> mc_spectrum(pt, 800; tw..., backend = ex);
+                                           wavefront = false), thr)
+        @test describe(ex).schedule == :cascade
+    end
+
     @testset "programs: device contract, no allocation" begin
         ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
         tabs, _ = DK.sphere_tables(ss, 1000; nu_min = 1.0e8, nu_max = 1.0e13)
@@ -361,6 +410,20 @@ end
         zp = MCPrimary(src, ztr, zsink, UInt32(1))
         @test DK.device_isbits(zp) && allocs(zp, 17, 17) == 0
         @test ledger_count(zsink.ledger, 6) == 2
+        # the stage programs of the wavefront: isbits on a device, with and without queues
+        states = Vector{MarchState}(undef, 8); done = Vector{MarchState}(undef, 8)
+        cnt = zeros(Int64, 5)
+        q = WaveQueues(Cohort(states, nothing), StateBuffer(states, view(cnt, 1:1)),
+                       StateBuffer(done, view(cnt, 2:2)), cnt, 32, 0)
+        stages = (MCStart(src, ztr, zsink, UInt32(1)), MCAdvance(ztr, zsink), MCRetire(ztr, zsink))
+        @test all(DK.device_isbits, stages)
+        st, adv, ret = map(x -> Adapt.adapt(WaveSwap(q, nothing), x), stages)
+        @test all(DK.device_isbits, (st, adv, ret))
+        @test allocs(st, 17, 1) == 0 && ledger_count(zsink.ledger, 6) == 4
+        @test allocs(adv, 1, 1) == 0 && cnt[1] + cnt[2] == 2 && cnt[5] == 0
+        done[1] = states[1]
+        @test allocs(ret, 1, 1) == 0
+        @test wave_state(adv) === MarchState && wave_steps(adv) == ctr.nmax
         @test length(mc_ledger().n) == 11 * LEDGER_STRIPES
         # the zone a primary is generated from is the site's, decoded again
         z9 = BlackLightPlus.Products.emit(src, 17, primary_rng(1, 17))[1]
@@ -475,12 +538,17 @@ end
         # the same keys on threads and on host pools of every device count
         prog = KeyProgram(st, ctl, ys)
         @test DK.device_isbits(prog)
-        for exec in (ThreadedExecutor(), POOLS..., PoolExecutor(DK.hosts(1)))
+        for exec in (ThreadedExecutor(), POOLS..., PoolExecutor(DK.hosts(1)),
+                     PoolExecutor(DK.wavehosts(2)))
             out = fill(-1, length(ys))
             foreach_item!(exec, prog, 1:length(ys); outs = (out,))
             @test out == ks
         end
     end
+    # the octant bits in order x¹, x², x³ (4, 2, 1): a position and a wave vector (−, +, +)
+    y = state((0.0, -1.0, 2.0, 3.0), (-1.0, -1.0, 0.5, 0.5))
+    @test photon_key(Minkowski(), flat, y) % 64 == 4 * 8 + 4
+    @test photon_key(Minkowski(), flat, state((0.0, 1.0, 2.0, -3.0), (-1.0, 1.0, 0.5, -0.5))) % 64 == 1 * 8 + 1
     # a radius that overflows has shell 0; an inverse metric that is not finite, key 0
     @test photon_key(Minkowski(), flat, state((0.0, 1.0e200, -1.0e200, 1.0), p)) == 2 * 8 + 2
     @test !all(isfinite, inverse_metric(bin, SVector(0.0, 3.0, 0.0, 0.0)))

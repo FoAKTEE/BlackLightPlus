@@ -238,12 +238,16 @@ cm for a plan without parameters). Binning: `bands` (`PolarBands(6)` for the sph
 Scattering runs as a cascade over chunks of primaries ([`Execution.foreach_cascade!`](@ref)):
 within a chunk, each layer's children are tracked by the next layer, up to `max_scatt`
 layers, and stay on the worker that runs the chunk. On devices a layer starts with a
-child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries
-and the slots the device grew to in the run's earlier chunks); a layer whose buffer
+child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries,
+the most children a layer on the device has spawned in the process, and the slots an
+eighth of the device's free memory holds, at most 16 per primary); a layer whose buffer
 overflows is rerun into zeroed scratch accumulators with a buffer for the counted
-children, so no child is lost or counted twice. On threads each task's two child
-buffers start with `capacity` slots (`nothing`: 4096) and grow; a photon whose children
-overflow is rerun the same way.
+children and an eighth more, so no child is lost or counted twice. On threads each task's
+two child buffers start with `capacity` slots (`nothing`: 4096) and grow; a photon whose
+children overflow is rerun the same way. Without scattering, on GPUs, the primaries run on
+the device wavefront ([`Execution.foreach_wavefront!`](@ref)): each photon's march is cut
+into launches of at most a budget of loop iterations over a cohort that a block counter
+shared by the devices refills, with the bits of the cascade.
 
 Emission over a window: with `window = (t_a, t_b)` (coordinate time) the plasma emits over
 the window and the result is a [`TimedSpectrumResult`](@ref): the stationary result of the
@@ -428,21 +432,29 @@ function zone_offsets(Nsz::AbstractVector{Float64}, seed::UInt32)
     return offset
 end
 
-# The layered loop on `exec`, as a cascade: `MCPrimary` over the primaries `1:n0`, then
-# up to `layout.max_layer` layers of `MCLayer` over the children of the layer before,
-# into the run totals `orders` and `ledger` and, with `timed` (a `TimedRecord`), the
-# time-resolved bins and the clock of `TimedPrimary` and `TimedLayer`, gathered here.
-# Without scattering only the primaries run. Returns the number of children.
+# The layered loop on `exec`: `MCPrimary` over the primaries `1:n0`, then up to
+# `layout.max_layer` layers of `MCLayer` over the children of the layer before, into the
+# run totals `orders` and `ledger` and, with `timed` (a `TimedRecord`), the time-resolved
+# bins and the clock of `TimedPrimary` and `TimedLayer`, gathered here. A stationary run
+# goes through the wavefront of its stage programs (`foreach_wavefront!`, which serves the
+# primaries of a run without scattering on devices that answer `wavefront` and runs the
+# cascade otherwise); a run over a window is a cascade. Without scattering only the
+# primaries run. Returns the number of children.
 function run_layers(exec, source, transport, seed::UInt32, n0::Int, orders, ledger, layout,
                     scatter::Bool, capacity; timed = nothing)
     slot = scatter ? ChildBuffer(Superphoton, 0, layout) : nothing
     sink = MCSink(transport.ctl, orders, slot, ledger)
     gen = Execution.Generation(Superphoton[], MCRng[])
-    primary = timed === nothing ? MCPrimary(source, transport, sink, seed) :
-              TimedPrimary(source, transport, sink, seed, timed)
-    layer = timed === nothing ? MCLayer(gen, transport, sink) : TimedLayer(gen, transport, sink, timed)
-    nchildren = Execution.foreach_cascade!(exec, primary, layer, n0,
-                                           scatter ? layout.max_layer : 0; capacity)
+    depth = scatter ? layout.max_layer : 0
+    if timed === nothing
+        wf = mc_wavefront(source, transport, sink, seed, MCPrimary(source, transport, sink, seed),
+                          MCLayer(gen, transport, sink), depth)
+        nchildren = Execution.foreach_wavefront!(exec, wf, n0, depth; capacity)
+    else
+        nchildren = Execution.foreach_cascade!(exec, TimedPrimary(source, transport, sink, seed, timed),
+                                               TimedLayer(gen, transport, sink, timed), n0, depth;
+                                               capacity)
+    end
     foreach(gather!, orders)
     timed === nothing || (foreach(gather!, timed.timed); gather!(timed.clock))
     gather!(ledger)
