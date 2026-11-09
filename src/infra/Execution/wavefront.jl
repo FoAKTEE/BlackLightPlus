@@ -118,9 +118,8 @@ The predicted cost of each block of `R` consecutive primaries of `1:n` (the last
 clipped) for the start program `prog` of a [`Wavefront`](@ref): `cld(n, R)` values, larger
 for a block whose photons and children are predicted to run longer; `nothing` (the default)
 when the program predicts none. With `cost_order` on ([`with_wavefront_settings`](@ref))
-the refill takes the blocks in decreasing cost, ties in index order, so the photons that
-set the end of a call start first. The order changes which device starts a primary and
-when, never a result.
+the refill takes the blocks in decreasing cost, ties in index order. The order changes
+which device starts a primary and when, never a result.
 """
 block_costs(prog, n::Int, R::Int) = nothing
 

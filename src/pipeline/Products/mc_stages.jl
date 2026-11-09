@@ -164,9 +164,8 @@ const MCStage = Union{MCStart,MCAdvance,MCRetire,MCBranch}
 Execution.wave_state(::Union{MCStage,MCKey}) = MarchState
 Execution.wave_steps(p::MCAdvance) = max_steps(p.transport.ctl)
 Execution.generation(s::MarchState) = Int(s.entry.nscatt)
-# Blocks of four warps for the stage and key launches (`with_wavefront_settings`' `workgroup`
-# overrides them): on the A100 the scattering photon phase runs fastest with them among
-# blocks of 32 to 256 items.
+# The stage and key launches run in blocks of four warps; `with_wavefront_settings`'
+# `workgroup` overrides them.
 workgroupsize(::Union{MCStage,MCKey}) = 128
 
 """

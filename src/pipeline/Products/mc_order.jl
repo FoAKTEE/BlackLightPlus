@@ -69,13 +69,13 @@ const COST_SAMPLES = 64
 """
     source_costs(source, n, R) -> Union{Nothing,Vector{Float64}}
 
-The predicted cost of each block of `R` consecutive primaries of `1:n` emitted by
-`source`, for the refill order of the device wavefront ([`Execution.block_costs`](@ref)).
+The cost of each block of `R` consecutive primaries of `1:n` emitted by `source`, by which
+the refill of the device wavefront orders the blocks ([`Execution.block_costs`](@ref)).
 A [`ZoneSource`](@ref): the mean of `1 / r` over `COST_SAMPLES` primaries spread evenly
 over the block, `r = √(x² + y² + z²)` the coordinate radius of the zone that emits each
-(the zone `emit` draws from), so the blocks of the inner zones, whose photons march longest,
-come first. Every other source: `nothing` (index order). The costs order the refill and
-enter no result.
+(the zone `emit` draws from), so the refill takes the blocks of the inner zones first. The
+cost ranks the blocks by radius; it does not measure their photons' work. Every other
+source: `nothing` (index order). The costs order the refill and enter no result.
 """
 source_costs(source, n::Int, R::Int) = nothing
 function source_costs(s::ZoneSource, n::Int, R::Int)
