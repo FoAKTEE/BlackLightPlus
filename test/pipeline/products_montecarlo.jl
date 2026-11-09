@@ -18,7 +18,7 @@ using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl
                     MCStart, MCAdvance, MCRetire, MCBranch, MCKey
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
                      inverse_metric, proxy_distance, SuperposedKerrSchild, horizon_floor
-using BlackLightPlus.Matter: UniformSphere
+using BlackLightPlus.Matter: UniformSphere, ZoneSite
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Superphoton, GenerationTables, Opacities, Bias,
                       StateBias, FlatMarch, CurvedMarch, generate, EMISSIVITY_TABLE, ZoneNodes,
                       MarchState
@@ -29,6 +29,7 @@ using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactB
                      nuLnu_sigma, foreach_item!, with_wavefront_settings, WaveQueues, Cohort,
                      StateBuffer, WaveSwap, wave_state, wave_steps, generation, Generation, wave_log,
                      KeyCount, wave_keys
+import BlackLightPlus.Execution, BlackLightPlus.Products
 using BlackLightPlus.Data: zone_tables, emission_sites
 const DK = Main.Decks
 
@@ -360,6 +361,15 @@ end
             # a run without scattering has no key stage: never sorted
             @test same(r, hw[1]) && !any(it -> it.sorted, reduce(vcat, wave_log(ex)))
         end
+        # the refill in the zone radii's cost order or in index order, launches waiting or not,
+        # every workgroup size: the same bits
+        for co in (true, false), wt in (true, false), wg in (0, 64)
+            r = with_wavefront_settings(cost_order = co, wait = wt, workgroup = wg, cohort = 64, refill = 37) do
+                mc_spectrum(pt, 800; tw..., backend = ex)
+            end
+            set = describe(ex).settings
+            @test same(r, hw[1]) && set.cost_order == co && set.wait == wt && set.workgroup == wg
+        end
         # threads run track! in another inlining context: equal counts, sums within 1e-11
         @test close_to(hw[1], thr, 1.0e-11) && hw[1].n_recorded == thr.n_recorded
         # the straight-line march of the sphere: bitwise the threads
@@ -429,6 +439,18 @@ end
         @test same(with_wavefront_settings(() -> mc_spectrum(pt, 800; tk..., backend = ex);
                                            wavefront = false), tor)
         @test describe(ex).schedule == :cascade
+    end
+
+    @testset "block costs of a source: the mean inverse zone radius of a block's primaries" begin
+        site(r) = ZoneSite(SVector(0.0, 0.0, r, 0.0), 1.0, 1.0, 1.0, 1.0)
+        zs = ZoneSource([site(2.0), site(4.0), site(8.0)], nothing, nothing, nothing, nothing,
+                        nothing, nothing, [0, 10, 30, 31])
+        @test Products.source_costs(zs, 31, 10) == [0.5, 0.25, 0.25, 0.125]
+        @test Products.source_costs(zs, 31, 31) ≈ [(10 / 2 + 20 / 4 + 1 / 8) / 31] rtol = 0.05
+        @test Execution.block_order(MCStart(zs, nothing, nothing, 0), 31, 10) == [1, 2, 3, 4]
+        ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        tabs, _ = DK.sphere_tables(ss, 1000; nu_min = 1.0e8, nu_max = 1.0e13)
+        @test Products.source_costs(SphereSource(ss, tabs), 1000, 100) === nothing
     end
 
     @testset "programs: device contract, no allocation" begin

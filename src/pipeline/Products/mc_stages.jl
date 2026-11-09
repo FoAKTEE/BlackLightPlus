@@ -39,6 +39,8 @@ function (p::MCStart)(item, i)
     return nothing
 end
 
+Execution.block_costs(p::MCStart, n::Int, R::Int) = source_costs(p.source, n, R)
+
 """
     MCAdvance(transport, sink)
 

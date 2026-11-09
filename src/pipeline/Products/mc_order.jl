@@ -62,3 +62,35 @@ end
 "The radius past which the march `ctl` records its photon: the ball of a `FlatMarch`, `min(R_em, escape)` of a `CurvedMarch`."
 @inline march_radius(c::FlatMarch) = Float64(c.R)
 @inline march_radius(c::CurvedMarch) = Float64(min(c.R_em, c.escape))
+
+"Primaries per block whose zone radii predict a block's cost ([`source_costs`](@ref))."
+const COST_SAMPLES = 64
+
+"""
+    source_costs(source, n, R) -> Union{Nothing,Vector{Float64}}
+
+The predicted cost of each block of `R` consecutive primaries of `1:n` emitted by
+`source`, for the refill order of the device wavefront ([`Execution.block_costs`](@ref)).
+A [`ZoneSource`](@ref): the mean of `1 / r` over `COST_SAMPLES` primaries spread evenly
+over the block, `r = √(x² + y² + z²)` the coordinate radius of the zone that emits each
+(the zone `emit` draws from), so the blocks of the inner zones, whose photons march longest,
+come first. Every other source: `nothing` (index order). The costs order the refill and
+enter no result.
+"""
+source_costs(source, n::Int, R::Int) = nothing
+function source_costs(s::ZoneSource, n::Int, R::Int)
+    nb = cld(n, R)
+    costs = Vector{Float64}(undef, nb)
+    for k in 1:nb
+        lo, hi = (k - 1) * R + 1, min(k * R, n)
+        m = min(COST_SAMPLES, hi - lo + 1)
+        acc = 0.0
+        for j in 1:m
+            g = lo + ((2j - 1) * (hi - lo + 1)) ÷ (2m)
+            x = s.sites[searchsortedfirst(s.offset, g) - 1].x
+            acc += 1.0 / sqrt(x[2] * x[2] + x[3] * x[3] + x[4] * x[4])
+        end
+        costs[k] = acc / m
+    end
+    return costs
+end
