@@ -1,5 +1,6 @@
 # AthenaK `.bin` dumps: the reader, a trilinear sampler of its columns in each block
-# extended by a ghost layer, the Z4c to ADM conversion resampled onto an `ADMGrid`, and
+# extended by a ghost layer, the Z4c to ADM conversion resampled onto an `ADMGrid` (one
+# dump) or the slices of an `ADMSeries` (a sequence of dumps), and
 # the GRMHD-fluid adapter to an `AthenaKSnapshot`. Z4c to ADM (AthenaK
 # `z4c/z4c_adm.cpp` `Z4cToADM`, `chi_psi_power = -4`): `γ_ij = g̃_ij / χ`
 # (ψ⁴ = χ^(4/chi_psi_power) = 1/χ, χ floored at 1e-12), `α = z4c_alpha`,
@@ -293,6 +294,32 @@ function z4c_grid_spacetime(binfile::AbstractString, half::Float64, n::Int;
           "evolution timescale (BBH orbital period). No ∂ₜ(α,β,γ) terms." maxlog=1
     s = read_athenak_bin(binfile)
     return resample_z4c_adm(s, half, n; alpha_min = alpha_min), s
+end
+
+"""
+    z4c_series_spacetime(binfiles, half, n; alpha_min = 0.15) -> ADMSeries | ADMGrid
+
+The Z4c dumps `binfiles` as the slices of an [`ADMSeries`](@ref) at their dump times:
+each dump resampled as by [`resample_z4c_adm`](@ref) onto the one lattice `[-half, half]³`
+of `n` nodes per axis, the slices in the order of their times (equal times are an error).
+The series is C¹ in time between the dumps, so their cadence must resolve the evolution
+of the metric; one dump gives its frozen `ADMGrid`. The dumps are read one at a time.
+"""
+function z4c_series_spacetime(binfiles::AbstractVector{<:AbstractString}, half::Float64, n::Int;
+                              alpha_min::Real = 0.15)
+    isempty(binfiles) && throw(ArgumentError("z4c_series_spacetime: no dumps"))
+    length(binfiles) == 1 &&
+        return resample_z4c_adm(read_athenak_bin(only(binfiles)), half, n; alpha_min = alpha_min)
+    times = [open(io -> (readline(io); _bin_header(io).time), f) for f in binfiles]
+    order = sortperm(times)
+    allunique(times) || throw(ArgumentError("z4c_series_spacetime: two dumps share a time"))
+    data = Array{Float64,5}(undef, 10, n, n, n, length(binfiles))
+    for (k, i) in enumerate(order)
+        g = resample_z4c_adm(read_athenak_bin(binfiles[i]), half, n; alpha_min = alpha_min)
+        data[:, :, :, :, k] .= g.data
+    end
+    axis = range(-half, half; length = n)
+    return ADMSeries(axis, axis, axis, times[order], data; alpha_min = alpha_min)
 end
 
 """

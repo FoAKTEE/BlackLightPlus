@@ -4,11 +4,12 @@
 # blocks extended by ghost layers (a linear field exact across faces between and within
 # levels, continuity across same-level faces, the in-block stencil inside a block), and
 # the Z4c resample onto an ADM grid (one stencil per node, identical to per-variable
-# `sample_var`; Minkowski off the mesh).
+# `sample_var`; Minkowski off the mesh), and a sequence of dumps as an ADM series (the
+# slices in time order, each the resample of its dump; one dump its grid).
 using Test, BlackLightPlus, StaticArrays, Random
 using BlackLightPlus.Data: AthenaKBin, read_athenak_bin, sample_var, resample_z4c_adm,
-                z4c_grid_spacetime, athenak_bin_snapshot, PRIM_NAMES
-using BlackLightPlus.Spacetime: ADMGrid
+                z4c_grid_spacetime, z4c_series_spacetime, athenak_bin_snapshot, PRIM_NAMES
+using BlackLightPlus.Spacetime: ADMGrid, ADMSeries, metric
 using BlackLightPlus.Matter: primitives, pgas_from_eint
 
 # A v1.1 dump of `nvars` variables on blocks tiling x ∈ [0, nmb]; `value(b, v, c)` is the
@@ -222,6 +223,27 @@ end
         on = grid.data[:, 6, 7, 7]                  # node (0.25, 0.5, 0.5), on block 1
         @test on[1] == 0.75 && on[5] == on[8] == on[10] == 2.0 && on[2] == on[6] == 0.0
         @test grid.data[:, 1, 1, 1] == [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0]
+    end
+end
+
+@testset "z4c_series_spacetime stacks the dumps in time order" begin
+    zvars = ["z4c_chi", "z4c_gxx", "z4c_gxy", "z4c_gxz", "z4c_gyy", "z4c_gyz",
+             "z4c_gzz", "z4c_alpha", "z4c_betax", "z4c_betay", "z4c_betaz"]
+    lapse(a) = (b, v, c) -> Float32(v == 1 ? 0.5 : v in (2, 5, 7) ? 1.0 : v == 8 ? a : 0.0)
+    mktempdir() do dir
+        paths = [write_bin(joinpath(dir, "z4c.$k.bin"), zvars; value = lapse(a), time = t)
+                 for (k, (a, t)) in enumerate(((0.6, 4.0), (0.8, 2.0), (0.7, 3.0)))]
+        st = z4c_series_spacetime(paths, 1.0, 9; alpha_min = 0.2)
+        @test st isa ADMSeries && st.times == [2.0, 3.0, 4.0] && st.alpha_min == 0.2
+        for (n, k) in enumerate((2, 3, 1))
+            @test st.data[:, :, :, :, n] == resample_z4c_adm(read_athenak_bin(paths[k]), 1.0, 9; alpha_min = 0.2).data
+        end
+        x = SVector(2.5, 0.25, 0.5, 0.5)                       # on block 1, between dumps 2 and 3
+        @test 0.7 < sqrt(-1 / inv(metric(st, x))[1, 1]) < 0.8
+        one = z4c_series_spacetime(paths[1:1], 1.0, 9; alpha_min = 0.2)
+        @test one isa ADMGrid && one.data == resample_z4c_adm(read_athenak_bin(paths[1]), 1.0, 9; alpha_min = 0.2).data
+        twin = write_bin(joinpath(dir, "twin.bin"), zvars; value = lapse(0.6), time = 4.0)
+        @test_throws ArgumentError z4c_series_spacetime([paths[1], twin], 1.0, 9)
     end
 end
 

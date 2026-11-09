@@ -200,10 +200,10 @@ end
 
 """
     adm_grid_from_metric(metric_fn, xs, ys, zs; alpha_min = 0.1, offgrid_eta = true,
-                         excise = nothing) -> ADMGrid
+                         excise = nothing, t = 0.0) -> ADMGrid
 
 Sample a covariant metric closure `metric_fn(x::SVector{4}) -> SMatrix{4,4}` on
-the `t = 0` slice at the nodes of the ranges `xs, ys, zs` and store its ADM
+the slice `x⁰ = t` at the nodes of the ranges `xs, ys, zs` and store its ADM
 data. Nodes where `excise(x)` is true, or where the metric is non-finite, take
 the collapsed-lapse fill `α = alpha_min/2`, `β = 0`, `γ = I`: invertible, and
 below the capture lapse, so a ray falling into the excised set stops on the
@@ -214,12 +214,13 @@ traversal order.
 """
 function adm_grid_from_metric(metric_fn, xs::AbstractRange, ys::AbstractRange,
                               zs::AbstractRange; alpha_min::Real = 0.1, offgrid_eta::Bool = true,
-                              excise = nothing)
+                              excise = nothing, t::Real = 0.0)
     nx, ny, nz = length(xs), length(ys), length(zs)
+    t0 = Float64(t)
     data = Array{Float64,4}(undef, 10, nx, ny, nz)
     α_fill = alpha_min > 0 ? Float64(alpha_min) / 2 : 0.0
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        x = SVector(0.0, Float64(xs[i]), Float64(ys[j]), Float64(zs[k]))
+        x = SVector(t0, Float64(xs[i]), Float64(ys[j]), Float64(zs[k]))
         if excise === nothing || !excise(x)
             g = metric_fn(x)
             α, βu, γ = _adm_from_gcov(g)

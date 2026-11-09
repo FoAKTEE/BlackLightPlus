@@ -12,7 +12,7 @@ using StaticArrays
 using HDF5: h5open, read_attribute, attributes
 import Adapt
 using ..Numerics: lerp8
-using ..Spacetime: ADMGrid
+using ..Spacetime: ADMGrid, ADMSeries
 using ..Matter: PlasmaPrimitives, GridProvider
 import ..Matter: primitives, domain_radius
 
@@ -30,7 +30,7 @@ export PRIM_NAMES, FluidBlocks, LeafTable, LevelHash, BlockScan, leaf_table, lev
        build_locate, with_locate, locate, block_sample, same_mesh
 # AthenaK files
 export AthenaKSnapshot, share_mesh, AthenaKBin, read_athenak_bin, sample_var,
-       resample_z4c_adm, z4c_grid_spacetime, athenak_bin_snapshot
+       resample_z4c_adm, z4c_grid_spacetime, z4c_series_spacetime, athenak_bin_snapshot
 # uniform grids
 export UniformGrid, grid_sample, resample, scale_density
 # series and windows

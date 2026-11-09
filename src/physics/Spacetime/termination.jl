@@ -181,9 +181,9 @@ decision, `Inf` at the first):
   continued beyond `E_n ≈ 10²` loses the ray (it comes out with garbage momenta);
   a state where `g^{tt} ≥ 0`
   (a coarse step into a hole) captures through `E_n = Inf`;
-- `ADMGrid`: `d` is the lapse `1/√(-g^{tt})` minus `alpha_min` (lapse 1 and no
-  redshift cut where `g^{tt} ≥ 0`), capture at `d < 0`, `h = max(R, 1)/C` on the
-  coordinate radius `R`; a non-finite `R` captures;
+- `ADMGrid` and `ADMSeries`: `d` is the lapse `1/√(-g^{tt})` minus `alpha_min` (lapse 1
+  and no redshift cut where `g^{tt} ≥ 0`; the series' lapse at the ray's time), capture
+  at `d < 0`, `h = max(R, 1)/C` on the coordinate radius `R`; a non-finite `R` captures;
 - any other spacetime: no capture surface, `h = max(R, 1)/C`, stop on escape or a
   non-finite `R`.
 """
@@ -215,7 +215,7 @@ end
 @inline _spin_magnitude(st::SuperposedKerrSchild, A) = st.spin[A]
 @inline _spin_magnitude(st::BoostedSuperposedKerrSchild, A) = sqrt(dot(st.spin[A], st.spin[A]))
 
-@inline function march_control(st::ADMGrid{T}, y::SVector{8,T}, r_prev::T,
+@inline function march_control(st::Union{ADMGrid{T},ADMSeries{T}}, y::SVector{8,T}, r_prev::T,
                                b::MarchBudget{T}) where {T}
     x = position(y)
     r = sqrt(y[2] * y[2] + y[3] * y[3] + y[4] * y[4])
@@ -244,9 +244,9 @@ The distance `d` above the spacetime's horizon proxy at the event `x` and the ra
 fixed-control march reads (the Monte Carlo march): `KerrSchildCartesian`
 `(r_ks - r_h, r_ks)`; `SuperposedKerrSchild` and `BoostedSuperposedKerrSchild`
 `(min_A (r_A - r_h,A), |x|)` with `r_A` the per-hole radius at the ray's time (`-Inf`
-when one is not finite); `ADMGrid` `(α - alpha_min, |x|)` with the lapse from `g^{tt}`
-where it is negative and 1 elsewhere; `Minkowski` and any other spacetime `(|x|, |x|)`,
-no horizon.
+when one is not finite); `ADMGrid` and `ADMSeries` `(α - alpha_min, |x|)` with the lapse
+from `g^{tt}` (the series' at the ray's time) where it is negative and 1 elsewhere;
+`Minkowski` and any other spacetime `(|x|, |x|)`, no horizon.
 """
 @inline function proxy_distance(st::KerrSchildCartesian, x::SVector{4})
     r = ks_radius(st, x)
@@ -263,7 +263,7 @@ end
     end
     return dmin, sqrt(x[2] * x[2] + x[3] * x[3] + x[4] * x[4])
 end
-@inline function proxy_distance(st::ADMGrid, x::SVector{4})
+@inline function proxy_distance(st::Union{ADMGrid,ADMSeries}, x::SVector{4})
     R = sqrt(x[2] * x[2] + x[3] * x[3] + x[4] * x[4])
     gtt = inverse_metric(st, x)[1, 1]
     α = gtt < zero(gtt) ? one(gtt) / sqrt(-gtt) : one(gtt)
@@ -295,10 +295,10 @@ horizon. `-Inf` (no plunge) on every other spacetime.
     horizon_floor(st) -> Real
 
 The scalar horizon proxy of a march on `st`: the Kerr outer horizon radius, the
-smallest per-hole horizon radius of a binary, the lapse floor of an ADM grid, and 0
+smallest per-hole horizon radius of a binary, the lapse floor of an ADM grid or series, and 0
 for `Minkowski` or any spacetime without a horizon.
 """
 @inline horizon_floor(st::KerrSchildCartesian) = st.r_h
 @inline horizon_floor(st::Union{SuperposedKerrSchild,BoostedSuperposedKerrSchild}) = minimum(st.r_h)
-@inline horizon_floor(st::ADMGrid) = st.alpha_min
+@inline horizon_floor(st::Union{ADMGrid,ADMSeries}) = st.alpha_min
 @inline horizon_floor(::Spacetime) = 0.0

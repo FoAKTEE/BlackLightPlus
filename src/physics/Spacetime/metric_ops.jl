@@ -11,13 +11,22 @@
                    ForwardDiff.Dual{Tg}(x[3], (z, o, z)), ForwardDiff.Dual{Tg}(x[4], (z, z, o)))
 end
 
+# Position with four hand-seeded dual partials, one per coordinate, under the same tag.
+@inline function _seed_all(x::SVector{4,T}) where {T}
+    Tg = typeof(ForwardDiff.Tag(inverse_metric_gradient, T))
+    z = zero(T); o = one(T)
+    return SVector(ForwardDiff.Dual{Tg}(x[1], (o, z, z, z)), ForwardDiff.Dual{Tg}(x[2], (z, o, z, z)),
+                   ForwardDiff.Dual{Tg}(x[3], (z, z, o, z)), ForwardDiff.Dual{Tg}(x[4], (z, z, z, o)))
+end
+
 """
     inverse_metric_gradient(st::Spacetime, x::SVector{4}) -> SArray{Tuple{4,4,4}}
 
 `dg[a, b, c] = ∂g^{ab}/∂x^c` by forward-mode AD of `inverse_metric`. Stationary
 spacetimes differentiate the three spatial coordinates with hand-seeded duals
 and return an exact-zero `t` column; the spatial columns equal those of the
-four-column Jacobian bit for bit.
+four-column Jacobian bit for bit. An `ADMSeries` seeds all four coordinates in one
+evaluation.
 """
 @inline function inverse_metric_gradient(st::Spacetime, x::SVector{4,T}) where {T}
     J = ForwardDiff.jacobian(xx -> inverse_metric(st, xx), x)    # (16, 4), column-major
@@ -33,6 +42,13 @@ end
 end
 @inline inverse_metric_gradient(::Minkowski, x::SVector{4,T}) where {T} =
     zero(SArray{Tuple{4,4,4},T})
+@inline function inverse_metric_gradient(st::ADMSeries, x::SVector{4,T}) where {T}
+    gd = inverse_metric(st, _seed_all(x))
+    return SArray{Tuple{4,4,4},T}((ntuple(k -> ForwardDiff.partials(gd[k])[1], Val(16))...,
+                                   ntuple(k -> ForwardDiff.partials(gd[k])[2], Val(16))...,
+                                   ntuple(k -> ForwardDiff.partials(gd[k])[3], Val(16))...,
+                                   ntuple(k -> ForwardDiff.partials(gd[k])[4], Val(16))...))
+end
 
 """
     metric_gradient(st::Spacetime, x::SVector{4}) -> SArray{Tuple{4,4,4}}

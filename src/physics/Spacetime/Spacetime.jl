@@ -10,7 +10,7 @@ import Adapt
 import JacobiElliptic
 using OrdinaryDiffEq: Vern7
 using SciMLBase: ODEProblem, solve, CallbackSet, ContinuousCallback, terminate!
-using ..Numerics: position, momentum, raystate, primal, cr_axis, cr_sample
+using ..Numerics: position, momentum, raystate, primal, cr_axis, cr_sample, hermite_weights
 
 include("protocol.jl")
 include("kerr_schild.jl")
@@ -18,6 +18,7 @@ include("user_metric.jl")
 include("superposed.jl")
 include("boosted_superposed.jl")
 include("adm_grid.jl")
+include("adm_series.jl")
 include("metric_ops.jl")
 include("geodesic.jl")
 include("integrators.jl")
@@ -35,8 +36,8 @@ include("analytic_frames.jl")
 export Spacetime, StationarySpacetime, ETA, metric, inverse_metric, metric_and_inverse,
        lower_index, raise_index, raise_and_norm, horizon_radius, lane,
        KerrSchildCartesian, Minkowski, UserMetric, SuperposedKerrSchild,
-       BoostedSuperposedKerrSchild, CircularOrbit, ADMGrid,
-       ks_radius, sample_adm, on_grid, adm_grid_from_metric
+       BoostedSuperposedKerrSchild, CircularOrbit, ADMGrid, ADMSeries,
+       ks_radius, sample_adm, on_grid, adm_grid_from_metric, adm_slice, adm_series_from_metric
 # derivatives and geodesics
 export inverse_metric_gradient, metric_gradient, christoffel,
        geodesic_rhs, geodesic_transport_rhs, rk4_step, null_error, energy,

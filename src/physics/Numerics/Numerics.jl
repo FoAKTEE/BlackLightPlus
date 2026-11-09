@@ -21,7 +21,7 @@ include("special.jl")
 export CL, EE, ME, MP, KB, HPL, GNEWT, MSUN, SQRT2, SIGMA_THOMSON
 export Units
 export RayState, position, momentum, raystate
-export primal, corner_weights, lerp8, cr_weights, cr_axis, cr_sample, loglinear_at
+export primal, corner_weights, lerp8, cr_weights, cr_axis, cr_sample, hermite_weights, loglinear_at
 export XSUM_LIMB_BITS, XSUM_NLIMBS, XSUM_NSLOT, XSUM_MAX_ADDENDS,
        xsum_parts, xsum_add!, xsum_atomic_add!, xsum_round, xsum_zeros, xsum_round_all
 export philox4x32, philox_rand, MCRng, mc_uniform, mc_gauss, sample_direction,

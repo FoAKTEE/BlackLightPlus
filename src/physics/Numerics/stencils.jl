@@ -1,5 +1,6 @@
 # Interpolation stencils: the 8-corner trilinear blend, the Catmull-Rom (C¹ cubic)
-# tensor stencil of the gridded metric, and the log-linear table lookup.
+# tensor stencil of the gridded metric, the C¹ cubic Hermite in time, and the log-linear
+# table lookup.
 
 """
     primal(x) -> Real
@@ -86,6 +87,58 @@ differentiates through the weights only.
     idx = (clamp(iu, 1, n), clamp(iu + 1, 1, n), clamp(iu + 2, 1, n), clamp(iu + 3, 1, n))
     return w, idx
 end
+
+"""
+    hermite_weights(ts, t) -> (w::SVector{4}, idx::NTuple{4,Int})
+
+Weights and node indices of the C¹ cubic Hermite through values at the strictly
+increasing nodes `ts` (at least two), `f(t) ≈ Σ_m w[m] f[idx[m]]`, whose tangent at node
+`k` is the derivative of the parabola through nodes `k - 1, k, k + 1` (`1, 2, 3` at the
+first node, `n - 2, n - 1, n` at the last, the chord when `n = 2`). The tangents are
+single-valued at every node, so the interpolant and its derivative are continuous; it is
+exact for quadratics, with errors `O(Δt³)` in the value and `O(Δt²)` in the derivative,
+and on uniform nodes the interior intervals are Catmull–Rom ([`cr_weights`](@ref)). The
+interval follows the `primal` of `t`, so a `Dual` `t` differentiates through the weights;
+outside `[ts[1], ts[end]]` (and for a NaN `t`, the first node) the weights select the end
+node, a constant.
+"""
+@inline function hermite_weights(ts, t)
+    n = length(ts)
+    z = zero(t); o = one(t)
+    tp = primal(t)
+    !(tp > ts[1]) && return SVector(o, z, z, z), (1, 1, 1, 1)
+    !(tp < ts[n]) && return SVector(o, z, z, z), (n, n, n, n)
+    k = clamp(searchsortedlast(ts, tp), 1, n - 1)
+    lo = n < 4 ? 1 : clamp(k - 1, 1, n - 3)
+    h = ts[k + 1] - ts[k]
+    s = (t - ts[k]) / h
+    s2 = s * s; s3 = s2 * s
+    a0 = 2s3 - 3s2 + 1; a1 = 3s2 - 2s3                       # values at k, k + 1
+    b0 = (s3 - 2s2 + s) * h; b1 = (s3 - s2) * h              # tangents at k, k + 1
+    q0, c = _parabola_tangent(ts, n, k)
+    r0, e = _parabola_tangent(ts, n, k + 1)
+    wj(j) = (j == k ? a0 : z) + (j == k + 1 ? a1 : z) + b0 * _tangent_coef(c, j - q0) +
+            b1 * _tangent_coef(e, j - r0)
+    return SVector(wj(lo), wj(lo + 1), wj(lo + 2), wj(lo + 3)),
+           (lo, min(lo + 1, n), min(lo + 2, n), min(lo + 3, n))
+end
+
+# The tangent at node j as (q0, (c0, c1, c2)): f'(t_j) ≈ c0 f[q0] + c1 f[q0 + 1] + c2 f[q0 + 2].
+@inline function _parabola_tangent(ts, n::Int, j::Int)
+    if n == 2
+        h = ts[2] - ts[1]
+        return 1, (-1 / h, 1 / h, zero(h))
+    elseif j == 1
+        h1 = ts[2] - ts[1]; h2 = ts[3] - ts[2]
+        return 1, (-(2h1 + h2) / (h1 * (h1 + h2)), (h1 + h2) / (h1 * h2), -h1 / (h2 * (h1 + h2)))
+    elseif j == n
+        h1 = ts[n - 1] - ts[n - 2]; h2 = ts[n] - ts[n - 1]
+        return n - 2, (h2 / (h1 * (h1 + h2)), -(h1 + h2) / (h1 * h2), (2h2 + h1) / (h2 * (h1 + h2)))
+    end
+    hl = ts[j] - ts[j - 1]; hr = ts[j + 1] - ts[j]
+    return j - 1, (-hr / (hl * (hl + hr)), (hr - hl) / (hl * hr), hl / (hr * (hl + hr)))
+end
+@inline _tangent_coef(c, i::Int) = 0 <= i <= 2 ? c[i + 1] : zero(c[1])
 
 """
     cr_sample(d, comp, ix, iy, iz, wx, wy, wz)

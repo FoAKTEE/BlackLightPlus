@@ -18,9 +18,9 @@ the spacetime's events:
   `r_A = r_h,A + horizon_eps` (default `HORIZON_EPS_SAMPLED`, `r_A` in the
   hole's rest frame at the ray's time), the normal-frame energy at
   `CAPTURE_REDSHIFT`, or escape on the coordinate radius;
-- `ADMGrid`: interpolated lapse at `alpha_min` (off the grid the lapse reads 1),
-  or escape on the coordinate radius (default `ADM_ESCAPE_RADIUS`, which should
-  lie inside the grid);
+- `ADMGrid` and `ADMSeries`: interpolated lapse (the series' at the ray's time) at
+  `alpha_min` (off the grid the lapse reads 1), or escape on the coordinate radius
+  (default `ADM_ESCAPE_RADIUS`, which should lie inside the grid);
 - any other spacetime: escape on the coordinate radius or `λmax` only.
 
 `save_everystep = true` keeps the trajectory (and its start).
@@ -69,7 +69,12 @@ end
     return sample_adm(st, X[2], X[3], X[4])[1]
 end
 
-function trace_geodesic(st::ADMGrid, y0::SVector{8}; λmax = 1.0e5,
+@inline function _lapse_cb(st::ADMSeries, X::SVector{4})
+    on_grid(st, X) || return one(eltype(X))
+    return sample_adm(st, X[1], X[2], X[3], X[4])[1]
+end
+
+function trace_geodesic(st::Union{ADMGrid,ADMSeries}, y0::SVector{8}; λmax = 1.0e5,
                         reltol = 1e-10, abstol = 1e-12, escape = ADM_ESCAPE_RADIUS,
                         solver = Vern7(), save_everystep = false)
     prob = ODEProblem(_rhs_ode, y0, (0.0, λmax), st)

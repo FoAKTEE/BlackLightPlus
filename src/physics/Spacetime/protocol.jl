@@ -109,7 +109,7 @@ one metric evaluation.
 The surface the march control measures capture against:
 `KerrSchildCartesian` the outer horizon radius `r₊ = 1 + √(1 - a²)`;
 `SuperposedKerrSchild` the per-hole radii (`horizon_radius(st, A)` for hole `A`);
-`ADMGrid` the lapse floor `alpha_min`.
+`ADMGrid` and `ADMSeries` the lapse floor `alpha_min`.
 """
 function horizon_radius end
 

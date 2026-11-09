@@ -74,8 +74,9 @@ end
 `dy/dλ` of the Hamiltonian flow. On a `StationarySpacetime` both halves come from
 one `raise_and_norm` at a position carrying three spatial dual partials: the
 value of the raised covector is `dx^μ/dλ`, the partials of the norm are
-`∂_i(2H)`, and `dp_t/dλ` is the exact zero. On a general spacetime the four
-`∂_μ g^{αβ}` columns come from AD and `dp_t/dλ` is kept.
+`∂_i(2H)`, and `dp_t/dλ` is the exact zero. On an `ADMSeries` the same evaluation
+carries four partials, so `dp_t/dλ = -∂_t H` comes with the spatial force. On a general
+spacetime the four `∂_μ g^{αβ}` columns come from AD and `dp_t/dλ` is kept.
 """
 @inline function geodesic_rhs(st::StationarySpacetime, y::SVector{8,T}) where {T}
     x = position(y)
@@ -88,6 +89,13 @@ value of the raised covector is `dx^μ/dλ`, the partials of the norm are
 end
 @inline geodesic_rhs(::Minkowski, y::SVector{8,T}) where {T} =
     SVector(-y[5], y[6], y[7], y[8], zero(T), zero(T), zero(T), zero(T))
+@inline function geodesic_rhs(st::ADMSeries, y::SVector{8,T}) where {T}
+    gp, h2 = raise_and_norm(st, _seed_all(position(y)), momentum(y))   # g^{μν}p_ν, 2H, ∂_μ(2H)
+    dh = ForwardDiff.partials(h2)
+    v = ForwardDiff.value
+    return SVector(v(gp[1]), v(gp[2]), v(gp[3]), v(gp[4]),
+                   -dh[1] / 2, -dh[2] / 2, -dh[3] / 2, -dh[4] / 2)
+end
 @inline function geodesic_rhs(st::Spacetime, y::SVector{8,T}) where {T}
     x = position(y)
     p = momentum(y)
