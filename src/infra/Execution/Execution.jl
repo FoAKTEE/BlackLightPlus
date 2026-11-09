@@ -38,7 +38,8 @@ export Executor, ThreadedExecutor, PoolExecutor, foreach_item!, describe,
 # devices and the pool
 export AbstractDevice, HostDevice, CUDADevice, DevicePool, select_devices, cuda_loaded,
        activate!, functional, stage_alloc, stage_free, free!, free_bytes, share_lanes!,
-       sync_lanes, prepare_launch!, stack_bytes, readonly, upload, workgroupsize, chunk_hint
+       sync_lanes, prepare_launch!, stack_bytes, readonly, upload, workgroupsize, chunk_hint,
+       register_cap, launch_capped!
 # residency
 export resident, device_program
 # ray sources

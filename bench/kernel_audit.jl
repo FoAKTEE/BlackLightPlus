@@ -23,13 +23,15 @@
 # vector of `Int32` when every item fits, of `Int` otherwise. The kernel is compiled for
 # sm_80 as a `CUDABackend` launch compiles it (`always_inline = false`, the
 # KernelAbstractions launch context, the twin after `cudaconvert`, the items, one device
-# vector per output), and `ptxas --verbose` reports the resources.
+# vector per output, `maxregs` set to the program's `register_cap`), and `ptxas --verbose`
+# reports the resources.
 #
 # Output, one line per kernel (parse with grep '^KRES'):
-#   KRES <name> regs=<n> stack=<bytes> spill_st=<bytes> spill_ld=<bytes> callee_spill=<bytes>
+#   KRES <name> regs=<n> stack=<bytes> spill_st=<bytes> spill_ld=<bytes> callee_spill=<bytes> [cap=<n>]
 # `regs` and `stack` (cumulative per-thread local memory) belong to the entry function;
 # `spill_st` and `spill_ld` are its spill stores and loads; `callee_spill` sums the spill
-# stores and loads of the non-inlined device functions it calls (the camera ray, …).
+# stores and loads of the non-inlined device functions it calls (the camera ray, …);
+# `cap` is the program's register cap, printed when it has one.
 # Names: `<product>_<mode>_<matter>_<spacetime>[_<lane>][_<variant>]`; `img` the imaging
 # program (`render`), `amr` its block-grid form (`render_amr`), `coords` its coordinate-
 # list form (`render(plan, coords)`), `dmass`/`drathigh` the `sensitivity` derivatives,
@@ -76,7 +78,7 @@ using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT
 using BlackLightPlus.Numerics: MCRng
 using BlackLightPlus.Execution: Executor, ThreadedExecutor, DevicePool, AbstractDevice, ImageBlock,
                      ChildBuffer, Generation, foreach_item!, stream_blocks!, foreach_cascade!,
-                     device_program, HostRays, image_coords
+                     device_program, HostRays, image_coords, register_cap
 import BlackLightPlus.Execution: backend, functional, activate!, upload, readonly, describe
 
 const BLP_DIR = dirname(@__DIR__)                  # this script's tree: the default baseline
@@ -160,13 +162,14 @@ BlackLightPlus.Products.hotcross_build(e::AuditExecutor) =
     BlackLightPlus.Products.hotcross_build(e.inner)
 
 # ---------------------------------------------------------------- the device programs
-# `(name, device program, item list, output element types)` of each launch of a record.
+# `(name, device program, item list, output element types, register cap)` of each launch
+# of a record.
 function launches(s)
     s.kind === :cascade && return cascade_launches(s.prog..., s.items)
     twin = device_program(POOL, AuditDevice(), s.prog)
     s.kind === :blocks &&
         (twin = BlackLightPlus.Execution.with_blocks(twin, null_array(SVector{3,Float64}, (1,))))
-    return [(nameof(typeof(s.prog)), twin, s.items, s.outs)]
+    return [(nameof(typeof(s.prog)), twin, s.items, s.outs, register_cap(s.prog))]
 end
 
 # The launches of a cascade as a lane makes them (`chunk_generations!`): the primary over
@@ -178,7 +181,7 @@ function cascade_launches(primary, layer, items)
     dev = AuditDevice()
     tp = device_program(POOL, dev, primary)
     slot = X.child_slot(primary)
-    slot === nothing && return [(:primary, tp, items, ())]
+    slot === nothing && return [(:primary, tp, items, (), register_cap(primary))]
     T = eltype(slot.photons)
     out = ChildBuffer(null_array(T, (1,)), null_array(MCRng, (1,)), null_array(Int64, (1,)),
                       slot.layout, nothing)
@@ -196,7 +199,8 @@ function cascade_launches(primary, layer, items)
     shape(sp) == shape(sl) || error("the layer's scratch differs from the primary's")
     drain =X.Drain(Tuple(p[1] for p in sp.pairs), Tuple(p[2] for p in sp.pairs), true)
     n = maximum(p -> length(p[2]), sp.pairs)
-    return [(:primary, dp, items, ()), (:layer, dl, 1:1, ()), (:drain, drain, 1:n, ())]
+    return [(:primary, dp, items, (), register_cap(primary)), (:layer, dl, 1:1, (), register_cap(layer)),
+            (:drain, drain, 1:n, (), register_cap(drain))]
 end
 
 # ---------------------------------------------------------------- the decks
@@ -298,32 +302,34 @@ const CASES = [
 ]
 
 # The kernel argument types (after the launch context) of every distinct launch of a
-# case: the device program, the items as the lane passes them, the item count and one
-# device vector per output.
+# case, with the program's register cap: the device program, the items as the lane passes
+# them, the item count and one device vector per output.
 function kernel_args(call, suffixes)
     e = AuditExecutor()
     call(e)
     seen = Any[]
-    for s in e.seen, (name, dprog, items, outs) in launches(s)
+    for s in e.seen, (name, dprog, items, outs, cap) in launches(s)
         dt = CUDA.cudaconvert(dprog)
         isbits(dt) || error("the device form of $name is not isbits")
         a = (typeof(dt), item_arg(items), Int, map(DV, outs)...)
-        any(t -> t[2] == a, seen) || push!(seen, (name, a))
+        any(t -> t[2] == a, seen) || push!(seen, (name, a, cap))
     end
     length(seen) == length(suffixes) ||
         error("$(length(seen)) distinct launches, $(length(suffixes)) named: " *
               join(string.(first.(seen)), ", "))
-    return last.(seen)
+    return [(argT = t[2], cap = t[3]) for t in seen]
 end
 
 # ---------------------------------------------------------------- compile + ptxas
-function ptx_of(argT)
+function ptx_of(argT, cap = nothing)
     k = BlackLightPlus.Execution._foreach!(CUDABackend())
     _, _, isp, _ = KernelAbstractions.launch_config(k, 1024, nothing)
     ctx = KernelAbstractions.mkcontext(k, (1024,), isp)
     tt = Tuple{typeof(ctx), argT...}
     all(isconcretetype, tt.parameters) || error("non-concrete argument type in $tt")
-    job = GPC.CompilerJob(GPC.methodinstance(typeof(k.f), tt), CONFIG)
+    config = cap === nothing ? CONFIG :
+             CC._compiler_config(nothing; arch = SM, always_inline = false, maxregs = cap)
+    job = GPC.CompilerJob(GPC.methodinstance(typeof(k.f), tt), config)
     return GPC.JuliaContext() do _
         GPC.compile(:asm, job)[1]
     end
@@ -354,11 +360,11 @@ function ptxas_resources(asm)
 end
 
 # Registers and local memory of the kernel as compiled for the current CUDA device.
-function device_resources(argT)
+function device_resources(argT, cap = nothing)
     k = BlackLightPlus.Execution._foreach!(CUDABackend())
     _, _, isp, _ = KernelAbstractions.launch_config(k, 1024, nothing)
     ctx = KernelAbstractions.mkcontext(k, (1024,), isp)
-    hk = CUDA.cufunction(k.f, Tuple{typeof(ctx), argT...})
+    hk = CUDA.cufunction(k.f, Tuple{typeof(ctx), argT...}; maxregs = cap)
     return (regs = CUDA.registers(hk), local_bytes = CUDA.memory(hk).local)
 end
 
@@ -443,18 +449,19 @@ function main(args)
         error("unknown kernel in --only $only")
 
     rows = Pair{String,Any}[]
-    for (name, argT) in kernels
+    for (name, k) in kernels
         t = time()
-        r = argT === nothing ? nothing : try
-            ptxas_resources(ptx_of(argT))
+        r = k === nothing ? nothing : try
+            ptxas_resources(ptx_of(k.argT, k.cap))
         catch err
             println("KERR ", name, " ", first(sprint(showerror, err), 300))
             nothing
         end
         push!(rows, name => r)
         r === nothing ||
-            @printf("KRES %-36s regs=%d stack=%d spill_st=%d spill_ld=%d callee_spill=%d (%.0f s)\n",
-                    name, r.regs, r.stack, r.spill_st, r.spill_ld, r.callee_spill, time() - t)
+            @printf("KRES %-36s regs=%d stack=%d spill_st=%d spill_ld=%d callee_spill=%d%s (%.0f s)\n",
+                    name, r.regs, r.stack, r.spill_st, r.spill_ld, r.callee_spill,
+                    k.cap === nothing ? "" : " cap=$(k.cap)", time() - t)
         flush(stdout)
     end
     failed = any(p -> p.second === nothing, rows)
@@ -463,10 +470,10 @@ function main(args)
     if mode === :device
         CUDA.functional() || (println("DEVICE SKIP: CUDA not functional"); return 1)
         println("# device ", CUDA.name(CUDA.device()), " capability ", CUDA.capability(CUDA.device()))
-        for ((name, argT), (_, r)) in zip(kernels, rows)
-            argT === nothing && continue
+        for ((name, k), (_, r)) in zip(kernels, rows)
+            k === nothing && continue
             d = try
-                device_resources(argT)
+                device_resources(k.argT, k.cap)
             catch err
                 println("KDEV ", name, " ERROR ", first(sprint(showerror, err), 300))
                 failed = true; continue

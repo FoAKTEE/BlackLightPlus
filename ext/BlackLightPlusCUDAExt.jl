@@ -4,17 +4,21 @@
 CUDA methods of the `Execution` device protocol for `CUDADevice`: activation, the
 KernelAbstractions backend, the functional probe, page-locked staging buffers, early
 release of device arrays, the free device memory, the lanes' streams and the arrays they
-share, the per-thread stack limit, read-only loads through the constant cache, and the
-idle-device selection behind `select_devices`.
+share, the per-thread stack limit, the launch under a register cap, read-only loads
+through the constant cache, and the idle-device selection behind `select_devices`.
 """
 module BlackLightPlusCUDAExt
 
 using BlackLightPlus, CUDA
 using Adapt: Adapt
+using KernelAbstractions: KernelAbstractions
 using BlackLightPlus.Execution: CUDADevice
 import BlackLightPlus.Execution: backend, activate!, functional, stage_alloc, stage_free, free!,
                       free_bytes, share_lanes!, lane_queue, sync_queue, queue_idle,
-                      prepare_launch!, stack_bytes, readonly, select_devices
+                      prepare_launch!, stack_bytes, launch_capped!, readonly, select_devices
+
+const KA = KernelAbstractions
+const CUDACore = CUDA.CUDACore
 
 backend(::CUDADevice) = CUDA.CUDABackend()
 
@@ -64,6 +68,67 @@ function prepare_launch!(::CUDADevice, prog)
     bytes = stack_bytes(prog)
     bytes > 0 && CUDA.limit(CUDA.LIMIT_STACK_SIZE) < bytes &&
         CUDA.limit!(CUDA.LIMIT_STACK_SIZE, bytes)
+    return nothing
+end
+
+# The launch of a KernelAbstractions kernel under a register cap: the statements of the
+# backend's launch, `(obj::KA.Kernel{CUDABackend})(args...; ndrange, workgroupsize)` of
+# CUDACore's `CUDAKernels.jl`, with `maxregs = cap` added to the compilation, so the
+# kernel's context, specialisation, block size and grid are the backend's.
+# `test/infra/execution_launch.jl` compares these statements with the backend's.
+function threads_to_workgroupsize(threads, ndrange)
+    total = 1
+    return map(ndrange) do n
+        x = min(div(threads, total), n)
+        total *= x
+        return x
+    end
+end
+
+function launch_capped!(::CUDADevice, obj::KA.Kernel{CUDA.CUDABackend}, args::Tuple, ndrange,
+                        workgroupsize, cap::Integer)
+    backend = KA.backend(obj)
+
+    ndrange, workgroupsize, iterspace, dynamic = KA.launch_config(obj, ndrange, workgroupsize)
+    # this might not be the final context, since we may tune the workgroupsize
+    ctx = KA.mkcontext(obj, ndrange, iterspace)
+
+    # If the kernel is statically sized we can tell the compiler about that
+    if KA.workgroupsize(obj) <: KA.StaticSize
+        maxthreads = prod(KA.get(KA.workgroupsize(obj)))
+    else
+        maxthreads = nothing
+    end
+
+    kernel = @cuda launch=false always_inline=backend.always_inline maxthreads=maxthreads maxregs=cap obj.f(ctx, args...)
+
+    # figure out the optimal workgroupsize automatically
+    if KA.workgroupsize(obj) <: KA.DynamicSize && workgroupsize === nothing
+        config = CUDACore.launch_configuration(kernel.fun; max_threads=prod(ndrange))
+        if backend.prefer_blocks
+            # Prefer blocks over threads
+            threads = min(prod(ndrange), config.threads)
+            cu_blocks = max(cld(prod(ndrange), threads), config.blocks)
+            threads = cld(prod(ndrange), cu_blocks)
+        else
+            threads = config.threads
+        end
+
+        workgroupsize = threads_to_workgroupsize(threads, ndrange)
+        iterspace, dynamic = KA.partition(obj, ndrange, workgroupsize)
+        ctx = KA.mkcontext(obj, ndrange, iterspace)
+    end
+
+    blocks = length(KA.blocks(iterspace))
+    threads = length(KA.workitems(iterspace))
+
+    if blocks == 0
+        return nothing
+    end
+
+    # Launch kernel
+    kernel(ctx, args...; threads, blocks)
+
     return nothing
 end
 

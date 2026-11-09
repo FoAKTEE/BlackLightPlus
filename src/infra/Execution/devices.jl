@@ -10,8 +10,8 @@ A place where a `PoolExecutor` launches kernels. A device answers [`backend`](@r
 [`activate!`](@ref), [`functional`](@ref), [`stage_alloc`](@ref)/[`stage_free`](@ref),
 [`free!`](@ref), [`free_bytes`](@ref), [`share_lanes!`](@ref), [`lane_queue`](@ref),
 [`sync_queue`](@ref), [`queue_idle`](@ref), [`prepare_launch!`](@ref),
-[`readonly`](@ref) and [`wavefront`](@ref). Devices compare by value, so two handles of the same device are
-interchangeable.
+[`launch_capped!`](@ref), [`readonly`](@ref) and [`wavefront`](@ref). Devices compare by
+value, so two handles of the same device are interchangeable.
 """
 abstract type AbstractDevice end
 
