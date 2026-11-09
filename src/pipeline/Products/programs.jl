@@ -439,13 +439,13 @@ end
 # (Compton) times faster than in the backend's blocks of 256.
 workgroupsize(::MCPrimary) = 32
 
-# Register caps of the Monte Carlo marches: the thin march compiles to at most 168
-# registers, a march that scatters (primaries and layers) to 128. Uncapped, every march
-# takes 255 registers and a multiprocessor holds 8 of its warps; at the caps it holds 12
-# and 16. Of the caps 255, 192, 168 and 128, these run the torus photon phases at stride 1
-# fastest on the A100, the spills they add included.
+# The thin march compiles to at most 168 registers: uncapped, every Monte Carlo march takes
+# 255 and a multiprocessor holds 8 of its warps, at the cap 12. On the A100 the torus thin
+# photon phase at stride 1 runs in 0.90 of its uncapped time at the cap, the spills it adds
+# included; a march that scatters runs in 0.97 of its time at 128 and keeps the compiler's
+# limit.
 register_cap(p::MCPrimary) = march_cap(p.transport)
-march_cap(::MCTransport{C,S,P,O,A,Val{true}}) where {C,S,P,O,A} = 128
+march_cap(::MCTransport{C,S,P,O,A,Val{true}}) where {C,S,P,O,A} = nothing
 march_cap(::MCTransport) = 168
 
 """
@@ -474,7 +474,6 @@ function (p::MCLayer)(item, i)
 end
 
 workgroupsize(::MCLayer) = 32
-register_cap(p::MCLayer) = march_cap(p.transport)
 
 # ---------------------------------------------------------------- host-only programs
 

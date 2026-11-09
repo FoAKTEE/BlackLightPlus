@@ -32,6 +32,13 @@ struct CrossingProgram{S,B,R,D,O} <: Function
 end
 Adapt.@adapt_structure CrossingProgram
 
+# The production march (classical RK4) compiles to at most 168 registers: uncapped it takes
+# 255 and a multiprocessor holds 8 of its warps, at the cap 12. On the A100 disk B 500²
+# (Kerr a = 0.99, orders 0-2) renders in 0.92 of its uncapped time at the cap, faster than
+# at 128 or at any block size from 32 to 256; the ninth-order march gains nothing from a
+# cap and keeps the compiler's limit.
+register_cap(::CrossingProgram{S,<:MarchBudget{<:Any,ClassicalRK4}}) where {S} = 168
+
 """
     crossing_outputs(K, n) -> NTuple{5K + 1,Vector{Float64}}
 
