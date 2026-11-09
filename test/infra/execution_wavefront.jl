@@ -7,8 +7,9 @@
 # not a multiple of the block, at every child capacity (the advance runs again for its
 # children); the children of the last generation are counted and dropped; the started
 # primaries, the retirements and the per-device counts of `describe` close; every device
-# takes blocks, also of a call smaller than one cohort; a call with
-# children doubles its budget to at most `WAVE_SPAWN_CAP`; the child slots carry over
+# takes blocks, also of a call smaller than one cohort; a call starts from `WAVE_BUDGET`
+# without children and `WAVE_SPAWN_BUDGET` with them, and doubles its budget to at most
+# `WAVE_SPAWN_CAP` with them; the child slots carry over
 # calls; a state that cannot advance and a state that reports a fault are errors;
 # accumulator twins and child slots are released and the residency cache does not grow
 # over calls; calls outside `with_wavefront_settings` use the defaults; threads, host
@@ -623,7 +624,14 @@ const DEFAULTS = (budget = Execution.WAVE_BUDGET, cohort = Execution.WAVE_COHORT
         run_toy(ex, N)
         @test describe(ex).settings == DEFAULTS
         @test with_wavefront_settings(() -> 42; budget = typemax(Int)) == 42
-        for kw in ((budget = 0,), (cohort = 0,), (refill = -1,), (doubling = 0,), (sort_every = -1,))
+        # the budget a call starts from: WAVE_BUDGET without children, WAVE_SPAWN_BUDGET with them
+        for (d, K) in ((0, Execution.WAVE_BUDGET), (2, Execution.WAVE_SPAWN_BUDGET))
+            r = with_wavefront_settings(doubling = false) do
+                run_toy(ex, N; depth = d)
+            end
+            @test same(r, d) && describe(ex).settings.budget == K && all(it -> it.K == K, only(wave_log(ex)))
+        end
+        for kw in ((budget = -1,), (cohort = 0,), (refill = -1,), (doubling = 0,), (sort_every = -1,))
             @test_throws ArgumentError with_wavefront_settings(() -> nothing; kw...)
         end
         t = toy(10)

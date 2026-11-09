@@ -164,10 +164,9 @@ const MCStage = Union{MCStart,MCAdvance,MCRetire,MCBranch}
 Execution.wave_state(::Union{MCStage,MCKey}) = MarchState
 Execution.wave_steps(p::MCAdvance) = max_steps(p.transport.ctl)
 Execution.generation(s::MarchState) = Int(s.entry.nscatt)
-# Blocks of four warps for the stage and key launches: on the A100 the torus Compton photon
-# phase at stride 1 runs fastest with them at the wavefront's default budget and cohort, in
-# 0.97 of its time at budget 32, cohort 2^18 and blocks of one warp; the thin phase stays
-# within its spread.
+# Blocks of four warps for the stage and key launches (`with_wavefront_settings`' `workgroup`
+# overrides them): on the A100 the scattering photon phase runs fastest with them among
+# blocks of 32 to 256 items.
 workgroupsize(::Union{MCStage,MCKey}) = 128
 
 """
