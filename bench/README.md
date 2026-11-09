@@ -190,7 +190,8 @@ recording executor's threads and are not audited. Each kernel is compiled for th
 list its lane passes: a range as `UnitRange{Int}` (the analytic pixels, the block chunks,
 the trace windows, the cascade's chunks, generations and drain), any other list (the
 pixel queues, the photon-ring band points) as a device vector of `Int32` when every item
-fits, of `Int` otherwise. The audited kernels are those of the BlackLightPlus tree the
+fits, of `Int` otherwise, with the program's `register_cap` as `maxregs` (the Monte Carlo
+primaries and layers; `cap=` on their lines). The audited kernels are those of the BlackLightPlus tree the
 environment loads (its synthetic decks included); from the repository root, in a CUDA
 environment with the runtime pinned in its `LocalPreferences.toml`, no GPU needed:
 

@@ -301,10 +301,10 @@ const CASES = [
                           C = 32.0, stride = 2, backend = e), ["_primary", "_layer", "_drain"]),
 ]
 
-# The kernel argument types (after the launch context) of every distinct launch of a
-# case, with the program's register cap: the device program, the items as the lane passes
-# them, the item count and one device vector per output.
-function kernel_args(call, suffixes)
+# Every distinct launch of a case: its kernel argument types (after the launch context:
+# the device program, the items as the lane passes them, the item count and one device
+# vector per output) and the program's register cap.
+function kernel_launches(call, suffixes)
     e = AuditExecutor()
     call(e)
     seen = Any[]
@@ -319,6 +319,9 @@ function kernel_args(call, suffixes)
               join(string.(first.(seen)), ", "))
     return [(argT = t[2], cap = t[3]) for t in seen]
 end
+
+# The kernel argument types of every distinct launch of a case.
+kernel_args(call, suffixes) = [k.argT for k in kernel_launches(call, suffixes)]
 
 # ---------------------------------------------------------------- compile + ptxas
 function ptx_of(argT, cap = nothing)
@@ -435,7 +438,7 @@ function main(args)
         names = prefix .* suffixes
         wanted === nothing || any(in(wanted), names) || continue
         args_of = try
-            kernel_args(call, suffixes)
+            kernel_launches(call, suffixes)
         catch err
             println("KERR ", prefix, " capture: ", first(sprint(showerror, err), 300))
             fill(nothing, length(names))
