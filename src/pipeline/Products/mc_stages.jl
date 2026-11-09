@@ -1,9 +1,10 @@
 # The stage programs of the device wavefront of a Monte Carlo run: the statements of
-# `MCPrimary` cut at the loop back edge of the march. `MCStart` emits a primary and opens
-# its march, `MCAdvance` runs a live march for at most the launch's budget of loop
-# iterations, `MCRetire` closes a stopped march: its record and its tally. Every value the
-# march carries from one iteration to the next lives in the `MarchState`, so a march cut
-# into any number of advances is the uncut march.
+# `MCPrimary` and `MCLayer` cut at the loop back edge of the march. `MCStart` emits a
+# primary and opens its march, `MCBranch` opens the march of a child, `MCAdvance` runs a
+# live march for at most the launch's budget of loop iterations (its children kicked
+# inline, as `track!` kicks them), `MCRetire` closes a stopped march: its record and its
+# tally. Every value the march carries from one iteration to the next lives in the
+# `MarchState`, so a march cut into any number of advances is the uncut march.
 
 # The march of one photon of a run: the transport's fixed inputs and the sink of a stripe.
 @inline mc_march(t::MCTransport, sink) =
@@ -47,7 +48,8 @@ of the launch's cohort runs `march_steps` of its march up to loop iteration
 and is admitted to the live queue while its outcome is `LIVE_MARCH`, to the stopped queue
 otherwise ([`Execution.admit!`](@ref)); a live state whose iteration did not grow, or a
 stopped state without an outcome, counts a fault ([`Execution.fault!`](@ref)). Its
-children go to the sink. It writes no accumulator.
+children are kicked inside the march by the sink's `branch!` and go to the child queue
+the launch binds as the sink's `ChildBuffer`. It writes no accumulator.
 """
 struct MCAdvance{T,K,Q} <: Function
     transport::T
@@ -97,19 +99,45 @@ function (p::MCRetire)(item, i)
     return nothing
 end
 
-const MCStage = Union{MCStart,MCAdvance,MCRetire}
+"""
+    MCBranch(transport, sink)
+
+The branch stage of a Monte Carlo wavefront, called as `prog(item, i)`: child `j = item`
+of the launch's child queue, a scattered `Superphoton` on its genealogy stream, opens its
+march by `march_open` of the [`MCTransport`](@ref) `transport` and is handed to
+[`Execution.admit_child!`](@ref), which admits it to the live queue or counts it as
+dropped beyond the call's depth. The statements of [`MCLayer`](@ref) before its march.
+"""
+struct MCBranch{T,K,Q} <: Function
+    transport::T
+    sink::K
+    queues::Q
+end
+MCBranch(transport, sink) = MCBranch(transport, sink, Execution.WaveQueues())
+Adapt.@adapt_structure MCBranch
+
+function (p::MCBranch)(item, i)
+    q = p.queues
+    @inbounds sph = q.C.photons[item]
+    @inbounds rng = q.C.rngs[item]
+    Execution.admit_child!(q, march_open(mc_march(p.transport, p.sink), sph, rng))
+    return nothing
+end
+
+const MCStage = Union{MCStart,MCAdvance,MCRetire,MCBranch}
 Execution.wave_state(::MCStage) = MarchState
 Execution.wave_steps(p::MCAdvance) = max_steps(p.transport.ctl)
+Execution.generation(s::MarchState) = Int(s.entry.nscatt)
 workgroupsize(::MCStage) = 32
 
 """
     mc_wavefront(source, transport, sink, seed, primary, layer, depth) -> Wavefront
 
 The [`Execution.Wavefront`](@ref) of a stationary Monte Carlo run: the stage programs
-[`MCStart`](@ref), [`MCAdvance`](@ref), [`MCRetire`](@ref) and the history programs
-`primary` and `layer` of the same `source`, `transport`, `sink` and `seed`. The run's
-scattering depth `depth` must be the transport's `max_scatt`, so that a photon of the
-last generation never spawns.
+[`MCStart`](@ref), [`MCAdvance`](@ref), [`MCRetire`](@ref) and, for a scattering run
+(`depth > 0`), [`MCBranch`](@ref), and the history programs `primary` and `layer` of the
+same `source`, `transport`, `sink` and `seed`. The run's scattering depth `depth` must be
+the transport's `max_scatt`, so that a photon of the last generation never spawns.
 """
 function mc_wavefront(source, transport::MCTransport, sink::MCSink, seed::UInt32, primary,
                       layer, depth::Integer)
@@ -118,5 +146,7 @@ function mc_wavefront(source, transport::MCTransport, sink::MCSink, seed::UInt32
                             "max_scatt $(transport.opac.max_scatt)"))
     return Execution.Wavefront(; start = MCStart(source, transport, sink, seed),
                                advance = MCAdvance(transport, sink),
-                               retire = MCRetire(transport, sink), primary, layer)
+                               retire = MCRetire(transport, sink),
+                               branch = depth > 0 ? MCBranch(transport, sink) : nothing,
+                               primary, layer)
 end

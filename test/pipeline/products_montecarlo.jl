@@ -3,8 +3,9 @@
 # budget, the scattered power independent of the bias with absorption on, the torus
 # spectrum on the block deck against the transport-tier template with its per-order split
 # and power budget, bitwise agreement across executors, device counts, chunks and
-# child-buffer capacities (the overflow rerun), thin runs on the device wavefront of
-# `WaveHost` pools (bitwise among device counts and budgets, within 1e-11 of threads), the
+# child-buffer capacities (the overflow rerun), thin and scattering runs on the device
+# wavefront of `WaveHost` pools (bitwise among device counts, budgets and child slots, within
+# 1e-11 of threads; the straight-line march of the sphere bitwise the threads), the
 # emission zones, the programs' device contract, the process's hot-cross table, the backend
 # keyword, the run record and the photon order key.
 using Test, BlackLightPlus, StaticArrays
@@ -14,7 +15,7 @@ using BlackLightPlus.Products: mc_spectrum, emission_zones, analytic_nuLnu, incl
                     GRMHDSpectrumResult, MCSink, MCTransport, SphereSource, ZoneSource, MCPrimary,
                     MCLayer, mc_ledger, ledger_sum, ledger_count, LEDGER_STRIPES, render, grid_tables,
                     grid_zones, ZoneSums, ZoneCounts, hotcross_build, photon_key, PHOTON_KEYS,
-                    MCStart, MCAdvance, MCRetire
+                    MCStart, MCAdvance, MCRetire, MCBranch
 using BlackLightPlus.Spacetime: Minkowski, KerrSchildCartesian, BoostedSuperposedKerrSchild, CircularOrbit,
                      inverse_metric, proxy_distance, SuperposedKerrSchild, horizon_floor
 using BlackLightPlus.Matter: UniformSphere
@@ -26,7 +27,7 @@ using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, Spectrum, ExactB
                      PolarBands, InclinationBands, band, nuLnu_total, nuLnu_solid, total_power,
                      total_weight, mean_energy, scalar, add!, describe, backend!, reset_backend!,
                      nuLnu_sigma, foreach_item!, with_wavefront_settings, WaveQueues, Cohort,
-                     StateBuffer, WaveSwap, wave_state, wave_steps
+                     StateBuffer, WaveSwap, wave_state, wave_steps, generation, Generation
 using BlackLightPlus.Data: zone_tables, emission_sites
 const DK = Main.Decks
 
@@ -356,16 +357,57 @@ end
         # the straight-line march of the sphere: bitwise the threads
         @test same(mc_spectrum(p, 6_000; seed = 7, n_ebins = 60, backend = ex),
                    mc_spectrum(p, 6_000; seed = 7, n_ebins = 60, backend = :cpu))
-        # scattering keeps the cascade
-        ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
-        kw = (scattering = true, table = THOMSON, seed = 0xBEEF, nu_max = 1.0e13, n_ebins = 60,
-              bias = Bias(ss))
-        @test same(mc_spectrum(prepare(ss), 1_500; kw..., backend = ex),
-                   mc_spectrum(prepare(ss), 1_500; kw..., backend = :cpu))
-        @test describe(ex).schedule == :cascade
         # the cascade of the same pool compiles the programs of threads: their bits
         @test same(with_wavefront_settings(() -> mc_spectrum(pt, 800; tw..., backend = ex);
                                            wavefront = false), thr)
+        @test describe(ex).schedule == :cascade
+    end
+
+    @testset "the device wavefront: scattering runs on WaveHost pools" begin
+        ss = UniformSphere(n_e = 5.0e18, theta_e = 3.0, B = 100.0, R = 3.0e5)
+        kw = (scattering = true, table = THOMSON, seed = 0xBEEF, nu_max = 1.0e13, n_ebins = 60,
+              bias = Bias(ss))
+        tk = (scattering = true, table = THOMSON, bias = 1.0e5, seed = 0xC0FFEE, C = 32.0,
+              n_ebins = 80, stride = 2)
+        sph = mc_spectrum(prepare(ss), 1_500; kw..., backend = :cpu)
+        tor = mc_spectrum(pt, 800; tk..., backend = :cpu)
+        @test sph.n_children > 10_000 && tor.n_children > 100
+        hw = map(1:3) do nd
+            ex = PoolExecutor(DK.wavehosts(nd))
+            a = mc_spectrum(prepare(ss), 1_500; kw..., backend = ex)
+            d = describe(ex)
+            @test d.schedule == :wavefront && sum(d.admitted) == a.n_primary &&
+                  sum(d.spawned) == a.n_children
+            b = mc_spectrum(pt, 800; tk..., backend = ex)
+            @test describe(ex).schedule == :wavefront && sum(describe(ex).spawned) == b.n_children
+            (a, b)
+        end
+        @test all(r -> same(r[1], hw[1][1]) && same(r[2], hw[1][2]), hw)
+        # every budget with the doubling off and every child capacity; capacity 1 at a cohort of
+        # 64 and a budget of 1 overflows the child queue in every iteration with two children
+        ex = PoolExecutor(DK.wavehosts(2))
+        for cap in (nothing, 1, 3)
+            torus_reruns = 0
+            for K in (1, 7, 32, typemax(Int))
+                a, ra, b, rb = with_wavefront_settings(budget = K, doubling = false, cohort = 64, refill = 37) do
+                    a = mc_spectrum(prepare(ss), 1_500; kw..., capacity = cap, backend = ex)
+                    ra = describe(ex).reruns
+                    b = mc_spectrum(pt, 800; tk..., capacity = cap, backend = ex)
+                    (a, ra, b, describe(ex).reruns)
+                end
+                @test same(a, hw[1][1]) && same(b, hw[1][2]) && all(>(0), describe(ex).admitted)
+                cap === nothing || @test ra > 0
+                torus_reruns += rb
+            end
+            cap === nothing || @test torus_reruns > 0
+        end
+        # the straight-line march of the sphere: bitwise the threads; the curved march of the
+        # torus runs track! in another inlining context on threads: equal counts, sums within 1e-11
+        @test same(hw[1][1], sph)
+        @test close_to(hw[1][2], tor, 1.0e-11) && hw[1][2].n_children == tor.n_children
+        # the cascade of the same pool compiles the programs of threads: their bits
+        @test same(with_wavefront_settings(() -> mc_spectrum(pt, 800; tk..., backend = ex);
+                                           wavefront = false), tor)
         @test describe(ex).schedule == :cascade
     end
 
@@ -413,17 +455,33 @@ end
         # the stage programs of the wavefront: isbits on a device, with and without queues
         states = Vector{MarchState}(undef, 8); done = Vector{MarchState}(undef, 8)
         cnt = zeros(Int64, 5)
-        q = WaveQueues(Cohort(states, nothing), StateBuffer(states, view(cnt, 1:1)), nothing,
-                       StateBuffer(done, view(cnt, 2:2)), cnt, 32, 0, 0)
-        stages = (MCStart(src, ztr, zsink, UInt32(1)), MCAdvance(ztr, zsink), MCRetire(ztr, zsink))
+        kids = Generation([generate(ss, tabs, primary_rng(3, g))[1] for g in 1:2],
+                          [primary_rng(3, g) for g in 1:2])
+        q = WaveQueues(Cohort(states, nothing), StateBuffer(states, view(cnt, 1:1)), kids,
+                       StateBuffer(done, view(cnt, 2:2)), cnt, 32, 0, 3)
+        stages = (MCStart(src, ztr, zsink, UInt32(1)), MCAdvance(ztr, zsink), MCRetire(ztr, zsink),
+                  MCBranch(ztr, zsink))
         @test all(DK.device_isbits, stages)
-        st, adv, ret = map(x -> Adapt.adapt(WaveSwap(q, nothing), x), stages)
-        @test all(DK.device_isbits, (st, adv, ret))
+        st, adv, ret, br = map(x -> Adapt.adapt(WaveSwap(q, nothing), x), stages)
+        @test all(DK.device_isbits, (st, adv, ret, br))
         @test allocs(st, 17, 1) == 0 && ledger_count(zsink.ledger, 6) == 4
         @test allocs(adv, 1, 1) == 0 && cnt[1] + cnt[2] == 2 && cnt[5] == 0
         done[1] = states[1]
         @test allocs(ret, 1, 1) == 0
-        @test wave_state(adv) === MarchState && wave_steps(adv) == ctr.nmax
+        @test wave_state(adv) === wave_state(br) === MarchState && wave_steps(adv) == ctr.nmax
+        # the branch opens a child into the live queue; beyond the depth it counts it dropped
+        cnt .= 0
+        @test allocs(br, 2, 1) == 0 && cnt[1] == 2 && cnt[4] == 0
+        @test generation(states[1]) == kids.photons[2].nscatt == 0
+        k1 = kids.photons[1]
+        once = Generation([Superphoton(k1.x, k1.p, k1.w; nscatt = Int32(1))], kids.rngs[1:1])
+        for (depth, live, dropped) in ((1, 3, 0), (0, 3, 1))
+            b = Adapt.adapt(WaveSwap(WaveQueues(nothing, q.B, once, nothing, cnt, 32, 0, depth), nothing),
+                            MCBranch(ztr, zsink))
+            b(1, 1)
+            @test cnt[1] == live && cnt[4] == dropped
+        end
+        @test generation(states[3]) == 1
         @test length(mc_ledger().n) == 11 * LEDGER_STRIPES
         # the zone a primary is generated from is the site's, decoded again
         z9 = BlackLightPlus.Products.emit(src, 17, primary_rng(1, 17))[1]

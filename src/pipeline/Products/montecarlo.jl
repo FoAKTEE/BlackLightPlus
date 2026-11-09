@@ -5,7 +5,8 @@
 # children are integer sums, so a spectrum is bitwise independent of the executor, the
 # device count, the chunking and the order of arrival. Scattering runs as a cascade
 # (`Execution.foreach_cascade!`): within each chunk of primaries, layer n tracks the
-# children that layer n − 1 spawned.
+# children that layer n − 1 spawned; on GPUs as the device wavefront
+# (`Execution.foreach_wavefront!`), whose cohort holds photons of every layer.
 #
 # Normalisation: the weight table fixes w(ν) = Σ_zones ∫j_ν dΩ dV/(h Ns/ln(ν_max/ν_min)),
 # so the generated frequency density is uniform in ln ν, the expected number of primaries
@@ -235,19 +236,24 @@ cm for a plan without parameters). Binning: `bands` (`PolarBands(6)` for the sph
 `InclinationBands((17, 50, 90), 10)` on a grid, which takes inclination bands only),
 `n_ebins` log-frequency bins over `[spec_nu_min, spec_nu_max]`.
 
-Scattering runs as a cascade over chunks of primaries ([`Execution.foreach_cascade!`](@ref)):
-within a chunk, each layer's children are tracked by the next layer, up to `max_scatt`
-layers, and stay on the worker that runs the chunk. On devices a layer starts with a
-child buffer of `capacity` slots (`nothing`: at least 4096, half the chunk's primaries,
-the most children a layer on the device has spawned in the process, and the slots an
-eighth of the device's free memory holds, at most 16 per primary); a layer whose buffer
-overflows is rerun into zeroed scratch accumulators with a buffer for the counted
-children and an eighth more, so no child is lost or counted twice. On threads each task's
-two child buffers start with `capacity` slots (`nothing`: 4096) and grow; a photon whose
-children overflow is rerun the same way. Without scattering, on GPUs, the primaries run on
-the device wavefront ([`Execution.foreach_wavefront!`](@ref)): each photon's march is cut
-into launches of at most a budget of loop iterations over a cohort that a block counter
-shared by the devices refills, with the bits of the cascade.
+On GPUs a stationary run, with or without scattering, runs on the device wavefront
+([`Execution.foreach_wavefront!`](@ref)) with the bits of the cascade: each photon's march
+is cut into launches of at most a budget of loop iterations over a cohort that a block
+counter shared by the devices refills, and the children a launch spawns join the cohort of
+their device. The launch's child queue holds `capacity` slots (`nothing`: the cohort, or
+the larger queue an earlier call grew on the device), and a launch whose children overflow
+it runs again with a queue for the counted children and an eighth more. Elsewhere
+scattering runs as a cascade over chunks of primaries
+([`Execution.foreach_cascade!`](@ref)): within a chunk, each layer's children are tracked
+by the next layer, up to `max_scatt` layers, and stay on the worker that runs the chunk. On
+the devices of a cascade a layer starts with a child buffer of `capacity` slots
+(`nothing`: at least 4096, half the chunk's primaries, the most children a layer on the
+device has spawned in the process, and the slots an eighth of the device's free memory
+holds, at most 16 per primary); a layer whose buffer overflows is rerun into zeroed
+scratch accumulators with a buffer for the counted children and an eighth more, so no
+child is lost or counted twice. On threads each task's two child buffers start with
+`capacity` slots (`nothing`: 4096) and grow; a photon whose children overflow is rerun the
+same way.
 
 Emission over a window: with `window = (t_a, t_b)` (coordinate time) the plasma emits over
 the window and the result is a [`TimedSpectrumResult`](@ref): the stationary result of the
@@ -436,10 +442,10 @@ end
 # `layout.max_layer` layers of `MCLayer` over the children of the layer before, into the
 # run totals `orders` and `ledger` and, with `timed` (a `TimedRecord`), the time-resolved
 # bins and the clock of `TimedPrimary` and `TimedLayer`, gathered here. A stationary run
-# goes through the wavefront of its stage programs (`foreach_wavefront!`, which serves the
-# primaries of a run without scattering on devices that answer `wavefront` and runs the
-# cascade otherwise); a run over a window is a cascade. Without scattering only the
-# primaries run. Returns the number of children.
+# goes through the wavefront of its stage programs (`foreach_wavefront!`, which serves
+# every layer on devices that answer `wavefront` and runs the cascade otherwise); a run
+# over a window is a cascade. Without scattering only the primaries run. Returns the number
+# of children.
 function run_layers(exec, source, transport, seed::UInt32, n0::Int, orders, ledger, layout,
                     scatter::Bool, capacity; timed = nothing)
     slot = scatter ? ChildBuffer(Superphoton, 0, layout) : nothing
