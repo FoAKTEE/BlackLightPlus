@@ -1,9 +1,10 @@
 # Residency: a host object as a device sees it, built by `Adapt` with every host array
 # replaced by its copy on the device. Array copies are cached per pool and device by the
 # identity of the host array, which the cache holds weakly: a dropped host array frees
-# its entries once every lane of the device has synchronised. A cached host array must
-# not be mutated in place afterwards, and its copy is only read: the lanes of a device
-# share it. The program twins of a call are per lane.
+# its entries once every lane of the device has synchronised. A cached host array is not
+# mutated in place unless its copies are dropped first ([`invalidate!`](@ref), as the
+# products do for the arrays a caller gives them to overwrite), and a copy is only read:
+# the lanes of a device share it. The program twins of a call are per lane.
 
 """
     DeviceAdaptor(pool, dev, readonly)
@@ -24,20 +25,54 @@ function Adapt.adapt_storage(to::DeviceAdaptor, a::Array)
     return to.readonly ? readonly(to.dev, t) : t
 end
 
-# Evict the entries of the residency cache of `dev` whose host object has been collected:
-# wait for every lane of the device, then free their device arrays. The wait is the
-# guarantee, so the lane check does not apply: a lane may queue new work as soon as it
-# returns. Runs under the cache's lock.
-function evict!(pool::DevicePool, dev::AbstractDevice, cache::ResidencyCache)
-    dead = [k for (k, (w, _)) in cache.twins if w.value === nothing]
-    isempty(dead) && return cache
+# Evict the entries of the residency cache of `dev` whose host object has been collected.
+evict!(pool::DevicePool, dev::AbstractDevice, cache::ResidencyCache) =
+    drop_twins!(w -> w.value === nothing, pool, dev, cache)
+
+# Drop the entries of the residency cache of `dev` whose weak reference to the host object
+# satisfies `pred`: wait for every lane of the device, then free their device arrays. The
+# wait is the guarantee, so the lane check does not apply: a lane may queue new work as
+# soon as it returns. Runs under the cache's lock.
+function drop_twins!(pred, pool::DevicePool, dev::AbstractDevice, cache::ResidencyCache)
+    hit = [k for (k, (w, _)) in cache.twins if pred(w)]
+    isempty(hit) && return cache
     sync_lanes(pool, dev)
-    for k in dead
+    for k in hit
         free!(dev, cache.twins[k][2])
         delete!(cache.twins, k)
     end
     return cache
 end
+
+"""
+    invalidate!(arrays) -> nothing
+    invalidate!(pool, arrays) -> pool
+
+Drop the device copies of every host array that shares memory with one of `arrays`
+(`Base.mightalias`: the array itself, a `vec`, `reshape` or view of it) from the residency
+caches of `pool`, or of every pool whose caches hold a copy, before the caller overwrites
+`arrays` in place: on each device holding such a copy, every lane synchronised, then the
+copies freed. The next upload of such an array copies its new values. Call it outside the
+pools' lanes, while no run reads `arrays`.
+"""
+function invalidate!(pool::DevicePool, arrays)
+    isopen(pool) || return pool
+    stale(w) = (h = w.value; h !== nothing && any(a -> Base.mightalias(h, a), arrays))
+    for (d, dev) in enumerate(pool.devices)
+        cache = pool.resident[d]
+        @lock cache.lock drop_twins!(stale, pool, dev, cache)
+    end
+    return pool
+end
+
+function invalidate!(arrays)
+    foreach(p -> invalidate!(p, arrays), lock(() -> collect(keys(CACHING_POOLS)), CACHING_POOLS))
+    return nothing
+end
+
+# The pools that have uploaded a host array to a residency cache, held weakly: the pools
+# `invalidate!(arrays)` visits, whether registered or built by the caller.
+const CACHING_POOLS = WeakKeyDict{DevicePool,Nothing}()
 
 # The copy of `host` on `dev`, uploaded on first request and shared by the lanes of `dev`
 # (`share_lanes!`, while `lane_sharing()`). Runs on a task with `dev` active.
@@ -51,6 +86,7 @@ function cached_twin(pool::DevicePool, dev::AbstractDevice, host::Array)
             t = upload(dev, host)
             lane_sharing() && share_lanes!(dev, t)
             slot = cache.twins[id] = (WeakRef(host), t)
+            CACHING_POOLS[pool] = nothing
         end
         slot[2]
     end

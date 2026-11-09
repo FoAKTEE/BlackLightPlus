@@ -1,5 +1,6 @@
 # Residency: a host object's device twin is cached per pool and device by identity and
-# held weakly; program twins read their arrays through the read-only wrapper, which a
+# held weakly, and dropped when an array sharing its memory is about to be overwritten
+# (`invalidate!`); program twins read their arrays through the read-only wrapper, which a
 # struct field carries on the KernelAbstractions CPU backend; ray sources and programs
 # built from them are `isbits` once adapted to a device.
 using Test, BlackLightPlus
@@ -73,6 +74,30 @@ end
     end
     @test Ex.resident_count(exec, dev) == n0
     @test resident(exec, dev, keep) == keep                       # live entries stay
+end
+
+@testset "invalidate!: the copies of overwritten host arrays are dropped" begin
+    exec = PoolExecutor(Decks.hosts(2); lanes = 2, chunk = 7)
+    own = PoolExecutor(Ex.DevicePool(Decks.hosts(2); lanes = 1))      # not in the registry
+    for e in (exec, own), dev in (HostDevice(1), HostDevice(2))
+        a = rand(4, 3); keep = rand(6)
+        t = resident(e, dev, a); tk = resident(e, dev, keep)
+        a .= 1.0                                    # mutated without invalidation: stale
+        @test resident(e, dev, a) === t && t != a
+        n = Ex.resident_count(e, dev)
+        Ex.invalidate!((vec(a),))                   # an alias of `a` drops its copy
+        @test Ex.resident_count(e, dev) == n - 1
+        @test resident(e, dev, a) == a && resident(e, dev, a) !== t
+        @test resident(e, dev, keep) === tk         # no shared memory: kept
+        v = view(keep, 2:3)
+        Ex.invalidate!(e.pool, (v,))
+        @test resident(e, dev, keep) !== tk && resident(e, dev, keep) == keep
+        Ex.invalidate!(e.pool, ())
+        @test Ex.resident_count(e, dev) == n
+    end
+    close(own.pool)
+    @test Ex.invalidate!(own.pool, (rand(2),)) === own.pool         # a closed pool: nothing to drop
+    @test Ex.invalidate!((rand(2),)) === nothing
 end
 
 @testset "program twins read through the read-only wrapper" begin
