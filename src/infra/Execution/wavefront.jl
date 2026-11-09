@@ -8,7 +8,7 @@
 # loop iterations, every value it carries lives in the state and the advance writes
 # nothing but its queues, so an advance whose children overflowed runs again unchanged;
 # the totals do not depend on K, the cohort, the refill, the child slots, the device count
-# or the order of the states.
+# or the order of the states, which a key stage may sort (wave_sort.jl).
 
 "Loop iterations per state of an advance launch, by default."
 const WAVE_BUDGET = 32
@@ -22,13 +22,14 @@ const WAVE_SPAWN_CAP = 128
 const WAVE_ARRIVAL = 1.0
 
 """
-    WaveSettings(budget, cohort, refill, doubling, wavefront)
+    WaveSettings(budget, cohort, refill, doubling, wavefront, sort_every)
 
 The settings of the wavefront that a call reads ([`with_wavefront_settings`](@ref)):
 the budget `K` of an advance, the cohort `P`, the refill block `R`, the budget doubling
 (`true`: up to the cap of the phase, `false`: off, an integer: up to that many loop
-iterations) and whether a phase that the wavefront can serve runs on it (`false` runs
-the cascade of the same programs).
+iterations), whether a phase that the wavefront can serve runs on it (`false` runs
+the cascade of the same programs) and the advances between two sorts of the cohort by
+the key stage (0: never).
 """
 struct WaveSettings
     budget::Int
@@ -36,14 +37,16 @@ struct WaveSettings
     refill::Int
     doubling::Union{Bool,Int}
     wavefront::Bool
+    sort_every::Int
 end
 
-const DEFAULT_WAVE = WaveSettings(WAVE_BUDGET, WAVE_COHORT, WAVE_REFILL, true, true)
+const DEFAULT_WAVE = WaveSettings(WAVE_BUDGET, WAVE_COHORT, WAVE_REFILL, true, true, WAVE_SORT)
 const WAVE_SETTINGS = Base.ScopedValues.ScopedValue(DEFAULT_WAVE)
 
 """
     with_wavefront_settings(f; budget = WAVE_BUDGET, cohort = WAVE_COHORT,
-                            refill = WAVE_REFILL, doubling = true, wavefront = true)
+                            refill = WAVE_REFILL, doubling = true, wavefront = true,
+                            sort_every = WAVE_SORT)
 
 Run `f()` with these settings of the wavefront, read on the host by every wavefront call
 inside `f` on the calling task; outside such a scope every call uses the defaults. `budget`
@@ -52,19 +55,22 @@ end in one advance), `cohort` the live states per device the refill fills up to,
 the primaries per block a device takes from the shared block counter, `doubling` the
 budget doubling once no block remains and the cohort is below a quarter of `cohort`
 (`true` up to the cap of the phase: the `Wavefront`'s, and at most `WAVE_SPAWN_CAP` in a
-call with children; `false` off; an integer `k ≥ 1` up to `k`), and `wavefront = false`
-runs the cascade of the same programs. Results do not depend on any of them. Returns
-`f()`.
+call with children; `false` off; an integer `k ≥ 1` up to `k`), `wavefront = false`
+runs the cascade of the same programs, and `sort_every = m ≥ 1` sorts the cohort by the
+keys of the `Wavefront`'s key stage before every `m`-th advance of a device, from its first
+(0, the default: never; a `Wavefront` without a key stage never sorts). Results do not
+depend on any of them. Returns `f()`.
 """
 function with_wavefront_settings(f; budget::Integer = WAVE_BUDGET, cohort::Integer = WAVE_COHORT,
                                  refill::Integer = WAVE_REFILL, doubling::Union{Bool,Integer} = true,
-                                 wavefront::Bool = true)
+                                 wavefront::Bool = true, sort_every::Integer = WAVE_SORT)
     budget >= 1 && cohort >= 1 && refill >= 1 ||
         throw(ArgumentError("with_wavefront_settings: budget, cohort and refill must be positive"))
     doubling isa Bool || doubling >= 1 ||
         throw(ArgumentError("with_wavefront_settings: doubling must be true, false or a positive cap"))
+    sort_every >= 0 || throw(ArgumentError("with_wavefront_settings: sort_every must be non-negative"))
     s = WaveSettings(Int(budget), Int(cohort), Int(refill),
-                     doubling isa Bool ? doubling : Int(doubling), wavefront)
+                     doubling isa Bool ? doubling : Int(doubling), wavefront, Int(sort_every))
     return Base.ScopedValues.with(f, WAVE_SETTINGS => s)
 end
 
@@ -72,10 +78,11 @@ end
 wave_settings() = WAVE_SETTINGS[]
 
 settings_record(s::WaveSettings) = (budget = s.budget, cohort = s.cohort, refill = s.refill,
-                                    doubling = s.doubling, wavefront = s.wavefront)
+                                    doubling = s.doubling, wavefront = s.wavefront,
+                                    sort_every = s.sort_every)
 
 """
-    Wavefront(; start, advance, retire, primary, layer, branch = nothing,
+    Wavefront(; start, advance, retire, primary, layer, branch = nothing, key = nothing,
               doubling_cap = typemax(Int))
 
 The programs of one Monte Carlo transport for [`foreach_wavefront!`](@ref): the stage
@@ -86,31 +93,36 @@ the contract; its children go to the [`ChildBuffer`](@ref) it holds), `retire` (
 of `D`: its record and tally) and `branch` (child `j` of `C`: its state opened and
 handed to [`admit_child!`](@ref); `nothing` when the wavefront serves only calls without
 children), each called as `prog(item, i)` with a [`WaveQueues`](@ref) placeholder that
-every launch binds; and the history programs `primary` and `layer` of the same
+every launch binds; the key stage `key` (member `j` of the cohort: its key stored and
+counted by [`count_key!`](@ref) into a [`KeyCount`](@ref) placeholder; `nothing` when the
+cohort is never sorted); and the history programs `primary` and `layer` of the same
 transport, which the cascade runs where the wavefront does not serve. `doubling_cap` is
 the most loop iterations the budget doubles to; a call with children caps it further at
 `WAVE_SPAWN_CAP`. The stage programs must agree on [`wave_state`](@ref); the advance
-answers [`wave_steps`](@ref).
+answers [`wave_steps`](@ref), the key stage [`wave_keys`](@ref).
 """
-struct Wavefront{S,A,R,B,P,L}
+struct Wavefront{S,A,R,B,K,P,L}
     start::S
     advance::A
     retire::R
     branch::B
+    key::K
     primary::P
     layer::L
     doubling_cap::Int
 end
 
-function Wavefront(; start, advance, retire, primary, layer, branch = nothing,
+function Wavefront(; start, advance, retire, primary, layer, branch = nothing, key = nothing,
                    doubling_cap::Integer = typemax(Int))
     T = wave_state(start)
     wave_state(advance) === T && wave_state(retire) === T &&
-        (branch === nothing || wave_state(branch) === T) ||
+        (branch === nothing || wave_state(branch) === T) && (key === nothing || wave_state(key) === T) ||
         throw(ArgumentError("Wavefront: the stage programs disagree on the state type"))
     wave_steps(advance) >= 1 || throw(ArgumentError("Wavefront: the advance's step limit must be positive"))
+    key === nothing || wave_keys(key) >= 1 ||
+        throw(ArgumentError("Wavefront: the key stage must have at least one key value"))
     doubling_cap >= 1 || throw(ArgumentError("Wavefront: doubling_cap must be positive"))
-    return Wavefront(start, advance, retire, branch, primary, layer, Int(doubling_cap))
+    return Wavefront(start, advance, retire, branch, key, primary, layer, Int(doubling_cap))
 end
 
 """
@@ -127,8 +139,11 @@ depth when `wf` has a branch. Any other call runs the cascade with `capacity` an
 given, `chunk` (the cascade's default otherwise).
 
 On the wavefront each device runs its own cohort on its first lane until no primary
-block remains and its cohort is empty. Per iteration: the counter block zeroed; the
-advance over the cohort, at most `K` loop iterations per state, its children into the
+block remains and its cohort is empty. Per iteration: with a key stage and `sort_every =
+m ≥ 1`, before every `m`-th advance of the device (from its first) the cohort's read order
+sorted by key: the key launch, one copy of the counts to the host, their exclusive scan,
+one copy back and a [`KeyPlace`](@ref) launch; the counter block zeroed; the
+advance over the cohort in that order, at most `K` loop iterations per state, its children into the
 child queue `C` of `cap_C` slots; one read of the counter block, each of a fault,
 `live + done ≠ nA` and a queue beyond its slots an error; with more children than
 `cap_C`, `C` grows to the children and an eighth more, the executor counts a rerun and the
@@ -193,6 +208,7 @@ function run_wavefront!(exec::PoolExecutor, wf::Wavefront, n::Int, depth::Int, s
     blocks = BlockCounter(n, set.refill, length(pool.devices))
     progs = depth > 0 ? (wf.start, wf.advance, wf.retire, wf.branch) : (wf.start, wf.advance, wf.retire)
     twins = map(p -> ProgramTwins(pool, p), progs)
+    ktwin = wf.key !== nothing && set.sort_every > 0 ? ProgramTwins(pool, wf.key) : nothing
     phase = depth > 0 ? min(wf.doubling_cap, WAVE_SPAWN_CAP) : wf.doubling_cap
     cap = set.doubling === true ? phase : set.doubling === false ? set.budget : set.doubling
     call = (depth = depth, capacity = capacity === nothing ? nothing : Int(capacity),
@@ -200,7 +216,7 @@ function run_wavefront!(exec::PoolExecutor, wf::Wavefront, n::Int, depth::Int, s
     res = try
         n == 0 ? [empty_device() for _ in pool.devices] :
         foreach_device(pool) do lane
-            device_wavefront!(lane, wf, twins, slots[2], blocks, set, cap, call)
+            device_wavefront!(lane, wf, twins, ktwin, slots[2], blocks, set, cap, call)
         end
     finally
         foreach(s -> s === nothing || empty!(s), slots)
@@ -313,16 +329,18 @@ child_queue(lane::PoolLane, ::Type{E}, n::Int, counters, slot) where {E} =
 
 # The wavefront of one device on its first lane `lane`; returns its counts, the primary
 # ranges it started and one record per iteration (cohort, budget, counts, advance reruns,
-# host seconds of the advances with their counter reads, of the retire launch, of the
-# branch with its counter read and of the start launches). `call` holds the depth, the
-# explicit child slots or `nothing`, and the executor's rerun counter.
-function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, slot, blocks::BlockCounter,
+# whether the cohort was sorted, host seconds of the sort, of the advances with their
+# counter reads, of the retire launch, of the branch with its counter read and of the
+# start launches). `ktwin` holds the key stage's twins when the call sorts. `call` holds
+# the depth, the explicit child slots or `nothing`, and the executor's rerun counter.
+function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, ktwin, slot, blocks::BlockCounter,
                            set::WaveSettings, cap::Int, call)
     T = wave_state(wf.advance)
     M = wave_steps(wf.advance)
     P = set.cohort
     dstart, dadv, dret = map(t -> program_twin!(t, lane), twins[1:3])
     dbr = length(twins) == 4 ? program_twin!(twins[4], lane) : nothing
+    dkey = ktwin === nothing ? nothing : program_twin!(ktwin, lane)
     counters = lane_buffer(lane, (:wave, :counters), Int64, WAVE_COUNTERS)
     stage = lane_stage(lane, (:wave, :counters), Int64, WAVE_COUNTERS)
     zc = ZeroCounters(counters)
@@ -334,6 +352,7 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, slot, blocks::B
     done_ctr = view(counters, WAVE_DONE:WAVE_DONE)
     a, b = 1, 2
     nA = 0
+    nadv = 0
     K = set.budget
     admitted = 0; spawned = 0; dropped = 0; retired = 0; idle = 0
     ranges = UnitRange{Int}[]
@@ -342,12 +361,17 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, slot, blocks::B
     while true
         kids && call.capacity !== nothing && (capC = call.capacity)
         live = done = children = drop = reruns = 0
-        t0 = t1 = t2 = t3 = time_ns()
+        ts = t0 = t1 = t2 = t3 = time_ns()
+        sorted = false
         local B, qa
         if nA > 0
             exhausted(blocks) && 4 * nA < P && K < cap && (K = K > cap ÷ 2 ? cap : 2K)
             D = lane_buffer(lane, (:wave, :done), T, nA)
-            A = Cohort(lane_buffer(lane, (:wave, a), T, nA), nothing)
+            states = lane_buffer(lane, (:wave, a), T, nA)
+            sorted = dkey !== nothing && sorts(wf.key, set.sort_every, nadv, nA)
+            A = sorted ? Cohort(states, sort_cohort!(lane, wf.key, dkey, states, nA)) : Cohort(states, nothing)
+            sorted && (t0 = time_ns())
+            nadv += 1
             while true
                 # B takes the survivors, the opened children and the refill, D the stopped states
                 B = lane_buffer(lane, (:wave, b), T, queue_slots(nA, capC, P, blocks))
@@ -406,8 +430,8 @@ function device_wavefront!(lane::PoolLane, wf::Wavefront, twins, slot, blocks::B
             nB += length(r)
         end
         push!(iters, (nA = nA, K = K, live = live, done = done, children = children,
-                      dropped = drop, reruns = reruns, started = nB - live,
-                      advance = (t1 - t0) / 1e9, retire = (t2 - t1) / 1e9,
+                      dropped = drop, reruns = reruns, started = nB - live, sorted = sorted,
+                      sort = (t0 - ts) / 1e9, advance = (t1 - t0) / 1e9, retire = (t2 - t1) / 1e9,
                       branch = (t3 - t2) / 1e9, start = (time_ns() - t4) / 1e9))
         nB == 0 && break
         a, b = b, a

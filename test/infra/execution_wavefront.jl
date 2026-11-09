@@ -12,7 +12,9 @@
 # calls; a state that cannot advance and a state that reports a fault are errors;
 # accumulator twins and child slots are released and the residency cache does not grow
 # over calls; calls outside `with_wavefront_settings` use the defaults; threads, host
-# pools, executors of other types and phases without stages take the cascade.
+# pools, executors of other types and phases without stages take the cascade. The
+# coherence sort: its order is a permutation of the cohort with non-decreasing keys on
+# every device kind, and the toy's bits and per-iteration counts do not depend on it.
 using Test, BlackLightPlus
 using StaticArrays
 using BlackLightPlus.Numerics: MCRng, MCStreamLayout, primary_rng
@@ -20,7 +22,8 @@ using BlackLightPlus.MonteCarlo: Superphoton
 using BlackLightPlus.Execution: ThreadedExecutor, PoolExecutor, ExactScalars, ChildBuffer, Generation,
                      foreach_cascade!, foreach_wavefront!, with_wavefront_settings, Wavefront,
                      WaveQueues, admit!, admit_child!, place!, fault!, gather!, add!, spawn!,
-                     describe, wave_log, HostDevice, resident_count
+                     describe, wave_log, HostDevice, resident_count, KeyCount, count_key!,
+                     Cohort
 import BlackLightPlus.Execution
 const Adapt = BlackLightPlus.Execution.Adapt
 
@@ -163,14 +166,28 @@ function (p::ToyBranch)(item, i)
     return nothing
 end
 
-Execution.wave_state(::Union{ToyStart,ToyAdvance,ToyRetire,ToyBranch}) = Toy
+# The key stage: `nk` key values of a photon's key and loop iteration.
+struct ToyKey{Q} <: Function
+    nk::Int
+    queues::Q
+end
+Adapt.@adapt_structure ToyKey
+@inline toy_key(s::Toy, nk) = (s.g * 31 + Int(s.it)) % nk
+function (p::ToyKey)(item, i)
+    count_key!(p.queues, item, toy_key(p.queues.A[item], p.nk))
+    return nothing
+end
+Execution.wave_keys(p::ToyKey) = p.nk
+
+Execution.wave_state(::Union{ToyStart,ToyAdvance,ToyRetire,ToyBranch,ToyKey}) = Toy
 Execution.wave_steps(p::ToyAdvance) = p.M
 
 """
 The toy transport over `1:n`, spawning when `spawning`, with a branch stage when `branch`;
-`mode` of the advance, the life table `lives` and its step limit `M`.
+`mode` of the advance, the life table `lives` and its step limit `M`, `nk` key values of
+the key stage.
 """
-function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIFE)
+function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIFE, nk = 13)
     sc = ExactScalars(2)
     path = ExactScalars(4)
     buf = spawning ? ChildBuffer(Superphoton, 0, MCStreamLayout(max(n, 1), 64, 1)) : nothing
@@ -179,6 +196,7 @@ function toy(n; spawning = true, branch = true, mode = 0, lives = LIVES, M = LIF
                    advance = ToyAdvance(lives, buf, mode, M, WaveQueues()),
                    retire = ToyRetire(sc, path, WaveQueues()),
                    branch = branch ? ToyBranch(path, WaveQueues()) : nothing,
+                   key = ToyKey(nk, KeyCount()),
                    primary = ToyPrimary(lives, sc, path, buf),
                    layer = ToyLayer(Generation(Superphoton[], MCRng[]), lives, sc, path, buf))
     return (wf = wf, sc = sc, path = path, buf = buf, lives = lives)
@@ -211,7 +229,8 @@ Execution.foreach_cascade!(e::Forwarding, p, l, n::Integer, d::Integer; kw...) =
     (push!(e.seen, values(kw)); foreach_cascade!(e.inner, p, l, n, d; kw...))
 
 const N = 203
-const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wavefront = true)
+const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wavefront = true,
+                  sort_every = 0)
 
 @testset "device wavefront" begin
     refs = Dict(d => run_toy(ThreadedExecutor(chunk = 7), N; depth = d) for d in 0:3)
@@ -266,7 +285,8 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
                 dsc = describe(ex)
                 ok = same(r, d) && waved(r, d) && dsc.schedule == :wavefront &&
                      sum(dsc.admitted) == N && sum(dsc.spawned) == refs[d].children &&
-                     dsc.settings == (budget = K, cohort = P, refill = R, doubling = dbl, wavefront = true)
+                     dsc.settings == (budget = K, cohort = P, refill = R, doubling = dbl, wavefront = true,
+                                      sort_every = 0)
                 ok || @info "wavefront differs" nd d K dbl P R r.path dsc
                 @test ok
             end
@@ -383,6 +403,66 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
         @test r0.children == 0 && r0.totals == ref.totals && r0.path == [0, N, N, 0]
     end
 
+    @testset "the coherence sort: the cascade's bits at every sort_every, the counts of the unsorted call" begin
+        for nd in (1, 2, 3), d in (0, 2), every in (1, 2, 4),
+            (K, dbl, P, R, cap) in ((1, false, 7, 5, nothing), (3, true, 64, 5, 1), (32, true, 2^10, 1, nothing))
+            ex = PoolExecutor(DK.wavehosts(nd))
+            r = with_wavefront_settings(budget = K, doubling = dbl, cohort = P, refill = R, sort_every = every) do
+                run_toy(ex, N; depth = d, capacity = cap)
+            end
+            dsc = describe(ex)
+            @test same(r, d) && waved(r, d) && dsc.settings.sort_every == every
+            cap == 1 && d > 0 && @test dsc.reruns > 0
+            # every `every`-th advance of a device sorts, from its first
+            for lg in wave_log(ex)
+                adv = [it for it in lg if it.nA > 0]
+                @test [it.sorted for it in adv] == [(m - 1) % every == 0 && adv[m].nA > 1 for m in eachindex(adv)]
+                @test all(it -> it.sorted || it.sort == 0, lg)
+            end
+            if nd == 1
+                # one device: the same iterations with the sort off
+                off = with_wavefront_settings(budget = K, doubling = dbl, cohort = P, refill = R) do
+                    run_toy(ex, N; depth = d, capacity = cap)
+                    only(wave_log(ex))
+                end
+                cut(lg) = [(it.nA, it.K, it.live, it.done, it.children, it.dropped, it.started) for it in lg]
+                @test cut(only(wave_log(ex))) == cut(off) && !any(it -> it.sorted, off)
+            end
+        end
+        # a wavefront without a key stage never sorts
+        t = toy(N)
+        bare = Wavefront(; start = t.wf.start, advance = t.wf.advance, retire = t.wf.retire,
+                         branch = t.wf.branch, primary = t.wf.primary, layer = t.wf.layer)
+        ex = PoolExecutor(DK.wavehosts(2))
+        with_wavefront_settings(sort_every = 1) do
+            foreach_wavefront!(ex, bare, N, 2)
+        end
+        @test !any(it -> it.sorted, reduce(vcat, wave_log(ex)))
+    end
+
+    @testset "the sort's order on $(kind): a permutation of the cohort with non-decreasing keys" for
+            (kind, devs) in (("WaveHost", DK.wavehosts(1)), (DK.DEVICE_KIND, DK.devices(1)))
+        pool = PoolExecutor(devs).pool
+        for nk in (1, 7, 8192), nA in (2, 37, 1000)
+            states = [Toy(g, Int32(1 + g % 11), UInt64(g), Int32(0)) for g in 1:nA]
+            key = ToyKey(nk, KeyCount())
+            keys = [toy_key(s, nk) for s in states]
+            tw = Execution.ProgramTwins(pool, key)
+            order = only(Execution.foreach_device(pool) do lane
+                d = Execution.lane_buffer(lane, (:test, :states), Toy, nA)
+                copyto!(d, 1, states, 1, nA)
+                o = Execution.sort_cohort!(lane, key, Execution.program_twin!(tw, lane), d, nA)
+                h = Vector{Int32}(undef, nA)
+                copyto!(h, 1, o, 1, nA)
+                h
+            end)
+            @test sort(order) == 1:nA
+            @test issorted(keys[order])
+            @test [Cohort(states, order)[j] for j in 1:nA] == states[order]
+        end
+        @test Execution.key_cursors!(Int32[3, 0, 2, 1]) == Int32[0, 3, 3, 5]
+    end
+
     @testset "contract errors: a state that cannot advance, a fault" begin
         ex = PoolExecutor(DK.wavehosts(1))
         m = failure(() -> with_wavefront_settings(cohort = 4, refill = 2) do
@@ -426,7 +506,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
         run_toy(ex, N)
         @test describe(ex).settings == DEFAULTS
         @test with_wavefront_settings(() -> 42; budget = typemax(Int)) == 42
-        for kw in ((budget = 0,), (cohort = 0,), (refill = -1,), (doubling = 0,))
+        for kw in ((budget = 0,), (cohort = 0,), (refill = -1,), (doubling = 0,), (sort_every = -1,))
             @test_throws ArgumentError with_wavefront_settings(() -> nothing; kw...)
         end
         t = toy(10)
@@ -439,10 +519,17 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
         @test_throws ArgumentError Wavefront(; start = t.wf.start, advance = t.wf.advance,
                                              retire = t.wf.retire, primary = t.wf.primary,
                                              layer = t.wf.layer, doubling_cap = 0)
+        @test_throws ArgumentError Wavefront(; start = t.wf.start, advance = t.wf.advance,
+                                             retire = t.wf.retire, key = t.wf.layer,
+                                             primary = t.wf.primary, layer = t.wf.layer)
+        @test_throws ArgumentError Wavefront(; start = t.wf.start, advance = t.wf.advance,
+                                             retire = t.wf.retire, key = ToyKey(0, KeyCount()),
+                                             primary = t.wf.primary, layer = t.wf.layer)
+        @test_throws ArgumentError Execution.wave_keys(t.wf.advance)
         @test run_toy(ex, 0).children == 0 && describe(ex).admitted == [0]
         @test_throws ArgumentError foreach_wavefront!(ex, t.wf, -1, 0)
         @test DK.device_isbits(t.wf.advance) && DK.device_isbits(t.wf.start) &&
-              DK.device_isbits(t.wf.branch)
+              DK.device_isbits(t.wf.branch) && DK.device_isbits(t.wf.key)
         @test_throws ArgumentError Execution.generation(1.0)
     end
 end

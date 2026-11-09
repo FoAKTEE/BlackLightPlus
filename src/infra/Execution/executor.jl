@@ -310,9 +310,10 @@ The per-iteration records of the last wavefront call of `exec`, one vector per d
 `devices` order: the live states `nA` of the iteration, the budget `K`, the states live
 after the advance and the branch (`live`), the states the advance stopped (`done`), the
 children it spawned, the children `dropped` beyond the call's depth, the advance's
-`reruns` for its children, the primaries `started` by the refill, and the host seconds
-of the advance with its counter reads, of the retire launch, of the branch with its
-counter read and of the start launches. Empty vectors after a cascade.
+`reruns` for its children, the primaries `started` by the refill, whether the cohort was
+`sorted` before the advance, and the host seconds of the `sort`, of the advance with its
+counter reads, of the retire launch, of the branch with its counter read and of the start
+launches. Empty vectors after a cascade.
 """
 wave_log(e::PoolExecutor) = (r = e.last[]; r === nothing ? [NamedTuple[] for _ in e.pool.devices] : r.log)
 
