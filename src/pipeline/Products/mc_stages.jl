@@ -3,7 +3,7 @@
 # primary and opens its march, `MCBranch` opens the march of a child, `MCAdvance` runs a
 # live march for at most the launch's budget of loop iterations (its children kicked
 # inline, as `track!` kicks them), `MCRetire` closes a stopped march: its record and its
-# tally; `MCKey` keys a live march for the sort of the cohort (gated). Every value the march carries from one iteration to the next lives in the
+# tally; `MCKey` keys a live march for the sort of the cohort. Every value the march carries from one iteration to the next lives in the
 # `MarchState`, so a march cut into any number of advances is the uncut march.
 
 # The march of one photon of a run: the transport's fixed inputs and the sink of a stripe.
@@ -127,27 +127,36 @@ end
 """
     MCKey(transport)
 
-The key stage of a Monte Carlo wavefront (*gated*), called as `prog(item, i)`: member
-`j = item` of the launch's cohort is keyed by [`photon_key`](@ref) of its state on the
-spacetime of the [`MCTransport`](@ref) `transport` under its march control, the key stored
-and counted by [`Execution.count_key!`](@ref). The key orders the advance's reads of the
-cohort and enters no result.
+The key stage of a Monte Carlo wavefront, called as `prog(item, i)`: member `j = item` of
+the launch's cohort is keyed by its scattering generation `g` (the entry photon's `nscatt`,
+at most the `max_scatt` of the [`MCTransport`](@ref) `transport`), then by
+[`photon_key`](@ref) of its state on the transport's spacetime under its march control:
+`g × PHOTON_KEYS + photon_key`, one of `(max_scatt + 1) × PHOTON_KEYS` values, stored and
+counted by [`Execution.count_key!`](@ref). Sorted so, the warps of an advance hold photons
+of one generation with nearby positions and directions. The key orders the advance's reads
+of the cohort and enters no result.
 """
 struct MCKey{S,C,Q} <: Function
     st::S
     ctl::C
+    ngen::Int
     queues::Q
 end
-MCKey(transport::MCTransport) = MCKey(transport.st, transport.ctl, Execution.KeyCount())
+MCKey(transport::MCTransport) =
+    MCKey(transport.st, transport.ctl, Int(transport.opac.max_scatt) + 1, Execution.KeyCount())
 Adapt.@adapt_structure MCKey
+
+# The key of the state `s` under the key stage `p`: its generation, then its photon_key.
+@inline mc_key(p::MCKey, s::MarchState) =
+    min(Execution.generation(s), p.ngen - 1) * PHOTON_KEYS + photon_key(p.st, p.ctl, s.y)
 
 function (p::MCKey)(item, i)
     q = p.queues
-    Execution.count_key!(q, item, photon_key(p.st, p.ctl, q.A[item].y))
+    Execution.count_key!(q, item, mc_key(p, q.A[item]))
     return nothing
 end
 
-Execution.wave_keys(::MCKey) = PHOTON_KEYS
+Execution.wave_keys(p::MCKey) = p.ngen * PHOTON_KEYS
 
 const MCStage = Union{MCStart,MCAdvance,MCRetire,MCBranch}
 Execution.wave_state(::Union{MCStage,MCKey}) = MarchState
@@ -159,9 +168,10 @@ workgroupsize(::MCStage) = 32
     mc_wavefront(source, transport, sink, seed, primary, layer, depth) -> Wavefront
 
 The [`Execution.Wavefront`](@ref) of a stationary Monte Carlo run: the stage programs
-[`MCStart`](@ref), [`MCAdvance`](@ref), [`MCRetire`](@ref), [`MCKey`](@ref) and, for a
-scattering run (`depth > 0`), [`MCBranch`](@ref), and the history programs `primary` and
-`layer` of the same `source`, `transport`, `sink` and `seed`. The run's scattering depth `depth` must be
+[`MCStart`](@ref), [`MCAdvance`](@ref), [`MCRetire`](@ref) and, for a scattering run
+(`depth > 0`), [`MCBranch`](@ref) and the key stage [`MCKey`](@ref), and the history
+programs `primary` and `layer` of the same `source`, `transport`, `sink` and `seed`. A run
+without scattering has no key stage: its cohort is never sorted. The run's scattering depth `depth` must be
 the transport's `max_scatt`, so that a photon of the last generation never spawns.
 """
 function mc_wavefront(source, transport::MCTransport, sink::MCSink, seed::UInt32, primary,
@@ -173,5 +183,5 @@ function mc_wavefront(source, transport::MCTransport, sink::MCSink, seed::UInt32
                                advance = MCAdvance(transport, sink),
                                retire = MCRetire(transport, sink),
                                branch = depth > 0 ? MCBranch(transport, sink) : nothing,
-                               key = MCKey(transport), primary, layer)
+                               key = depth > 0 ? MCKey(transport) : nothing, primary, layer)
 end

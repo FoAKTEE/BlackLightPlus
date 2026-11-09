@@ -58,8 +58,8 @@ budget doubling once no block remains and the cohort is below a quarter of `coho
 call with children; `false` off; an integer `k ≥ 1` up to `k`), `wavefront = false`
 runs the cascade of the same programs, and `sort_every = m ≥ 1` sorts the cohort by the
 keys of the `Wavefront`'s key stage before every `m`-th advance of a device, from its first
-(0, the default: never; a `Wavefront` without a key stage never sorts). Results do not
-depend on any of them. Returns `f()`.
+(`WAVE_SORT = 1` by default; 0 never; a `Wavefront` without a key stage never sorts).
+Results do not depend on any of them. Returns `f()`.
 """
 function with_wavefront_settings(f; budget::Integer = WAVE_BUDGET, cohort::Integer = WAVE_COHORT,
                                  refill::Integer = WAVE_REFILL, doubling::Union{Bool,Integer} = true,

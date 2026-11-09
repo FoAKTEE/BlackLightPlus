@@ -3,8 +3,8 @@
 # the first member of each key; a placement launch writes the order in which the advance
 # reads the cohort. The sort moves indices, never states, and no result depends on the order.
 
-"Iterations between two sorts of the cohort, by default: 0, never."
-const WAVE_SORT = 0
+"Advances of a device between two sorts of its cohort, by default: every advance."
+const WAVE_SORT = 1
 
 """
     KeyCount(A, keys, counts)

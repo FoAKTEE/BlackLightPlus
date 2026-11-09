@@ -230,7 +230,7 @@ Execution.foreach_cascade!(e::Forwarding, p, l, n::Integer, d::Integer; kw...) =
 
 const N = 203
 const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wavefront = true,
-                  sort_every = 0)
+                  sort_every = 1)
 
 @testset "device wavefront" begin
     refs = Dict(d => run_toy(ThreadedExecutor(chunk = 7), N; depth = d) for d in 0:3)
@@ -286,7 +286,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
                 ok = same(r, d) && waved(r, d) && dsc.schedule == :wavefront &&
                      sum(dsc.admitted) == N && sum(dsc.spawned) == refs[d].children &&
                      dsc.settings == (budget = K, cohort = P, refill = R, doubling = dbl, wavefront = true,
-                                      sort_every = 0)
+                                      sort_every = Execution.WAVE_SORT)
                 ok || @info "wavefront differs" nd d K dbl P R r.path dsc
                 @test ok
             end
@@ -421,7 +421,7 @@ const DEFAULTS = (budget = 32, cohort = 2^18, refill = 2^14, doubling = true, wa
             end
             if nd == 1
                 # one device: the same iterations with the sort off
-                off = with_wavefront_settings(budget = K, doubling = dbl, cohort = P, refill = R) do
+                off = with_wavefront_settings(budget = K, doubling = dbl, cohort = P, refill = R, sort_every = 0) do
                     run_toy(ex, N; depth = d, capacity = cap)
                     only(wave_log(ex))
                 end
