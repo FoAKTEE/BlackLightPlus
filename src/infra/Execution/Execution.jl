@@ -58,7 +58,8 @@ export ChildBuffer, Generation, child_stream, spawn!, capacity, overflow, childr
        foreach_cascade!, cascade_chunk
 # the wavefront
 export Wavefront, foreach_wavefront!, with_wavefront_settings, wavefront, WaveQueues, Cohort,
-       StateBuffer, admit!, place!, fault!, WaveSwap, wave_state, wave_steps, wave_log
+       StateBuffer, admit!, admit_child!, place!, fault!, WaveSwap, wave_state, wave_steps,
+       generation, wave_log
 
 function __init__()
     atexit(close_pools)

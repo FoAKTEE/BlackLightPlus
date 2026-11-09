@@ -271,10 +271,10 @@ device names, `lanes` the workers per device (0 for threads), `chunk` the items 
 of the executor's last run (its setting, an integer or `:auto`, before the first run) and
 `threads` the Julia thread count. A pool adds, for its last Monte Carlo call
 ([`foreach_cascade!`](@ref), [`foreach_wavefront!`](@ref)): `reruns`, the cascade
-generations that ran again because their children overflowed their slots; `schedule`,
-`:cascade` or `:wavefront` (`:none` before the first call); `settings`, the wavefront
-settings of a wavefront call (`nothing` for the cascade); and per device, in `devices`
-order, the primaries `admitted` and the children `spawned` and the wavefront's
+generations or wavefront advances that ran again because their children overflowed their
+slots; `schedule`, `:cascade` or `:wavefront` (`:none` before the first call); `settings`,
+the wavefront settings of a wavefront call (`nothing` for the cascade); and per device, in
+`devices` order, the primaries `admitted` and the children `spawned` and the wavefront's
 `iterations` (zeros for the cascade).
 """
 describe(e::ThreadedExecutor) =
@@ -307,10 +307,12 @@ end
     wave_log(exec::PoolExecutor) -> Vector{Vector{NamedTuple}}
 
 The per-iteration records of the last wavefront call of `exec`, one vector per device in
-`devices` order: the live states `nA` of the iteration, the budget `K`, the states the
-advance kept `live`, the states it stopped (`done`), the children it spawned, the
-primaries `started` by the refill, and the host seconds of the advance with its counter
-read, of the retire launch and of the start launches. Empty vectors after a cascade.
+`devices` order: the live states `nA` of the iteration, the budget `K`, the states live
+after the advance and the branch (`live`), the states the advance stopped (`done`), the
+children it spawned, the children `dropped` beyond the call's depth, the advance's
+`reruns` for its children, the primaries `started` by the refill, and the host seconds
+of the advance with its counter reads, of the retire launch, of the branch with its
+counter read and of the start launches. Empty vectors after a cascade.
 """
 wave_log(e::PoolExecutor) = (r = e.last[]; r === nothing ? [NamedTuple[] for _ in e.pool.devices] : r.log)
 

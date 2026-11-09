@@ -413,8 +413,8 @@ end
         # the stage programs of the wavefront: isbits on a device, with and without queues
         states = Vector{MarchState}(undef, 8); done = Vector{MarchState}(undef, 8)
         cnt = zeros(Int64, 5)
-        q = WaveQueues(Cohort(states, nothing), StateBuffer(states, view(cnt, 1:1)),
-                       StateBuffer(done, view(cnt, 2:2)), cnt, 32, 0)
+        q = WaveQueues(Cohort(states, nothing), StateBuffer(states, view(cnt, 1:1)), nothing,
+                       StateBuffer(done, view(cnt, 2:2)), cnt, 32, 0, 0)
         stages = (MCStart(src, ztr, zsink, UInt32(1)), MCAdvance(ztr, zsink), MCRetire(ztr, zsink))
         @test all(DK.device_isbits, stages)
         st, adv, ret = map(x -> Adapt.adapt(WaveSwap(q, nothing), x), stages)

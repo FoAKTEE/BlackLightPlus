@@ -1,7 +1,8 @@
 # The device queues of the wavefront: the read view of the live states of an advance, the
-# append queues of states, the counter block of a lane and the adaptor that binds a
-# launch's queues into the device form of a stage program. A state is stored where its
-# slot falls; no result depends on the order of the states in a queue.
+# append queues of states, the child queue the branch opens, the counter block of a lane
+# and the adaptor that binds a launch's queues into the device form of a stage program. A
+# state is stored where its slot falls; no result depends on the order of the states in a
+# queue.
 
 "Elements of the counter block of a lane's wavefront, in this order."
 const WAVE_LIVE = 1        # states the advance admitted to B
@@ -56,27 +57,31 @@ there when the slot exists. Atomic; device-safe.
 end
 
 """
-    WaveQueues(A, B, D, counters, K, base)
+    WaveQueues(A, B, C, D, counters, K, base, depth)
     WaveQueues()
 
 The queues a stage program of the wavefront reads and writes in one launch on a lane: the
-cohort `A` (a [`Cohort`](@ref)) that an advance runs; the append queues `B` (survivors and
-started primaries, counting into element `WAVE_LIVE` of `counters`) and `D` (stopped
-states, counting into `WAVE_DONE`), both [`StateBuffer`](@ref)s; the counter block
-`counters` (`WAVE_COUNTERS` `Int64`: live, done, children, dropped, fault); the budget `K`,
-the loop iterations an advance runs per state at most; and `base`, the slot of `B` after
-which a start launch places its states ([`place!`](@ref)). `WaveQueues()` is the
+cohort `A` (a [`Cohort`](@ref)) that an advance runs; the append queues `B` (survivors,
+opened children and started primaries, counting into element `WAVE_LIVE` of `counters`)
+and `D` (stopped states, counting into `WAVE_DONE`), both [`StateBuffer`](@ref)s; the
+children `C` that the advance spawned, as the [`Generation`](@ref) a branch reads; the
+counter block `counters` (`WAVE_COUNTERS` `Int64`: live, done, children, dropped, fault);
+the budget `K`, the loop iterations an advance runs per state at most; `base`, the slot of
+`B` after which a start launch places its states ([`place!`](@ref)); and `depth`, the
+last generation the call tracks ([`admit_child!`](@ref)). `WaveQueues()` is the
 placeholder a stage program holds; [`WaveSwap`](@ref) replaces it at every launch.
 """
-struct WaveQueues{A,B,D,C}
+struct WaveQueues{A,B,C,D,N}
     A::A
     B::B
+    C::C
     D::D
-    counters::C
+    counters::N
     K::Int
     base::Int
+    depth::Int
 end
-WaveQueues() = WaveQueues(nothing, nothing, nothing, nothing, 0, 0)
+WaveQueues() = WaveQueues(nothing, nothing, nothing, nothing, nothing, 0, 0, 0)
 Adapt.@adapt_structure WaveQueues
 
 """
@@ -86,6 +91,23 @@ Store the state `s` that position `i` of a start launch made in slot `q.base + i
 """
 @inline function place!(q::WaveQueues, i::Integer, s)
     @inbounds q.B.states[q.base + i] = s
+    return nothing
+end
+
+"""
+    admit_child!(q::WaveQueues, s) -> nothing
+
+Append the state `s` of a child that a branch opened to `q.B` when its
+[`generation`](@ref) is at most `q.depth`; count it into element `WAVE_DROPPED` of the
+counter block otherwise, as the cascade counts and does not track the children of its last
+generation. Atomic; device-safe.
+"""
+@inline function admit_child!(q::WaveQueues, s)
+    if generation(s) <= q.depth
+        admit!(q.B, s)
+    else
+        Atomix.@atomic q.counters[WAVE_DROPPED] += Int64(1)
+    end
     return nothing
 end
 
@@ -139,6 +161,15 @@ writes. A stage program defines it; the constructor of `Wavefront` requires one 
 all its stages.
 """
 wave_state(prog) = throw(ArgumentError("$(nameof(typeof(prog))) is not a stage program of a wavefront"))
+
+"""
+    generation(state) -> Int
+
+The scattering generation of a state of a wavefront: 0 for a primary, one more than its
+parent's for a child. A stage program's state type defines it; a branch drops a child
+whose generation exceeds the call's depth ([`admit_child!`](@ref)).
+"""
+generation(s) = throw(ArgumentError("$(nameof(typeof(s))) is not a state of a wavefront"))
 
 """
     wave_steps(prog) -> Int
