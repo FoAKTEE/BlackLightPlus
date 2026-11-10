@@ -7,6 +7,62 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- On a pool of CUDA devices the photon phases of a stationary `mc_spectrum` run, thin and
+  scattering, run as a device wavefront (`Execution.foreach_wavefront!` over an
+  `Execution.Wavefront` of the stage programs `Products.MCStart`, `MCAdvance`, `MCRetire`,
+  `MCBranch`, built by `Products.mc_wavefront`): each device keeps a cohort of live photons
+  on its first lane, advances every one by at most 32 loop iterations per launch (16 in a
+  call with children), retires the stopped ones, opens their children into the same cohort
+  and refills it from a block counter the devices share. Every bin, ledger value and child
+  count is bit for bit the cascade's, on one device and on two. On the AthenaK torus at
+  stride 1 with 10⁶ primaries the thin photon phase takes 1.35 s for 4.00 s on one A100 and
+  the Compton phase (bias 10⁴, three orders) 13.5 s for 66.0 s; a warm thin call 1.44 s
+  for 4.02 s; on two A100s the phases take 1.05 s and 8.12 s. CPU threads keep the cascade,
+  at unchanged times. `Execution.with_wavefront_settings` sets the budget, cohort, refill,
+  doubling, sort, launch and block-order settings for measurements (`wavefront = false`
+  runs the cascade of the same programs); no setting changes a result. `describe` of a
+  pool reports, for its last Monte Carlo call, the schedule, the settings, the primaries
+  admitted, the children spawned and the iterations of each device and the reruns, and
+  `Execution.wave_log` the per-iteration records.
+- The wavefront sorts the scattering cohort before every advance by generation, then by
+  `Products.photon_key` (the radial shell, the position octant and the direction octant of
+  a photon; the key stage `Products.MCKey`, counted by `Execution.KeyCount` and placed by
+  `Execution.KeyPlace`): the Compton phase runs in 0.72 of its unsorted time on one A100
+  and 0.75 on two. Its launches are queued without waiting, the host waiting only for the
+  counter reads, and its refill takes the primary blocks in decreasing predicted cost
+  (`Execution.block_costs`; for a `ZoneSource` the mean inverse radius of the block's
+  zones), 1.2 % and 1.5–1.9 % of the Compton phase on one A100. Bit for bit.
+- `MonteCarlo.track!` is the composition of `march_open`, `march_steps` and `march_close`
+  over a `MonteCarlo.MarchState`, the march cut at the back edge of its step loop
+  (`MonteCarlo.March` holds its fixed inputs), with every result bit for bit as before. A
+  step that spawns hands each child's `MonteCarlo.ScatterEvent` to the new `Sink` method
+  `branch!`, whose default kicks it (`kick`) and calls `spawn!`; `LIVE_MARCH` marks a march
+  that has not stopped.
+- The two lanes of a device overlap their launches: the residency arrays are shared by
+  the lanes without stream synchronisation (`Execution.share_lanes!`), every array a
+  launch writes is the lane's own, and every pool job ends with `Execution.sync_lanes`. A
+  device cascade starts a generation with the larger of 4096 slots, half the chunk, the
+  most children a generation on the device has spawned in the process and the slots an
+  eighth of the device's free memory holds (`Execution.free_bytes`, at most 16 per
+  primary), so the stride-1 Compton deck reruns no generation; `describe` counts the
+  reruns. With both, the cascade's Compton phase on one A100 takes 0.77 and its thin phase
+  0.87 of its earlier time, bit for bit.
+- `Execution.register_cap(prog)` caps the registers of a program's device compilation
+  (`Execution.launch_capped!`, the CUDA extension's launch with `maxregs`); the thin Monte
+  Carlo primary compiles at 168 registers and runs the thin cascade phase in 0.90 of its
+  uncapped time on one A100, bit for bit.
+- The host epilogues of the image products (the band sums, the NaN and zero maps, the
+  IQUV planes) run as programs on Julia threads whatever the executor (`Products.BandSum`,
+  `Fill`, `Split`), and `render`, `render_crossings`, `render_analytic` and `analytic_movie`
+  take `into`, an earlier result whose arrays they overwrite after dropping their device
+  copies; every result is bit for bit the one without. The 2048² closed-form radius call
+  takes 0.39 s for 0.48 s on one A100 and 0.45 s for 0.57 s on 32 CPU threads; with `into`
+  0.048 s and 0.26 s.
+- The CUDA extension precompiles one program through the package's kernel with
+  `PrecompileTools`, a new dependency, so a session that loads the package before CUDA
+  keeps the GPU compiler's code that loading ForwardDiff invalidates: in a fresh process on
+  the A100 the first device compilation takes 2.6 s for 11.9 s and the first thin
+  `mc_spectrum` call 31.2 s for 38.3 s.
 - `Data.FrameStack`: the frames of a dump series on one mesh at a uniform cadence, held
   together on the host or, after `Adapt.adapt`, on a device, and sampled at each point's
   own time (series time `t_shift + x⁰`). The two frames bracketing a time are each carried

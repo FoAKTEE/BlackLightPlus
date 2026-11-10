@@ -21,6 +21,12 @@ the GPU work inside the scheduler's allocation and pin the CUDA runtime in
 `LocalPreferences.toml` (`[CUDA_Runtime_jll] version = "13.3"`) so the runtime does not
 have to see the driver when it compiles.
 
+Load the package before CUDA, as above. The extension's image then holds the GPU
+compiler's code that loading ForwardDiff would otherwise invalidate, and the first device
+compilation of a session takes about 2.6 s on the A100 instead of 11.9 s; a session that
+loads CUDA first spends about 7 s more on it (measured without a GPU). Each program's
+device code is still compiled once per session.
+
 ## Choosing devices
 
 ```julia
@@ -60,6 +66,51 @@ image tiles are queued longest-marches-first on Kerr (distance to the critical c
 `prepare(cfg; queue = ...)` takes another order, for example the measured trip counts of
 the previous frame of a movie.
 
+The two lanes of a device run their launches side by side: they read the uploaded arrays
+without waiting for each other and write only their own buffers.
+
+## Monte Carlo on the device
+
+`mc_spectrum` of a stationary plasma runs its photon phases on the device wavefront: each
+device keeps a cohort of live photons, advances every one by at most 32 steps per launch
+(16 when photons scatter), retires the photons that stopped, adds their scattered children
+to the same cohort and refills it from the primaries that remain, which the devices share.
+A warp then holds photons for those few steps rather than for their whole lives, so its
+lanes stay busy; the scattering cohort is sorted by generation, then by radius and the
+octants of position and direction, before every advance. The bins, the ledger and the child count are those of
+the cascade of the same programs on the device, bit for bit, and one device gives the bits
+of two.
+
+```julia
+res = mc_spectrum(plan, 10^6; scattering = true, backend = :gpu)
+res.run.executor.schedule         # :wavefront
+res.run.executor.admitted         # primaries started per device
+res.run.executor.spawned          # children per device
+```
+
+On the AthenaK torus at stride 1 (10⁶ primaries) the thin photon phase takes 1.35 s and
+the Compton phase 13.5 s on one A100, 0.34 and 0.20 of their time before the wavefront;
+two A100s run them 1.30 and 1.67 times faster ([Performance](@ref) §7). A run over an
+emission window (`window`) runs on CPU threads only. Benchmarks compare the wavefront with
+the cascade of the same programs inside `Execution.with_wavefront_settings(f;
+wavefront = false)`; its other settings (budget, cohort, refill, sort) change the time and
+never a result.
+
+## Reusing the output arrays
+
+A repeated render can write into the arrays of an earlier result of the same plan instead
+of allocating new ones:
+
+```julia
+img = render(plan; backend = :gpu)
+img = render(plan; backend = :gpu, into = img)   # the same bits, no new maps
+```
+
+`render`, `render_crossings`, `render_analytic` and `analytic_movie` take `into`. The call
+drops the device copies of those arrays before it overwrites them, so a later upload sees
+the new values. On the A100 the 2048² closed-form radius call takes 0.048 s with `into`
+against 0.39 s without, most of which is allocating and collecting its 512 MiB of maps.
+
 ## Precision lanes
 
 The geodesic lane is a plan property:
@@ -87,4 +138,5 @@ maximum(abs, cpu.I .- gpu.I) / maximum(cpu.I)          # 1e-14 … 1e-9
 
 Measured throughput and the two-device scaling are on [Benchmarks](@ref); the
 execution model and the tuning knobs (`chunk`, `lanes`, the queue) are in
-[Performance](@ref).
+[Performance](@ref), and the device schedules with the rules that keep their bits in
+[GPU execution](@ref).

@@ -47,11 +47,13 @@ comp.n_primary, comp.n_children, comp.scatter_loss
 
 Scattering uses the thermally averaged ("hot") Klein–Nishina cross section tabulated on a
 log-log grid in photon energy and electron temperature; the table is built once per
-process, at the first scattering run (`table` passes one in). Each scattering generation
-runs as a layer of a cascade over chunks of primaries, up to `max_scatt` generations (3
-by default); a layer whose child buffer overflows is rerun at the counted size, so no
-child is lost or counted twice. On the sphere the absorption is off by default (the
-idealized Comptonization sphere) and `absorption = true` turns it on.
+process, at the first scattering run (`table` passes one in). On CPU threads each
+scattering generation runs as a layer of a cascade over chunks of primaries, up to
+`max_scatt` generations (3 by default); a layer whose child buffer overflows is rerun at
+the counted size, so no child is lost or counted twice. On GPUs every generation shares
+one cohort per device (below), and the result is the device cascade's bit for bit. On
+the sphere the absorption is off by default (the idealized Comptonization sphere) and
+`absorption = true` turns it on.
 
 Every step's scattering events are a Poisson process whose mean is the step's
 scattering depth times the importance bias `b`; each event spawns a child that carries
@@ -174,6 +176,10 @@ using CUDA
 spec = mc_spectrum(ball, 10^8; backend = :gpu)
 ```
 
-The cascade runs on each device lane with two swapped child buffers (`capacity` sets
-their initial size); the measured throughput is on [Benchmarks](@ref). The sampling,
+A stationary run takes the device wavefront: each device advances a cohort of photons of
+every generation a few steps per launch, adds the children a launch spawns to the cohort
+and refills it with primaries ([GPU rendering](@ref) explains it; `capacity` sets the
+first size of the child queue, and a launch whose children overflow it runs again). A run
+over an emission window uses the CPU threads. The measured throughput is on
+[Benchmarks](@ref). The sampling,
 biasing and normalization are on the [Method](@ref) page.

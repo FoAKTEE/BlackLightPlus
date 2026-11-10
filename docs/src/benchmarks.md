@@ -36,6 +36,23 @@ thin `mc_spectrum` call takes 32 s on the CPU and 16 s on the A100 (146 s before
 the device tables), and a repeated call on the same snapshot 10.5 s and 4.1 s. The
 plunge stop halves the thin photon phase on both (2.3× on the CPU, 2.1× on the A100).
 
+## The Monte Carlo photon phases on the device wavefront
+
+The same deck, the photon phases of a stride-1 run timed around the layered run: the
+median of the warm calls of alternating processes of the tree before (main `f6decd6`,
+the cascade) and after (the device wavefront), in one job on the A100 and in pinned pairs
+on the CPU ([Performance](@ref) §7 gives the protocol and every row). Every call is bitwise
+the reference's.
+
+| Phase | 32 CPU threads | 1 A100, before | 1 A100, after | 2 A100, after |
+|---|--:|--:|--:|--:|
+| thin, 10⁶ primaries | 9.07 s | 4.00 s | 1.35 s | 1.05 s |
+| Compton, 10⁶ primaries and 7.3 × 10⁶ children | 51.4 s | 66.0 s | 13.5 s | 8.12 s |
+
+The CPU keeps the cascade, whose times are unchanged; the CPU rows ran on one NUMA node
+(cores 36–67). A warm thin `mc_spectrum` call on the snapshot takes 1.44 s on one A100
+(4.02 s before) and 9.09 s on 32 CPU threads.
+
 ## Against the reference implementation
 
 On identical decks the package and the reference implementation it replaced (the `blp`

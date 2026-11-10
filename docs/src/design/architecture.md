@@ -64,18 +64,22 @@ src/
 │   ├── Transfer/      Transfer.jl params.jl synchrotron.jl tetrads.jl coefficients.jl
 │   │                  segments.jl controls.jl march.jl
 │   └── MonteCarlo/    MonteCarlo.jl superphoton.jl emissivity.jl hotcross.jl tables.jl
-│                      generate.jl scatter.jl opacity.jl sinks.jl track.jl
+│                      generate.jl scatter.jl opacity.jl events.jl sinks.jl track.jl
+│                      march_state.jl
 ├── infra/
 │   ├── Data/          Data.jl fluid_blocks.jl ghost_cells.jl athenak_hdf5.jl athenak_bin.jl
 │   │                  uniform_grid.jl series.jl npy.jl tables.jl
 │   └── Execution/     Execution.jl devices.jl pool.jl residency.jl kernel.jl executor.jl
 │                      backend.jl ray_sources.jl schedule.jl worklist.jl accumulators.jl
-│                      children.jl cascade.jl
+│                      timebins.jl children.jl cascade.jl wave_queues.jl wave_sort.jl
+│                      wavefront.jl
 └── pipeline/
     ├── Plans/         Plans.jl config.jl lanes.jl plan.jl prepare.jl
     ├── Analysis/      Analysis.jl refinement.jl lensing_bands.jl interferometry.jl
-    └── Products/      Products.jl programs.jl image.jl trace.jl sensitivity.jl analytic.jl
-                       analytic_surfaces.jl analytic_movie.jl amr.jl montecarlo.jl
+    └── Products/      Products.jl programs.jl epilogues.jl image.jl trace.jl sensitivity.jl
+                       analytic.jl analytic_surfaces.jl analytic_movie.jl crossings.jl amr.jl
+                       montecarlo.jl montecarlo_tables.jl montecarlo_time.jl mc_order.jl
+                       mc_stages.jl
 ext/
 └── BlackLightPlusCUDAExt.jl
 ```
@@ -235,13 +239,18 @@ event_bias(bias, nscatt, theta_e, w) -> (b, copies)
 Opacities(; params, table, bias = Bias(1.0), L_unit = 1.0, weight_min = MC_WEIGHT_MIN, max_scatt = 0)
 
 abstract type Sink end      # record!(sink, sph); child_stream(sink, rng, event) -> (rng, fits);
-                            # spawn!(sink, child, rng); tally!(sink, sph, ::MarchLedger)
+                            # spawn!(sink, child, rng); branch!(sink, ev::ScatterEvent, rng);
+                            # tally!(sink, sph, ::MarchLedger)
 event_weight(w, b, dtau); next_event(u, lambda, dtau, rng) -> (u, frac, rng)
 scatter_site(provider, st, x, params) -> (zone, ok)
 FlatMarch(sphere; step_frac = SPHERE_STEP_FRAC, nmax = SPHERE_MAX_STEPS)
 CurvedMarch(st; C = 80.0, escape = 1.0e3, R_em = 100.0, nmax = CURVED_MAX_STEPS, plunge = true)
 track!(ctl, st, provider, opac, sph, rng, sink; absorb = Val(true), scatter = Val(false))
     -> (sph, recorded, rng)
+March(ctl, st, provider, opac, sink, absorb::Val, scatter::Val)   # the fixed inputs of a march
+march_open(m, sph, rng) -> MarchState; march_steps(m, s, last) -> MarchState
+march_close(m, s) -> (sph, recorded, rng)   # track! = march_close ∘ march_steps ∘ march_open
+ScatterEvent(x, p, zone, w, tau_abs, tau_scatt, parent); kick(ev, rng) -> (child, rng)
 ```
 
 - One tracker serves the sphere and the GRMHD fluid, with and without scattering. The
@@ -266,6 +275,13 @@ track!(ctl, st, provider, opac, sph, rng, sink; absorb = Val(true), scatter = Va
   innermost spherical photon orbit on Kerr, less `PLUNGE_MARGIN`). Constants carry no
   leading underscore. `fluid_tetrad` (imaging, e₍₃₎ along k) and
   `emission_tetrad` (Monte Carlo, e₍₁₎ along b) are different physics and stay apart.
+- The march is cut at the back edge of its step loop. `MarchState` (344 B) holds every
+  value the loop carries from one iteration to the next and the photon the march started
+  from; `march_steps(m, s, last)` runs the iterations `s.it` through `last`, so the stage
+  programs of the device wavefront march a photon in segments with the bits of `track!`
+  ([GPU execution](@ref) §4, §5). A step that spawns hands each child's `ScatterEvent` (the
+  inputs of its kick) to `branch!`, whose default kicks it inside the march and calls
+  `spawn!`.
 
 ## 4. Infrastructure tier
 
@@ -341,7 +357,13 @@ chunk_for(exec, n; hint = chunk_hint(prog), bytes) -> Int   # the chunk of a run
 foreach_item!(exec, prog, items; outs::Tuple = (), order = nothing) -> outs
 foreach_item!(exec, (prog64 => rescue, prog32 => bulk); outs) -> outs   # one queue, several programs
 foreach_cascade!(exec, primary, layer, n, depth; capacity = nothing, chunk = cascade_chunk(exec, n)) -> Int
-describe(exec) -> (kind, devices, lanes, chunk, threads)
+Wavefront(; start, advance, retire, primary, layer, branch = nothing, key = nothing, doubling_cap)
+foreach_wavefront!(exec, wf::Wavefront, n, depth; capacity = nothing, chunk = nothing) -> Int
+with_wavefront_settings(f; budget, cohort, refill, doubling, wavefront, sort_every, wait,
+                        cost_order, workgroup)            # read by the wavefront calls inside f
+describe(exec) -> (kind, devices, lanes, chunk, threads)  # a pool adds reruns, schedule, settings,
+                                                          # admitted, spawned, iterations
+wave_log(exec::PoolExecutor)                              # per device, per wavefront iteration
 
 abstract type RaySource end; ray(src, item) -> (y::SVector{8}, ok::Bool)
 HostRays(rays); CameraRays(st, frame, gen)     # gen: PixelGrid(fov, npix) | BlockGrid(bs) | CoordList(α, β)
@@ -373,17 +395,26 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
   from one shared queue. A chunk passes its items to the kernel (`device_items`: a range
   as it is, with no upload; any other list staged as `Int32` when every item fits, `Int`
   otherwise), launches the program's device twin once (after `prepare_launch!(dev, prog)`,
-  which raises the CUDA stack to `stack_bytes(prog)`, at `workgroupsize(prog)`),
-  synchronizes and copies the outputs back through host staging into `outs[k][item]` (one
-  contiguous copy for a range). Executors with the same devices and `lanes` share one pool
-  of the process registry, whatever their chunk, closed at exit; a `DevicePool` built
-  directly is the caller's to `close`.
+  which raises the CUDA stack to `stack_bytes(prog)`, at `workgroupsize(prog)`, through
+  `launch_capped!` when the program has a `register_cap`), synchronizes and copies the
+  outputs back through host staging into `outs[k][item]` (one contiguous copy for a
+  range). The lanes of a device overlap their launches: they read the same residency
+  arrays, exempt from stream synchronisation by `share_lanes!` while `lane_sharing()`, and
+  each owns the arrays it writes; every job ends with `sync_lanes` on the devices of its
+  lanes. Executors with the same devices and `lanes` share one pool of the process
+  registry, whatever their chunk, closed at exit; a `DevicePool` built directly is the
+  caller's to `close`.
 - **Residency.** `DeviceAdaptor(pool, dev, readonly)` is the `Adapt` adaptor of a device
   twin: each `Array` leaf becomes its device copy, cached per pool and device by the
-  identity of the host array and held weakly (a cached host array must not be mutated
-  afterwards). A program is adapted once per device and call with `readonly = true`, its
-  arrays behind `readonly(dev, a)` (`constify` on a `HostDevice`, the read-only data cache
-  on a `CUDADevice`). A type whose twin is not its arrays copied defines
+  identity of the host array and held weakly. A copy is only read, and the lanes of its
+  device share it; a cached host array is not mutated in place unless its copies are
+  dropped first (`invalidate!(arrays)`: every lane of each device holding a copy
+  synchronised, then the copies freed), as the products do for the arrays a caller gives
+  them in `into`. An entry whose host array was collected is freed at the cache's next
+  upload, after every lane of the device has synchronised. A program is adapted once per
+  lane and call with `readonly = true`, its arrays behind `readonly(dev, a)` (`constify` on
+  a `HostDevice`, the read-only data cache on a `CUDADevice`). A type whose twin is not its
+  arrays copied defines
   `Adapt.adapt_structure(::DeviceAdaptor, x)`: the accumulators register zeroed twins; the
   worklist swaps the blocks of a `BlockGrid` per chunk.
 - **Ray sources** are program fields: `CameraRays` calls `camera_ray` inside the program,
@@ -402,7 +433,8 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
   `nuLnu`, `nuLnu_total`, `nuLnu_solid`, `total_power`, `total_weight`, `mean_energy`.
   `InclinationBands` keeps its band centres and half-width. `ExactScalars(n)` has `add!`,
   `scalar`, `addends` (one key or a tuple of keys). `gather!(acc)` adds the device twins
-  after `foreach_item!` or `foreach_cascade!`; `Spectrum`, `scalar` and `children` throw
+  after `foreach_item!`, `foreach_cascade!` or `foreach_wavefront!`, one twin per lane
+  that ran the program; `Spectrum`, `scalar` and `children` throw
   while twins are pending. The accumulators are not `Sink`s: a Monte Carlo sink forwards
   `record!(sink, sph)` to `record!(bins, sph.E, sph.w, escape_direction(ctl, sph))` and
   `spawn!` to the child buffer.
@@ -417,17 +449,42 @@ resident(pool_or_exec, dev, obj); device_program(pool_or_exec, dev, prog)
   buffers swapped per generation and only their count is read back; a generation that can
   spawn records into zeroed lane scratch, drained into the device's totals through the one
   kernel once its children fit, and a generation whose children overflow the buffer
-  (`overflow`) runs again in full after the buffer grows to the count. On threads each
-  task keeps two growing buffers and reruns only the item that overflowed. Child streams
-  are keyed by genealogy, so a rerun spawns identical children, and the totals, the set of
+  (`overflow`) runs again in full after the buffer grows to the count and an eighth more.
+  Without a `capacity` a device generation of a chunk of `m` primaries starts with
+  `child_slots(pool, dev, m, T)`: the largest of 4096, `cld(m, 2)`, the most children a
+  generation on the device has spawned in the process (`learned_slots`) and the slots an
+  eighth of the device's `free_bytes` holds, at most 16 per primary. On threads each task
+  keeps two growing buffers and reruns only the item that overflowed. Child streams are
+  keyed by genealogy, so a rerun spawns identical children, and the totals, the set of
   children and the returned count are bitwise independent of the executor, the chunking,
   the device count, the lane and the arrival order.
+- **Wavefront.** `foreach_wavefront!(exec, wf, n, depth; capacity, chunk)` runs the
+  transport of a `Wavefront` (its stage programs `start`, `advance`, `retire`, `branch`,
+  the key stage `key`, and the history programs `primary` and `layer` of the same
+  transport) as `foreach_cascade!(exec, wf.primary, wf.layer, n, depth)` would, with the
+  same totals and returned count. On a `PoolExecutor` whose every device answers
+  `wavefront(dev)` (a `CUDADevice`) it runs the device wavefront: each device keeps a
+  cohort of live states on its first lane, advances each by at most a budget of loop
+  iterations per launch, retires the stopped ones, opens their children into the same
+  cohort and refills it from a block counter the devices share ([GPU execution](@ref) §4);
+  every other call runs the cascade. A stage program is called as `prog(item, i)` with a
+  `WaveQueues` placeholder that each launch binds to the lane's queues (`Cohort`,
+  `StateBuffer`, `admit!`, `place!`, `admit_child!`, `fault!`, `WaveSwap`); its state type
+  is `wave_state(prog)`, the advance's step limit `wave_steps`, a state's generation
+  `generation`, a key stage's key count `wave_keys` (keys counted by `count_key!` into a
+  `KeyCount`, placed by `KeyPlace`), and a start program's predicted block costs
+  `block_costs`. The settings are scoped values (`with_wavefront_settings`); no setting
+  changes a result.
 - **Devices.** `HostDevice(id)` (the KernelAbstractions CPU backend as a logical device)
   and `CUDADevice(ordinal)`, an integer meaning the latter. The protocol is `backend(dev)`,
-  `activate!`, `functional`, `stage_alloc`/`stage_free`, `free!`, `prepare_launch!`,
-  `readonly`, `upload` and `select_devices`; the fallbacks serve `HostDevice` and throw
-  `BackendUnavailable` for other devices. The extension supplies the CUDA methods,
-  page-locked staging freed explicitly and the NVML idle probe included.
+  `activate!`, `functional`, `stage_alloc`/`stage_free`, `free!`, `free_bytes`,
+  `share_lanes!`, `lane_queue`, `sync_queue`, `queue_idle`, `prepare_launch!`,
+  `launch_capped!`, `readonly`, `upload`, `wavefront` and `select_devices`; the fallbacks
+  serve `HostDevice` (no free-memory budget, no shared-array exemption, launches finished
+  when they return, no register cap, no wavefront) and throw `BackendUnavailable` for
+  other devices. The extension supplies the CUDA methods, page-locked staging freed
+  explicitly, the lanes' streams, the capped launch, the NVML idle probe and the precompile
+  workload included.
 - **Session state.** The backend session record and the pool registry are the package's
   only session state; both sit behind locks.
 
@@ -534,6 +591,18 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   offset, lint)` generates the primaries, `MCTransport(ctl, st, provider, opac, absorb,
   scatter)` holds the fixed inputs of every march, and the ledger is striped
   `LEDGER_STRIPES` ways so the atomics spread over distinct addresses.
+- The stage programs of the Monte Carlo wavefront (`mc_stages.jl`) are the statements of
+  `MCPrimary` and `MCLayer` cut at the march's loop back edge: `MCStart(source, transport,
+  sink, seed)` emits a primary and opens its march, `MCAdvance(transport, sink)` runs a
+  live march for at most the launch's budget of loop iterations (its children kicked
+  inline), `MCRetire(transport, sink)` records and tallies a stopped march,
+  `MCBranch(transport, sink)` opens a child's march, and the key stage `MCKey(transport)`
+  keys a march by its generation, then `photon_key` (`mc_order.jl`).
+  `mc_wavefront(source, transport, sink, seed, primary, layer, depth)` builds the
+  `Wavefront` of a stationary run; `source_costs` gives the start program's block costs.
+- The host epilogue programs `BandSum`, `Fill` and `Split` (`epilogues.jl`) sum band maps,
+  fill constant maps and split Stokes vectors into planes, on `ThreadedExecutor` whatever
+  executor ran the product.
 - `StoredPathProgram` (a march along a stored trajectory) and `AdaptiveTraceProgram`
   (`trace_geodesic` with every step saved) hold host vectors and run on threads only.
   Every other program is `isbits` after `Adapt` and allocates nothing.
@@ -542,11 +611,11 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
 
 | Entry point | Returns | Constraints |
 |---|---|---|
-| `render(plan; backend)` | `Image` | needs matter |
+| `render(plan; backend, into)` | `Image` | needs matter |
 | `render(plan; path::Trajectories, backend)` | `Image` | threads only |
 | `render(plan, coords; backend)` | `4 × n` `Matrix{Float64}`, rows I, Q, U, V | no `MixedLanes` |
 | `render_amr(plan; block = 16, max_level = 2, refine, backend)` | `(image, levels, nrays)` | no `MixedLanes`; `resolution % block == 0` |
-| `render_analytic(plan, disk; bands = (0, 1, 2), ro, observables, backend)` | `(I, Ib, rs, ts, phis, redshift_sign, bands, plan, run)` | Kerr plan with the disk's spin |
+| `render_analytic(plan, disk; bands = (0, 1, 2), ro, observables, backend, into)` | `(I, Ib, rs, ts, phis, redshift_sign, bands, plan, run)` | Kerr plan with the disk's spin |
 | `photon_ring_layers(plan, disk; bands, dx, box, npts, ro, fudge, backend)` | `(I, Ib, masks, grid, N, box, dx, dxs, points, bands, plan, run)` | Kerr plan with the disk's spin |
 | `trace(plan; backend, adaptive = false)` | `Trajectories` | no `MixedLanes`; `adaptive` on threads only |
 | `shadow(plan; backend)` | `(fate, steps, null_error, radius, final, plan, run)` | no `MixedLanes` |
@@ -562,6 +631,11 @@ workgroupsize(::ImagingProgram{IQUV}) = 64
   records `run = (executor = describe(exec), lanes, version, seconds)` in its result, or in
   its `image` for `render_amr` and `sensitivity`; `render(plan, coords)` returns the bare
   matrix.
+- `render`, `render_crossings`, `render_analytic` and `analytic_movie` take `into`, an
+  earlier result of the same shape, and write their maps into its arrays; the result is
+  bitwise the one without `into`. The device copies of those arrays are dropped from the
+  pools' residency caches first (`invalidate!`), and the host epilogues run on Julia
+  threads whatever the executor.
 - A camera ray without a positive-energy null root is a NaN pixel in a render and an
   error in `trace` and `shadow`. `render(plan; path)` and `trace(…; adaptive = true)` throw
   `ArgumentError` unless the backend resolves to a `ThreadedExecutor`. The analytic
@@ -588,13 +662,17 @@ cell above the horizon at `stride = 1`) by their expected counts, marches geodes
 (`CurvedMarch` with `C`, `escape`, `R_em`) and returns a `GRMHDSpectrumResult` of
 inclination bands and scattering orders with the weight and power ledger. Escaped photons go into `ExactBins` (`PolarBands(6)` for the
 sphere, `InclinationBands((17, 50, 90), 10)` on a grid), the weight ledger into
-`ExactScalars`, and scattered children into the `ChildBuffer` of the cascade
-(`foreach_cascade!`): within each chunk of primaries the next generation tracks the
-children of the one before, up to `max_scatt` generations, and a generation whose buffer
-overflows is rerun at the counted capacity into scratch sums. The hot-cross table is the
+`ExactScalars`, and scattered children into the `ChildBuffer` of the run. A stationary
+run goes through `foreach_wavefront!`: on a pool of CUDA devices the device wavefront
+tracks every generation up to `max_scatt` in one cohort per device, and an advance whose
+children overflow the child queue runs again with a larger queue; elsewhere the cascade
+(`foreach_cascade!`) tracks, within each chunk of primaries, the children of each
+generation in the next, and a generation whose buffer overflows is rerun at the counted
+capacity into scratch sums. A run over an emission window is a cascade on threads. The
+hot-cross table is the
 `table` given or `hotcross_table(plan)`; the importance bias is a `StateBias` of `b0 =
 bias` (1 by default) and the order factor `bias_order` (1 by default), or the `Bias` or
-`StateBias` given. `gather!` follows the cascade and
+`StateBias` given. `gather!` follows the run and
 `Spectrum(bins)` rounds once per cell, so on one hardware the bins, the ledger and the
 children depend only on the plan,
 `Ns` and the keywords, whatever the executor, thread count, device count or chunking.
@@ -824,8 +902,10 @@ comment or module docstring.
 | `physics/MonteCarlo/generate.jl` | Superphoton generation from an emission zone | `GenerationTables`, `generate` |
 | `physics/MonteCarlo/scatter.jl` | The Compton kick | `scatter_superphoton` |
 | `physics/MonteCarlo/opacity.jl` | Opacity rates, the scattering biases, the opacity record | `rate_frame`, `Bias`, `StateBias`, `Opacities` |
-| `physics/MonteCarlo/sinks.jl` | The sink protocol and the march ledger | `Sink`, `record!`, `child_stream`, `spawn!`, `tally!`, `MarchLedger` |
-| `physics/MonteCarlo/track.jl` | The one superphoton tracker and its two march controls | `FlatMarch`, `CurvedMarch`, `track!` |
+| `physics/MonteCarlo/events.jl` | The scattering event of a march step | `ScatterEvent`, `kick` |
+| `physics/MonteCarlo/sinks.jl` | The sink protocol and the march ledger | `Sink`, `record!`, `child_stream`, `spawn!`, `branch!`, `tally!`, `MarchLedger` |
+| `physics/MonteCarlo/track.jl` | The one superphoton tracker and its two march controls | `FlatMarch`, `CurvedMarch`, `March`, `track!` |
+| `physics/MonteCarlo/march_state.jl` | The march of one superphoton cut at the back edge of its step loop | `MarchState`, `march_open`, `march_steps`, `march_close` |
 | `infra/Data/Data.jl` | Containers and files | includes, exports |
 | `infra/Data/fluid_blocks.jl` | AthenaK meshblocks as a grid provider | `FluidBlocks`, `LeafTable`, `LevelHash`, `BlockScan` |
 | `infra/Data/ghost_cells.jl` | The ghost layer of every meshblock, from its neighbours | `mesh_value`, `ghost_value`, `fill_ghosts!`, `MeshBox` |
@@ -836,10 +916,10 @@ comment or module docstring.
 | `infra/Data/npy.jl` | NumPy `.npy` writer | `write_npy` |
 | `infra/Data/tables.jl` | Host builders of the Monte Carlo tables and zones | `load_hotcross`, `emission_sites`, `zone_tables`, … |
 | `infra/Execution/Execution.jl` | Where programs run | includes, exports |
-| `infra/Execution/devices.jl` | Device handles and the device protocol | `HostDevice`, `CUDADevice`, `BackendUnavailable` |
-| `infra/Execution/pool.jl` | The device pool: lanes, shared queue, registry | `DevicePool` |
-| `infra/Execution/residency.jl` | A host object as a device sees it | `DeviceAdaptor`, `resident`, `device_program` |
-| `infra/Execution/kernel.jl` | The only kernel of the package and the launch traits | `_foreach!`, `workgroupsize`, `chunk_hint` |
+| `infra/Execution/devices.jl` | Device handles and the device protocol: lane queues, shared arrays, the lane check | `HostDevice`, `CUDADevice`, `BackendUnavailable`, `share_lanes!`, `wavefront` |
+| `infra/Execution/pool.jl` | The device pool: lanes, shared queue, learned child slots, registry | `DevicePool`, `sync_lanes`, `learned_slots` |
+| `infra/Execution/residency.jl` | A host object as a device sees it | `DeviceAdaptor`, `resident`, `device_program`, `invalidate!`, `ProgramTwins` |
+| `infra/Execution/kernel.jl` | The only kernel of the package and the launch traits | `_foreach!`, `workgroupsize`, `chunk_hint`, `register_cap`, `launch_capped!` |
 | `infra/Execution/executor.jl` | Executors: chunk a run, run a program over items, gather outputs | `ThreadedExecutor`, `PoolExecutor`, `foreach_item!`, `chunk_for` |
 | `infra/Execution/backend.jl` | The CPU/GPU switch | `resolve`, `backend!`, `backend` |
 | `infra/Execution/ray_sources.jl` | The initial state of an item's ray, made in the program | `CameraRays`, `PixelGrid`, `BlockGrid`, `CoordList` |
@@ -847,7 +927,10 @@ comment or module docstring.
 | `infra/Execution/worklist.jl` | The image-block worklist of adaptive refinement | `ImageBlock`, `stream_blocks!` |
 | `infra/Execution/accumulators.jl` | Exact bins and exact scalars | `ExactBins`, `ExactScalars`, `Spectrum`, `gather!` |
 | `infra/Execution/children.jl` | The children of a cascade and how a layer reads them | `ChildBuffer`, `Generation`, `spawn!` |
-| `infra/Execution/cascade.jl` | The cascade: every generation of a chunk on the worker that took it | `foreach_cascade!`, `cascade_chunk` |
+| `infra/Execution/cascade.jl` | The cascade: every generation of a chunk on the worker that took it | `foreach_cascade!`, `cascade_chunk`, `child_slots` |
+| `infra/Execution/wave_queues.jl` | The device queues of the wavefront and the adaptor that binds them | `WaveQueues`, `Cohort`, `StateBuffer`, `admit!`, `WaveSwap` |
+| `infra/Execution/wave_sort.jl` | The coherence sort of the wavefront's cohort | `KeyCount`, `count_key!`, `KeyPlace` |
+| `infra/Execution/wavefront.jl` | The device wavefront of a Monte Carlo phase | `Wavefront`, `foreach_wavefront!`, `with_wavefront_settings`, `block_costs` |
 | `pipeline/Plans/Plans.jl` | Run configuration, precision lanes and `prepare` | includes, exports |
 | `pipeline/Plans/config.jl` | Run configuration | `CameraConfig`, `PlasmaConfig`, `RunConfig` |
 | `pipeline/Plans/lanes.jl` | Precision lanes | `Lanes`, `MixedLanes`, `geodesic_type` |
@@ -859,14 +942,17 @@ comment or module docstring.
 | `pipeline/Analysis/interferometry.jl` | Visibility amplitudes along baselines | `radon_cut`, `visamp` |
 | `pipeline/Products/Products.jl` | Programs built from a plan and the entry points | includes, exports |
 | `pipeline/Products/programs.jl` | The per-item programs the executors run | `ImagingProgram`, `TraceProgram`, `ShadowProgram`, `MCPrimary`, `MCLayer` |
+| `pipeline/Products/epilogues.jl` | The host epilogues of the image products and caller storage | `BandSum`, `Fill`, `Split` |
 | `pipeline/Products/image.jl` | Full-frame and coordinate renders, the run record | `Image`, `render` |
 | `pipeline/Products/trace.jl` | Trajectories, ray fates, the two-phase render | `Trajectories`, `trace`, `shadow` |
 | `pipeline/Products/sensitivity.jl` | Parameter derivatives and ladders of Stokes I | `sensitivity`, `variants` |
 | `pipeline/Products/analytic.jl` | Exact-Kerr images of an equatorial disk | `AnalyticProgram`, `render_analytic`, `photon_ring_layers` |
 | `pipeline/Products/amr.jl` | Adaptive image-plane refinement | `render_amr` |
-| `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, the scattering cascade, exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
+| `pipeline/Products/montecarlo.jl` | Monte Carlo spectra: generation, the layered run (wavefront or cascade), exact binning | `mc_spectrum`, `ScatterResult`, `GRMHDSpectrumResult`, `emission_zones` |
 | `pipeline/Products/montecarlo_tables.jl` | The zone, generation and hot-cross tables on the run's executor; the zones kept across runs | `ZoneSums`, `ZoneCounts`, `HotcrossSigma`, `grid_tables`, `grid_zones`, `hotcross_build` |
-| `BlackLightPlusCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice` | extension module |
+| `pipeline/Products/mc_order.jl` | The order key of a Monte Carlo photon and the refill's block costs | `photon_key`, `source_costs` |
+| `pipeline/Products/mc_stages.jl` | The stage programs of the device wavefront of a Monte Carlo run | `MCStart`, `MCAdvance`, `MCRetire`, `MCBranch`, `MCKey`, `mc_wavefront` |
+| `BlackLightPlusCUDAExt.jl` (`ext/`) | CUDA methods of the device protocol for `CUDADevice`, the capped launch and the precompile workload | extension module |
 
 ## 9. Exports and internal interfaces
 
