@@ -2,13 +2,15 @@
 # frames, the emission-time axis t_obs + X⁰ and its causal bracket order along a backward
 # ray, read-only sampling of a held-in-memory series, and the two-frame window (end
 # short-circuits, default epoch, advance, mesh guard, device form); the frame sequence at
-# the sample's own time and the co-rotating plasma.
+# the sample's own time and the co-rotating plasma; the frame stack (the frame sequence on
+# a uniform cadence, its time origin, its frames carried along a rotation, its radius and
+# its device form).
 using Test, BlackLightPlus, StaticArrays
 using Adapt: Adapt
 using BlackLightPlus.Data: AthenaKSnapshot, SnapshotSeries, synthetic_series, scale_density,
                 bracketing_pair, get_frame, blend, FrameWindow, window, advance, SeriesProvider,
                 UniformGrid, resample, with_locate, level_hash, BlockScan, FluidBlocks, FrameSequence,
-                Corotating
+                Corotating, FrameStack, frame_time, frame_blocks, retimed
 using BlackLightPlus.Matter: PlasmaPrimitives, primitives, domain_radius
 using BlackLightPlus.Spacetime: KerrSchildCartesian, PlaneParallelCamera
 const Decks = Main.Decks
@@ -229,6 +231,58 @@ end
         @test q.bb ≈ R * ref.bb rtol = 1e-12
     end
     @test !primitives(c, SVector(5.0, 30.0, 0.0, 0.0)).inside
+end
+
+@testset "frame stack" begin
+    a = tiny_snap(); b = tiny_snap(rho0 = 5.0); c = tiny_snap(rho0 = 7.0)
+    fq = FrameSequence([0.0, 10.0, 20.0], [a.blocks, b.blocks, c.blocks])
+    st = FrameStack([a, b, c], 0.0, 10.0)
+    @test st.n == 3 && st.nmb == 1 && frame_time(st, 3) == 20.0
+    @test domain_radius(st) == domain_radius(a.blocks)
+    for t in (-4.0, 0.0, 2.5, 9.99, 10.0, 13.0, 20.0, 31.0)
+        q = primitives(st, SVector(t, X...)); r = primitives(fq, SVector(t, X...))
+        @test q.rho ≈ r.rho rtol = 1e-14
+        @test q.uu ≈ r.uu rtol = 1e-14
+        @test q.eint ≈ r.eint rtol = 1e-14
+    end
+    @test primitives(st, SVector(10.0, X...)) === primitives(b.blocks, SVector(0.0, X...))
+    @test primitives(st, SVector(20.0, X...)) === primitives(c.blocks, SVector(0.0, X...))
+    @test all(primitives(frame_blocks(st, k), SVector(0.0, X...)) ===
+              primitives((a, b, c)[k].blocks, SVector(0.0, X...)) for k in 1:3)
+    # the time origin: x⁰ = 0 is series time t_shift
+    s5 = retimed(st; t_shift = 5.0)
+    @test all(primitives(s5, SVector(t - 5.0, X...)) === primitives(st, SVector(t, X...))
+              for t in (1.0, 12.5, 17.0))
+    # the radius
+    @test !primitives(retimed(st; r_max = 1.0), SVector(0.0, X...)).inside
+    @test domain_radius(retimed(st; r_max = 1.0)) == 1.0
+    # a loader builds the same stack
+    sl = FrameStack(k -> (a, b, c)[k], 3, 0.0, 10.0)
+    @test sl.blocks.data == st.blocks.data
+    @test_throws ArgumentError FrameStack([a, Decks.amr_deck()], 0.0, 1.0)
+    @test_throws ArgumentError FrameStack([a, b], 0.0, 0.0)
+
+    # carried frames: each frame is the co-rotating plasma of its own time, blended
+    snap = Decks.amr_deck()
+    ω = 0.03
+    cs = FrameStack([snap, snap], 4.0, 10.0; omega = ω)
+    x = SVector(0.0, 4.2, -2.5, 1.3)
+    @test primitives(cs, SVector(4.0, x[2], x[3], x[4])) === primitives(snap, x)   # a frame time
+    for t in (6.5, 9.0, 13.0)
+        y = SVector(t, x[2], x[3], x[4])
+        w = (t - 4.0) / 10.0
+        ra = primitives(Corotating(snap, ω), SVector(t - 4.0, x[2], x[3], x[4]))
+        rb = primitives(Corotating(snap, ω), SVector(t - 14.0, x[2], x[3], x[4]))
+        q = primitives(cs, y); r = blend(ra, rb, w)
+        @test q.rho ≈ r.rho rtol = 1e-13
+        @test q.uu ≈ r.uu rtol = 1e-13
+        @test q.bb ≈ r.bb rtol = 1e-13
+    end
+    # the device form: isbits, no allocation
+    @test Decks.device_isbits(cs)
+    alloc(p, y) = (primitives(p, y); @allocated primitives(p, y))
+    @test alloc(cs, SVector(7.0, 5.0, 1.0, 0.3)) == 0
+    @test alloc(st, SVector(7.0, 1.0, 1.0, 0.3)) == 0
 end
 
 end

@@ -392,19 +392,147 @@ end
 Corotating(p::GridProvider, omega::Real) = Corotating{typeof(p)}(p, omega)
 Adapt.@adapt_structure Corotating
 
-@inline function primitives(c::Corotating, x::SVector{4})
-    θ = c.omega * Float64(x[1])
+@inline primitives(c::Corotating, x::SVector{4}) = _carried(c.inner, x, c.omega * Float64(x[1]))
+
+# The primitives of `p` carried rigidly by the rotation R_z(θ): those of `p` at R_z(−θ) x
+# with the velocity and the field rotated by R_z(θ).
+@inline function _carried(p, x::SVector{4}, θ::Float64)
     cs = cos(θ); sn = sin(θ)
     px = Float64(x[2]); py = Float64(x[3])
-    p = primitives(c.inner, SVector(Float64(x[1]), cs * px + sn * py, -sn * px + cs * py,
-                                    Float64(x[4])))
-    p.inside || return p
-    u = p.uu; b = p.bb
+    q = primitives(p, SVector(Float64(x[1]), cs * px + sn * py, -sn * px + cs * py, Float64(x[4])))
+    q.inside || return q
+    u = q.uu; b = q.bb
     T = eltype(u)
-    return PlasmaPrimitives{T}(p.rho, SVector{3,T}(cs * u[1] - sn * u[2], sn * u[1] + cs * u[2], u[3]),
-                               p.eint, SVector{3,T}(cs * b[1] - sn * b[2], sn * b[1] + cs * b[2], b[3]),
+    return PlasmaPrimitives{T}(q.rho, SVector{3,T}(cs * u[1] - sn * u[2], sn * u[1] + cs * u[2], u[3]),
+                               q.eint, SVector{3,T}(cs * b[1] - sn * b[2], sn * b[1] + cs * b[2], b[3]),
                                true)
 end
 
 "The domain radius of the carried provider."
 domain_radius(c::Corotating) = domain_radius(c.inner)
+
+"""
+    FrameStack{B} <: GridProvider
+    FrameStack(frames, t_first, dt; t_shift = 0.0, omega = 0.0, r_max = Inf)
+    FrameStack(frame, n, t_first, dt; kw...)
+
+Frames of one mesh at the uniformly spaced times `t_k = t_first + (k − 1) dt`,
+`k = 1:n`, held together and sampled at the time of each sample, on the host or, after
+`Adapt.adapt`, on a device (`isbits` there). `frames` are `AthenaKSnapshot`s or
+`FluidBlocks` sharing one mesh, or are made one at a time by `frame(k)` (a loader, so
+that only the stack and one frame are in memory at once); their blocks are stored back to
+back in one [`FluidBlocks`](@ref), frame `k`'s block `m` at `m + (k − 1) nmb`, located by
+the first frame's strategy. Fields: `blocks`, `nmb` (blocks per frame), `n`, `t_first`, `dt`,
+`t_shift`, `omega`, `r_max`.
+
+A sample at `x` reads the frames at the series time `s = t_shift + x⁰` (so `t_shift` is
+the series time of `x⁰ = 0`: the camera epoch of slow-light imaging, 0 when `x⁰` is the
+series time itself, as in a Monte Carlo run): the frames `k` and `k + 1` with
+`t_k ≤ s < t_{k+1}` and the weight `w = (s − t_k)/dt` of the upper frame, clamped to the
+end frames outside `[t_1, t_n]`. Each frame is first carried to `s` by the rotation
+`R_z(ω (s − t_j))` about the `z` axis, as [`Corotating`](@ref) carries a plasma, and the
+two samples are blended by [`blend`](@ref); `omega = 0` is the linear blend of
+[`FrameWindow`](@ref), and a frame time returns that frame exactly. With `omega` the
+angular velocity of a circular binary, structure that moves with the binary (gas bound
+to each hole, streams locked to the orbit) is interpolated along its motion instead of
+being cross-faded between two positions. Points with `|x| > r_max` are vacuum.
+"""
+struct FrameStack{B} <: GridProvider
+    blocks::B
+    nmb::Int
+    n::Int
+    t_first::Float64
+    dt::Float64
+    t_shift::Float64
+    omega::Float64
+    r_max::Float64
+end
+Adapt.@adapt_structure FrameStack
+
+_stack_blocks(f::AthenaKSnapshot) = f.blocks
+_stack_blocks(f::FluidBlocks) = f
+
+FrameStack(frames::AbstractVector, t_first::Real, dt::Real; kw...) =
+    FrameStack(k -> frames[k], length(frames), t_first, dt; kw...)
+
+function FrameStack(frame, n::Integer, t_first::Real, dt::Real; t_shift::Real = 0.0,
+                    omega::Real = 0.0, r_max::Real = Inf)
+    n >= 1 || throw(ArgumentError("FrameStack: no frames"))
+    (n == 1 || dt > 0) || throw(ArgumentError("FrameStack: dt must be positive"))
+    b1 = _stack_blocks(frame(1))
+    nmb = b1.nmb
+    data = similar(b1.data, size(b1.data)[1:4]..., nmb * n)
+    for k in 1:n
+        b = k == 1 ? b1 : _stack_blocks(frame(k))
+        same_mesh(b1, b) || throw(ArgumentError("FrameStack: frame $k is on another mesh"))
+        copyto!(view(data, :, :, :, :, (k - 1) * nmb + 1:k * nmb), b.data)
+    end
+    tile(a) = repeat(a, 1, n)
+    blocks = FluidBlocks(data, tile(b1.x_left), tile(b1.dx), tile(b1.lo), tile(b1.hi),
+                         b1.ni, b1.nj, b1.nk, nmb * n, b1.locate)
+    return FrameStack(blocks, nmb, n, Float64(t_first), Float64(dt), Float64(t_shift),
+                      Float64(omega), Float64(r_max))
+end
+
+"""
+    frame_time(s::FrameStack, k) -> Float64
+
+The series time `t_first + (k − 1) dt` of frame `k`.
+"""
+frame_time(s::FrameStack, k::Integer) = s.t_first + (k - 1) * s.dt
+
+"""
+    frame_blocks(s::FrameStack, k) -> FluidBlocks
+
+Frame `k` of `s` alone, as `FluidBlocks` that view the stack's arrays (host).
+"""
+function frame_blocks(s::FrameStack, k::Integer)
+    1 <= k <= s.n || throw(ArgumentError("frame $k outside 1:$(s.n)"))
+    b = s.blocks
+    r = (k - 1) * s.nmb + 1:k * s.nmb
+    return FluidBlocks(view(b.data, :, :, :, :, r), view(b.x_left, :, r), view(b.dx, :, r),
+                       view(b.lo, :, r), view(b.hi, :, r), b.ni, b.nj, b.nk, s.nmb, b.locate)
+end
+
+"""
+    retimed(s::FrameStack; t_shift = s.t_shift, omega = s.omega, r_max = s.r_max) -> FrameStack
+
+`s` with another time origin, rotation rate or radius, sharing its arrays.
+"""
+retimed(s::FrameStack; t_shift::Real = s.t_shift, omega::Real = s.omega, r_max::Real = s.r_max) =
+    FrameStack(s.blocks, s.nmb, s.n, s.t_first, s.dt, Float64(t_shift), Float64(omega),
+               Float64(r_max))
+
+# Frame k (1-based) of the stack at the position x, uncarried.
+@inline function _stack_frame(s::FrameStack, k::Int, x::SVector{4})
+    px = Float64(x[2]); py = Float64(x[3]); pz = Float64(x[4])
+    m = locate(s.blocks, px, py, pz)
+    m == 0 && return PlasmaPrimitives{Float64}()
+    return _record(block_sample(s.blocks, m + (k - 1) * s.nmb, px, py, pz), true)
+end
+
+struct _StackFrame{S}
+    s::S
+    k::Int
+end
+@inline primitives(f::_StackFrame, x::SVector{4}) = _stack_frame(f.s, f.k, x)
+
+@inline function primitives(s::FrameStack, x::SVector{4})
+    px = Float64(x[2]); py = Float64(x[3]); pz = Float64(x[4])
+    px * px + py * py + pz * pz <= s.r_max * s.r_max || return PlasmaPrimitives{Float64}()
+    t = s.t_shift + Float64(x[1])
+    u = s.n == 1 ? 0.0 : clamp((t - s.t_first) / s.dt, 0.0, Float64(s.n - 1))
+    k = min(unsafe_trunc(Int, u), s.n - 2) + 1
+    k = max(k, 1)
+    w = s.n == 1 ? 0.0 : u - (k - 1)
+    sa = s.omega == 0.0 ? _stack_frame(s, k, x) :
+         _carried(_StackFrame(s, k), x, s.omega * (t - frame_time(s, k)))
+    w == 0.0 && return sa
+    sb = s.omega == 0.0 ? _stack_frame(s, k + 1, x) :
+         _carried(_StackFrame(s, k + 1), x, s.omega * (t - frame_time(s, k + 1)))
+    w == 1.0 && return sb
+    return blend(sa, sb, w)
+end
+
+"The smaller of `r_max` and the domain radius of the frames."
+domain_radius(s::FrameStack) = min(s.r_max, domain_radius(s.blocks))

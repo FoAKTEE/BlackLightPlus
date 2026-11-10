@@ -83,9 +83,11 @@ end
 
 """
     emission_sites(blocks::FluidBlocks, st, params; stride = 1, seed = 0, r_emit_max = Inf,
-                   max_zones = typemax(Int)) -> Vector{ZoneSite{Float64}}
+                   max_zones = typemax(Int), t0 = 0.0) -> Vector{ZoneSite{Float64}}
 
-The emission zones of the cell centres of `blocks` as [`ZoneSite`](@ref)s. Each block is
+The emission zones of the cell centres of `blocks`, at coordinate time `t0` (the time at
+which `st` is read; the time of the snapshot on a time-dependent spacetime), as
+[`ZoneSite`](@ref)s. Each block is
 cut into groups of `stride` cells per axis (the last group of an axis takes the cells
 left); the cells of a group that their own block owns (`locate`) are its `n_own` owned
 cells, and one of them is drawn uniformly, by the uniform of draw `c` of the stream
@@ -102,7 +104,7 @@ innermost, at most `max_zones` long, independent of the thread count.
 """
 function emission_sites(blocks::FluidBlocks, st, params; stride::Integer = 1,
                         seed::Integer = 0, r_emit_max::Real = Inf,
-                        max_zones::Integer = typemax(Int))
+                        max_zones::Integer = typemax(Int), t0::Real = 0.0)
     s = Int(stride)
     s >= 1 || throw(ArgumentError("emission_sites: stride must be positive"))
     ng = (cld(blocks.ni, s), cld(blocks.nj, s), cld(blocks.nk, s))
@@ -112,11 +114,12 @@ function emission_sites(blocks::FluidBlocks, st, params; stride::Integer = 1,
     rng0 = run_rng(seed, 0)
     Lu3 = params.units.L_unit^3
     rmax = Float64(r_emit_max)
+    tz = Float64(t0)
     per_block = Vector{Vector{ZoneSite{Float64}}}(undef, blocks.nmb)
     Threads.@threads for mb in 1:blocks.nmb
         out = ZoneSite{Float64}[]
         d1 = blocks.dx[1, mb]; d2 = blocks.dx[2, mb]; d3 = blocks.dx[3, mb]
-        cell(i, j, k) = SVector(0.0, blocks.x_left[1, mb] + (i - 1) * d1,
+        cell(i, j, k) = SVector(tz, blocks.x_left[1, mb] + (i - 1) * d1,
                                 blocks.x_left[2, mb] + (j - 1) * d2,
                                 blocks.x_left[3, mb] + (k - 1) * d3)
         owned(x) = locate(blocks, x[2], x[3], x[4]) == mb

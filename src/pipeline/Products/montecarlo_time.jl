@@ -100,9 +100,12 @@ it never meets the draws of the photon's generation and march (fewer than `2^31`
 """
     place(sph::Superphoton, t, omega) -> Superphoton
 
-`sph`, emitted at coordinate time 0, carried to time `t`: the time translation, and for
-`omega ≠ 0` the rotation `R_z(ω t)` of its position and of the spatial components of its
-covariant momentum (`E = −p_t` unchanged); the emission coordinates follow the position.
+`sph`, emitted at its coordinate time `t_g = sph.x⁰` (0 for every node but the frames of a
+[`FrameStack`](@ref), generated at their own times), carried to time `t`: the time
+translation, and for `omega ≠ 0` the rotation `R_z(ω (t − t_g))` of its position and of
+the spatial components of its covariant momentum (`E = −p_t` unchanged); the emission
+coordinates follow the position. On a spacetime with the helical symmetry of `omega` the
+carried momentum stays null.
 """
 @inline function place(sph::Superphoton, t::Float64, omega::Float64)
     x = sph.x; p = sph.p
@@ -110,7 +113,8 @@ covariant momentum (`E = −p_t` unchanged); the emission coordinates follow the
         xn = SVector(t, x[2], x[3], x[4])
         pn = p
     else
-        c = cos(omega * t); s = sin(omega * t)
+        θ = omega * (t - x[1])
+        c = cos(θ); s = sin(θ)
         xn = SVector(t, c * x[2] - s * x[3], s * x[2] + c * x[3], x[4])
         pn = SVector(p[1], c * p[2] - s * p[3], s * p[2] + c * p[3], p[4])
     end
@@ -345,11 +349,14 @@ end
 # ---------------------------------------------------------------- emission nodes
 
 # A node of the emission: the stationary matter it emits (a sphere, or a grid provider
-# whose blocks give the zones) and its time profile on the window.
+# whose blocks give the zones), its time profile on the window and the coordinate time t0
+# at which its zones are generated (0, or a frame's own time on a time-dependent metric).
 struct EmissionNode{M}
     matter::M
     profile::TimeProfile
+    t0::Float64
 end
+EmissionNode(m, profile::TimeProfile) = EmissionNode(m, profile, 0.0)
 
 # The window of the run, checked.
 function run_window(o)
@@ -360,8 +367,9 @@ function run_window(o)
 end
 
 # The nodes of frames `frames` at times `ts` on the window `(ta, tb)`: the runs of equal
-# consecutive frames (`same(a, b)`), each with the sum of its frames' hats.
-function series_nodes(ts::AbstractVector, frames::AbstractVector, ta, tb, same)
+# consecutive frames (`same(a, b)`), each with the sum of its frames' hats; `anchored`
+# generates each node's zones at its first frame's time.
+function series_nodes(ts::AbstractVector, frames::AbstractVector, ta, tb, same; anchored = false)
     (ts[1] <= ta && tb <= ts[end]) ||
         throw(ArgumentError("mc_spectrum: the window ($ta, $tb) leaves the series span " *
                             "[$(ts[1]), $(ts[end])]"))
@@ -380,7 +388,8 @@ function series_nodes(ts::AbstractVector, frames::AbstractVector, ta, tb, same)
         j < M && (push!(kt, ts[j + 1]); push!(kv, 0.0))
         M == 1 && (kt = [ta, tb]; kv = [1.0, 1.0])
         prof = clip_profile(kt, kv, ta, tb)
-        profile_area(prof) > 0.0 && push!(nodes, EmissionNode(frames[i], prof))
+        profile_area(prof) > 0.0 &&
+            push!(nodes, EmissionNode(frames[i], prof, anchored ? Float64(ts[i]) : 0.0))
         i = j + 1
     end
     return [n for n in nodes]
@@ -404,6 +413,19 @@ function timed_matter(fs::FrameSequence, st, ta, tb)
     return series_nodes(fs.times, fs.frames, ta, tb, ===), fs, 0.0
 end
 timed_matter(sp::SeriesProvider, st, ta, tb) = timed_matter(FrameSequence(sp.series), st, ta, tb)
+# The frames of a stack, each emitting from its own time over its hat and carried by the
+# rotation of the stack: on a time-dependent metric the rotation must be its helical symmetry.
+function timed_matter(fs::FrameStack, st, ta, tb)
+    fs.omega == 0.0 ? stationary_emission(st) :
+    helical_symmetry(st, fs.omega) ||
+        throw(ArgumentError("mc_spectrum: a frame stack carried at ω = $(fs.omega) needs a " *
+                            "spacetime with that helical symmetry; $(nameof(typeof(st))) has none"))
+    ts = [frame_time(fs, k) - fs.t_shift for k in 1:fs.n]
+    frames = [frame_blocks(fs, k) for k in 1:fs.n]
+    fs.n == 1 &&           # one frame emits over any window, carried from its own time
+        return [EmissionNode(frames[1], TimeProfile([ta, tb], [1.0, 1.0]), ts[1])], fs, fs.omega
+    return series_nodes(ts, frames, ta, tb, (a, b) -> false; anchored = true), fs, fs.omega
+end
 function timed_matter(m, st, ta, tb)
     stationary_emission(st)
     return uniform_node(m, ta, tb), m, 0.0
@@ -446,6 +468,7 @@ last_frame(::Any) = Inf
 last_frame(s::VariableSphere) = s.times[end]
 last_frame(fs::FrameSequence) = fs.times[end]
 last_frame(sp::SeriesProvider) = sp.series.times[end]
+last_frame(fs::FrameStack) = frame_time(fs, fs.n) - fs.t_shift
 
 # ---------------------------------------------------------------- the runs
 
@@ -510,8 +533,8 @@ function mc_run_timed(matter, plan, exec, bands, o, t0)
     ta, tb = run_window(o)
     nodes, provider, omega = timed_matter(matter, st, ta, tb)
     W = node_shares(nodes, ta, tb)
-    per = [emission_sites(zone_blocks(n.matter), st, plan.params; seed = o.seed, o.zones...)
-           for n in nodes]
+    per = [emission_sites(zone_blocks(n.matter), st, plan.params; seed = o.seed, t0 = n.t0,
+                          o.zones...) for n in nodes]
     sites = reduce(vcat, [scaled_site.(s, W[m]) for (m, s) in enumerate(per)])
     isempty(sites) &&
         throw(ArgumentError("mc_spectrum: no emitting zones (check the matter and the cuts)"))

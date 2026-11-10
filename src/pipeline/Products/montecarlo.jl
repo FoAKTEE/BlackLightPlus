@@ -256,7 +256,10 @@ underflow and an overflow bin, on `time_ebins` frequency bins over
 stationary spacetime), a `Data.Corotating` plasma (on a spacetime with that helical
 symmetry), a `Data.FrameSequence` or `SeriesProvider` of frames (on a stationary
 spacetime; the frame times in the coordinate time of the spacetime, the window inside
-them) or a `Matter.VariableSphere`; the time-dependent ones need the window. The march
+them), a `Data.FrameStack` (each frame emitting from its own time over its hat, carried at
+the stack's `omega`: on a stationary spacetime with `omega = 0`, or on a spacetime with
+the helical symmetry of `omega`, a moving binary, with the frames carried along its
+orbit; the march reads the stack at each photon's time) or a `Matter.VariableSphere`; the time-dependent ones need the window. The march
 reads plasma and metric at each photon's time. Runs on CPU threads.
 
 Determinism: bitwise reduction. The bins, the ledger and the children depend only on the
@@ -329,7 +332,8 @@ mc_run(::Nothing, plan, exec, bands, o, t0) =
     throw(ArgumentError("mc_spectrum needs matter: prepare the plan with `matter = …`"))
 
 # Time-dependent matter needs the emission window.
-mc_run(m::Union{VariableSphere,FrameSequence,SeriesProvider,Corotating}, plan, exec, bands, o, t0) =
+mc_run(m::Union{VariableSphere,FrameSequence,SeriesProvider,Corotating,FrameStack}, plan, exec,
+       bands, o, t0) =
     throw(ArgumentError("mc_spectrum: $(nameof(typeof(m))) changes in time; give the emission " *
                         "window, window = (t_a, t_b)"))
 

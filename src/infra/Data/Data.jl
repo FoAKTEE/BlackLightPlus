@@ -35,7 +35,8 @@ export AthenaKSnapshot, share_mesh, AthenaKBin, read_athenak_bin, sample_var,
 export UniformGrid, grid_sample, resample, scale_density
 # series and windows
 export SnapshotSeries, synthetic_series, bracketing_pair, get_frame, blend, FrameWindow,
-       window, advance, SeriesProvider, FrameSequence, Corotating
+       window, advance, SeriesProvider, FrameSequence, Corotating, FrameStack, frame_time,
+       frame_blocks, retimed
 # output
 export write_npy
 # Monte Carlo tables

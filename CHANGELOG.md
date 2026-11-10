@@ -7,6 +7,21 @@ While the version is `0.x`, a bump of `x` may break that API.
 
 ## [Unreleased]
 
+- `Data.FrameStack`: the frames of a dump series on one mesh at a uniform cadence, held
+  together on the host or, after `Adapt.adapt`, on a device, and sampled at each point's
+  own time (series time `t_shift + x⁰`). The two frames bracketing a time are each carried
+  to it by the rotation `R_z(ω τ)` before the blend (`omega` the orbital frequency of a
+  binary; `omega = 0` is `FrameWindow`'s blend), and points beyond `r_max` are vacuum. On
+  a binary-black-hole run with dumps 12.5 M apart, rebuilding a held-out dump from its
+  neighbours 25 M apart, the carried blend leaves an image L1 error of 0.32–0.36 of the
+  flux where the blend in place leaves 0.79–1.17. `frame_time`, `frame_blocks` and
+  `retimed` read and re-time a stack. With `mc_spectrum(...; window)`, every frame of a
+  stack emits over its hat from its own time (`emission_sites(...; t0)`, the zones at the
+  frame's coordinate time) and its photons are carried along the stack's rotation from
+  that time (`Products.place` rotates by `ω (t − t_g)`, `t_g` the photon's generation time,
+  0 before), so on a spacetime with the helical symmetry of `omega`, two holes on a
+  circular orbit, a series of real dumps emits null photons on the moving metric.
+
 - A Monte Carlo run on a pool builds its tables on the devices: the zone tables (the
   weight table and every zone's count and envelope, `Products.grid_tables`) and the
   process's hot-cross table (`Products.hotcross_build`, at the first scattering run), as

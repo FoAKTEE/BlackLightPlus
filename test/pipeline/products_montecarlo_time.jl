@@ -7,8 +7,10 @@
 # no phase shift; T3, the light echo of a thin Thomson shell is the closed form; T4, a
 # co-rotating plasma on the orbiting binary is helically symmetric, with a flat band light
 # curve, and a plasma symmetric under the rotation by π repeats every half period; T6,
-# light-curve errors fall as N^-1/2 and match the scatter of independent seeds; and the
-# argument checks.
+# light-curve errors fall as N^-1/2 and match the scatter of independent seeds; T7, a frame
+# stack: each frame emits from its own time and its photons, carried along the orbit, stay
+# null on the orbiting binary; without the rotation the stack on Kerr is the frame
+# sequence; and the argument checks.
 using Test, BlackLightPlus, StaticArrays, LinearAlgebra, Statistics
 using BlackLightPlus.Plans: RunConfig, prepare
 using BlackLightPlus.Products: mc_spectrum, light_curve, time_spectrum, arrival_times,
@@ -18,7 +20,8 @@ using BlackLightPlus.Matter: UniformSphere, VariableSphere, SphericalShell
 using BlackLightPlus.MonteCarlo: HotcrossTable, NW, NT, Bias, Superphoton
 using BlackLightPlus.Spacetime: KerrSchildCartesian, SuperposedKerrSchild, BoostedSuperposedKerrSchild,
                      CircularOrbit, metric_and_inverse, raise_index
-using BlackLightPlus.Data: FrameSequence, Corotating, synthetic_series, SeriesProvider, AthenaKSnapshot
+using BlackLightPlus.Data: FrameSequence, Corotating, synthetic_series, SeriesProvider, AthenaKSnapshot,
+                FrameStack
 using BlackLightPlus.Execution: Spectrum, InclinationBands, sector_row, ThreadedExecutor
 using BlackLightPlus.Numerics: SIGMA_THOMSON, GNEWT, CL, MCRng, mc_uniform, primary_rng
 const DK = Main.Decks
@@ -304,6 +307,60 @@ end
             q = mean(var(Ls; dims = 2) ./ mean(σ .^ 2; dims = 2))   # seed variance over the reported one
             @test 0.7 < q < 1.3
         end
+    end
+
+    @testset "T7: a frame stack emits from each frame's own time" begin
+        orbit = CircularOrbit((0.5, 0.5), 8.0)
+        Ω = orbit.omega
+        mov = BoostedSuperposedKerrSchild([0.5, 0.5], [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], orbit)
+        # a photon generated at the frame time t_k on the moving metric and placed at t:
+        # null when carried by R_z(Ω (t − t_k)), not when translated
+        tk = 37.0
+        x = SVector(tk, 9.0, -3.0, 1.5)
+        g, gi = metric_and_inverse(mov, x)
+        k = SVector(1.0, 0.3, -0.5, 0.2)
+        a = k' * g * k; bq = 2 * (g * k)[1]; c0 = g[1, 1]   # k + λ e_t null
+        λ = (-bq + sqrt(bq^2 - 4 * c0 * a)) / (2 * c0)
+        kn = k + SVector(λ, 0.0, 0.0, 0.0)
+        p = g * kn
+        sph = Superphoton(x, p, 1.0)
+        norm(q, st) = (gq = metric_and_inverse(st, q.x)[2]; (q.p' * gq * q.p) / q.p[1]^2)
+        @test abs(norm(sph, mov)) < 1e-12
+        for t in (tk + 6.0, tk - 9.0)
+            @test abs(norm(place(sph, t, Ω), mov)) < 1e-12
+            @test abs(norm(place(sph, t, 0.0), mov)) > 1e-5
+        end
+        @test place(sph, tk, Ω).x == sph.x                    # no rotation at its own time
+        # the stack on the orbiting metric: frames emit at their own times
+        snap = DK.amr_deck()
+        fs = FrameStack([snap, snap, snap], 0.0, 20.0; omega = Ω)
+        kw = (C = 32.0, backend = :cpu, bands = InclinationBands((90.0,), 90.0))
+        r = mc_spectrum(prepare(TORUS_CFG; spacetime = mov, matter = fs), 20_000; seed = 7,
+                        window = (0.0, 40.0), time_bins = (-40.0, 80.0, 12), kw...)
+        @test r.omega == Ω && length(r.shares) == 3 && sum(r.shares) ≈ 1.0
+        @test r.shares ≈ [0.25, 0.5, 0.25]
+        @test r.result.escaped_power > 0 && sum(r.total.count) > 0
+        # one frame emits over any window, carried from its own time (the frame at t = 50)
+        r1 = mc_spectrum(prepare(TORUS_CFG; spacetime = mov, matter = FrameStack([snap], 50.0, 1.0; omega = Ω)),
+                         5_000; seed = 9, window = (0.0, 40.0), time_bins = (-40.0, 80.0, 12), kw...)
+        @test r1.shares == [1.0] && r1.result.escaped_power > 0
+        @test_throws ArgumentError mc_spectrum(prepare(TORUS_CFG; spacetime = mov,
+                                                       matter = FrameStack([snap, snap], 0.0, 20.0)), 100;
+                                               window = (0.0, 20.0), kw...)
+        @test_throws ArgumentError mc_spectrum(prepare(TORUS_CFG; spacetime = mov,
+                                                       matter = FrameStack([snap, snap], 0.0, 20.0; omega = 1.1Ω)),
+                                               100; window = (0.0, 20.0), kw...)
+        # without the rotation, on Kerr, the stack is the frame sequence of its frames
+        b2 = DK.amr_deck(scale = 2.0f0)
+        kerr = KerrSchildCartesian(0.9)
+        kw2 = (C = 32.0, backend = :cpu, window = (0.0, 20.0), time_bins = (-30.0, 50.0, 8))
+        rs = mc_spectrum(prepare(TORUS_CFG; spacetime = kerr, matter = FrameStack([snap, b2], 0.0, 20.0)),
+                         20_000; seed = 8, kw2...)
+        rq = mc_spectrum(prepare(TORUS_CFG; spacetime = kerr,
+                                 matter = FrameSequence([0.0, 20.0], [snap.blocks, b2.blocks])),
+                         20_000; seed = 8, kw2...)
+        @test rs.total.count == rq.total.count
+        @test rs.total.sumwE ≈ rq.total.sumwE rtol = 1e-9
     end
 
     @testset "argument checks" begin

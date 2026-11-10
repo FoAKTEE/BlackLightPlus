@@ -30,7 +30,8 @@ using ..MonteCarlo: Sink, Superphoton, GenerationTables, Opacities, Bias, StateB
                     total_compton_cross_num, SPHERE_STEP_FRAC, SPHERE_MAX_STEPS
 import ..MonteCarlo: record!, child_stream, spawn!, tally!
 using ..Data: FluidBlocks, AthenaKSnapshot, locate, build_weight_table, emission_sites, zone_tables,
-              build_hotcross_table, FrameSequence, Corotating, SeriesProvider
+              build_hotcross_table, FrameSequence, Corotating, SeriesProvider, FrameStack,
+              frame_time, frame_blocks
 import ..Execution
 using ..Execution: ThreadedExecutor, resolve, describe, foreach_item!, ray, image_coords,
                    CameraRays, BlockGrid, CoordList, mixed_partition, ImageBlock, stream_blocks!,
