@@ -161,3 +161,5 @@ end
 helical_symmetry(st::BoostedSuperposedKerrSchild, omega::Real) =
     st.trajectory isa CircularOrbit && omega == st.trajectory.omega &&
     all(a -> a[1] == 0 && a[2] == 0, st.spin)
+helical_symmetry(st::BoostedSuperposedKerrSchild) =
+    st.trajectory isa CircularOrbit && helical_symmetry(st, st.trajectory.omega)

@@ -4,12 +4,14 @@
 # stationary photons of one plasma state (a frame of a series, a variable sphere at a node,
 # a snapshot), at times drawn from its profile φ_m(t) (the hat of a frame, a uniform window),
 # carried to that time by the time translation and, for a co-rotating plasma, the rotation
-# R_z(ω t) of the helical symmetry. The node's zones enter the generation tables with the
-# measure W_m dV, W_m = ∫φ_m dt/(t_b − t_a), so the weight table is the window mean of
-# the emission and the expected number of primaries is the target; with one node and a
-# uniform profile, W = 1 and every table, count and photon is the stationary module's,
-# bit for bit, but for its emission time. The emission time draws from the primary's
-# identity at draw 2^31 (`time_stream`), so the stationary draws are untouched.
+# R_z(ω t) of the helical symmetry; on a metric without any helical symmetry the frames of a
+# stack held in place generate each photon at its own event (`EventSource`). The node's
+# zones enter the generation tables with the measure W_m dV, W_m = ∫φ_m dt/(t_b − t_a), so
+# the weight table is the window mean of the emission and the expected number of primaries
+# is the target; with one node and a uniform profile, W = 1 and every table, count and
+# photon is the stationary module's, bit for bit, but for its emission time. The emission
+# time draws from the primary's identity at draw 2^31 (`time_stream`), so the stationary
+# draws are untouched.
 #
 # A packet of weight w stands for w (t_b − t_a) T_unit physical photons, T_unit = L_unit/c
 # per unit of coordinate time; a photon escaping at (t, x) with spatial direction n̂
@@ -255,7 +257,8 @@ arrival times reached by every emitting point over the whole window; outside it 
 curve sees part of the source. `shares` are the nodes' shares `W_m` of the emission,
 `omega` the rotation rate of the emission and `beyond_series` the fraction of the march
 time, weighted by the photons' starting weights, spent after the last frame of a series
-(0 for matter without one), where the last frame stands in for the plasma;
+or the last slice of an `ADMSeries` (0 for neither), where the last frame stands in for the
+plasma and the last slice for the metric;
 [`arrival_times`](@ref), [`light_curve`](@ref) and [`time_spectrum`](@ref) read the bins.
 """
 struct TimedSpectrumResult{R,B,S}
@@ -415,11 +418,16 @@ end
 timed_matter(sp::SeriesProvider, st, ta, tb) = timed_matter(FrameSequence(sp.series), st, ta, tb)
 # The frames of a stack, each emitting from its own time over its hat and carried by the
 # rotation of the stack: on a time-dependent metric the rotation must be its helical symmetry.
+# On a metric with no helical symmetry at all, frames held in place (two or more) emit each
+# photon at its own event (`EventSource`, chosen by `mc_run_timed`).
 function timed_matter(fs::FrameStack, st, ta, tb)
-    fs.omega == 0.0 ? stationary_emission(st) :
-    helical_symmetry(st, fs.omega) ||
-        throw(ArgumentError("mc_spectrum: a frame stack carried at ω = $(fs.omega) needs a " *
-                            "spacetime with that helical symmetry; $(nameof(typeof(st))) has none"))
+    if !(fs.omega == 0.0 && fs.n > 1 && !helical_symmetry(st))
+        fs.omega == 0.0 ? stationary_emission(st) :
+        helical_symmetry(st, fs.omega) ||
+            throw(ArgumentError("mc_spectrum: a frame stack carried at ω = $(fs.omega) needs a " *
+                                "spacetime with that helical symmetry; " *
+                                "$(nameof(typeof(st))) has none"))
+    end
     ts = [frame_time(fs, k) - fs.t_shift for k in 1:fs.n]
     frames = [frame_blocks(fs, k) for k in 1:fs.n]
     fs.n == 1 &&           # one frame emits over any window, carried from its own time
@@ -451,7 +459,8 @@ function timed_bins(rows, o, ta, tb, R)
     return rule, bins, (ta + R, tb - R)
 end
 
-timed_record(bins, matter) = TimedRecord(bins, ExactScalars(2), Float64(last_frame(matter)))
+timed_record(bins, matter, st) =
+    TimedRecord(bins, ExactScalars(2), Float64(min(last_frame(matter), last_slice(st))))
 
 # The time-resolved result of the record `rec`.
 function timed_result(result, rec::TimedRecord, rule, window, interior, shares, omega)
@@ -500,7 +509,7 @@ function mc_run_timed(matter::Union{UniformSphere,VariableSphere}, plan, exec, b
     rows = bands === nothing ? PolarBands(6) : bands
     orders = ntuple(_ -> ExactBins(rows; o.grid...), o.K + 1)
     rule, timed, interior = timed_bins(rows, o, ta, tb, R)
-    trec = timed_record(timed, matter)
+    trec = timed_record(timed, matter, st)
     ledger = mc_ledger()
     N = first_items[end]
     layout = widest_layout(max(1, N), o.K)
@@ -546,14 +555,16 @@ function mc_run_timed(matter, plan, exec, bands, o, t0)
     sources = [ZoneSource(sites[zfirst[m] + 1:zfirst[m + 1]], n.matter, st, plan.params,
                           wgt, EMISSIVITY_TABLE, dnmax[zfirst[m] + 1:zfirst[m + 1]],
                           offset[zfirst[m] + 1:zfirst[m + 1] + 1]) for (m, n) in enumerate(nodes)]
-    src = TimedSource(sources, offset[zfirst .+ 1], [n.profile for n in nodes], omega)
+    profiles = [n.profile for n in nodes]
+    src = helical_symmetry(st, omega) ? TimedSource(sources, offset[zfirst .+ 1], profiles, omega) :
+          EventSource(sources, offset[zfirst .+ 1], profiles)      # no map carries a photon
     R_em = max(o.march.R_em, maximum(z -> 1.2 * proxy_distance(st, z.x)[2], sites))
     ctl = CurvedMarch(st; C = o.march.C, escape = o.march.escape, R_em = R_em)
     transport = MCTransport(ctl, st, provider, mc_opacities(plan.params, o, mean_weight(wgt)),
                             Val(o.absorption), Val(o.scattering))
     orders = ntuple(_ -> ExactBins(rows; o.grid...), o.K + 1)
     rule, timed, interior = timed_bins(rows, o, ta, tb, R_em)
-    trec = timed_record(timed, matter)
+    trec = timed_record(timed, matter, st)
     ledger = mc_ledger()
     N = offset[end]
     layout = widest_layout(max(1, N), o.K)

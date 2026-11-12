@@ -269,7 +269,9 @@ spacetime; the frame times in the coordinate time of the spacetime, the window i
 them), a `Data.FrameStack` (each frame emitting from its own time over its hat, carried at
 the stack's `omega`: on a stationary spacetime with `omega = 0`, or on a spacetime with
 the helical symmetry of `omega`, a moving binary, with the frames carried along its
-orbit; the march reads the stack at each photon's time) or a `Matter.VariableSphere`; the time-dependent ones need the window. The march
+orbit; held in place, two frames or more, on a spacetime with no helical symmetry, an
+`ADMSeries` or a `UserMetric` of `t`, each photon generated at its own event
+(`Products.EventSource`); the march reads the stack at each photon's time) or a `Matter.VariableSphere`; the time-dependent ones need the window. The march
 reads plasma and metric at each photon's time. Runs on CPU threads.
 
 Determinism: bitwise reduction. The bins, the ledger and the children depend only on the

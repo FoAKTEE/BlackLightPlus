@@ -60,6 +60,7 @@ include("amr.jl")
 include("montecarlo.jl")
 include("montecarlo_tables.jl")
 include("montecarlo_time.jl")
+include("montecarlo_events.jl")
 include("mc_order.jl")
 include("mc_stages.jl")
 

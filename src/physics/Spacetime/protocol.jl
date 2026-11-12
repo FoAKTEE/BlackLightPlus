@@ -134,3 +134,14 @@ spin lies along `z`. Every other case answers `false`.
 """
 helical_symmetry(st::Spacetime, omega::Real) = false
 helical_symmetry(st::StationarySpacetime, omega::Real) = iszero(omega)
+
+"""
+    helical_symmetry(st) -> Bool
+
+Whether `st` has the helical Killing vector `∂_t + ω ∂_φ` at some rate `ω`: every
+stationary spacetime (at `ω = 0`) and a `BoostedSuperposedKerrSchild` on a `CircularOrbit`
+with every spin along `z` (at the orbit's frequency). Every other spacetime answers `false`:
+an `ADMSeries`, a `UserMetric`, holes with a spin off `z` or on another trajectory.
+"""
+helical_symmetry(st::Spacetime) = false
+helical_symmetry(st::StationarySpacetime) = true
