@@ -178,12 +178,33 @@ if have("scaling", "results.jsonl"):
         ax.set_xscale("log", base=2); ax.set_xlabel("threads"); ax.set_ylabel("rays s$^{-1}$ thread$^{-1}$")
         ax.set_ylim(0, None); ax.legend(frameon=False, fontsize=8)
         fig.savefig(os.path.join(RES, "fig16_scaling_strong.png"), bbox_inches="tight"); plt.close(fig)
-    resr = sorted([r for r in rows if r["mode"] == "resolution"], key=lambda r: r["res"])
+    # the paper's axes: rays per thread-second (every image's rays) against resolution; the
+    # point is the mean wall time of the runs, the bar spans the fastest and slowest run
+    resr = [r for r in rows if r["mode"] == "resolution" and "product" in r]
     if resr:
         fig, ax = plt.subplots(figsize=(4.2, 3.2), dpi=160)
-        px = [r["res"] for r in resr]
-        ax.loglog(px, [r["seconds_one"] / r["res"] ** 2 * 1e6 for r in resr], "o-", color="C0", label="one image")
-        ax.loglog(px, [r["seconds_ten"] / 10 / r["res"] ** 2 * 1e6 for r in resr], "s--", color="C1", label="ten images at once, per image")
-        ax.set_xlabel("pixels per side"); ax.set_ylabel(r"$\mu$s per pixel (4 threads)"); ax.legend(frameon=False, fontsize=8)
+        series = (("iquv", "polarized (IQUV)", "#2a78d6", "-"),
+                  ("stokes_i", "Stokes I", "#eb6834", "-"),
+                  ("ten_stokes_i", "ten Stokes I images at once", "#eb6834", ":"))
+        for key, label, colour, ls in series:
+            rr = sorted([r for r in resr if r["product"] == key], key=lambda r: r["res"])
+            if not rr:
+                continue
+            n = np.array([r["res"] for r in rr], dtype=float)
+            rate = lambda t, r: r["images"] * r["res"] ** 2 / t / r["threads"]
+            mean = np.array([rate(np.mean(r["seconds"]), r) for r in rr])
+            lo = np.array([rate(max(r["seconds"]), r) for r in rr])
+            hi = np.array([rate(min(r["seconds"]), r) for r in rr])
+            ax.errorbar(n, mean, yerr=[mean - lo, hi - mean], color=colour, ls=ls, lw=1.5,
+                        marker="o", ms=3.5, capsize=0, elinewidth=1, label=label)
+        ax.set_xscale("log", base=2); ax.set_yscale("log")
+        ladder = sorted({r["res"] for r in resr})
+        ax.set_xticks(ladder); ax.set_xticklabels([f"${p}^2$" for p in ladder])
+        ax.minorticks_off(); ax.set_ylim(1e2, 1e5)
+        ax.grid(True, which="major", color="0.9", lw=0.6); ax.set_axisbelow(True)
+        ax.set_xlabel("resolution"); ax.set_ylabel("rays per thread-second")
+        cpu = resr[0]["cpu"].replace("Intel(R) Xeon(R) ", "Xeon ").replace(" CPU @ ", ", ")
+        ax.legend(title=f"{resr[0]['threads']} threads, {cpu}", title_fontsize=7, fontsize=7,
+                  loc="lower right", frameon=True, framealpha=0.9, edgecolor="0.8")
         fig.savefig(os.path.join(RES, "fig17_scaling_resolution.png"), bbox_inches="tight"); plt.close(fig)
 print("wrote the available figures to", RES)
